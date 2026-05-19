@@ -1,0 +1,3 @@
+/home/xmy/tryaios/build/CMakeFiles/aios_core.dir
+/home/xmy/tryaios/build/CMakeFiles/edit_cache.dir
+/home/xmy/tryaios/build/CMakeFiles/rebuild_cache.dir

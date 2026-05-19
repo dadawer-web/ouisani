@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/aios_core.dir/src/main.cpp.o CMakeFiles/aios_core.dir/src/task_scheduler.cpp.o CMakeFiles/aios_core.dir/src/syscall_handler.cpp.o CMakeFiles/aios_core.dir/src/syscall_server.cpp.o CMakeFiles/aios_core.dir/src/memory_manager.cpp.o CMakeFiles/aios_core.dir/src/llm_adapter.cpp.o -o aios_core  -lcpp-httplib 

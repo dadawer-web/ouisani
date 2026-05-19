@@ -1,0 +1,38 @@
+[
+{
+  "directory": "/home/xmy/tryaios/build",
+  "command": "/usr/bin/c++  -I/home/xmy/tryaios/include -O3 -DNDEBUG -std=c++20 -Wall -Wextra -Wpedantic -o CMakeFiles/aios_core.dir/src/main.cpp.o -c /home/xmy/tryaios/src/main.cpp",
+  "file": "/home/xmy/tryaios/src/main.cpp",
+  "output": "CMakeFiles/aios_core.dir/src/main.cpp.o"
+},
+{
+  "directory": "/home/xmy/tryaios/build",
+  "command": "/usr/bin/c++  -I/home/xmy/tryaios/include -O3 -DNDEBUG -std=c++20 -Wall -Wextra -Wpedantic -o CMakeFiles/aios_core.dir/src/task_scheduler.cpp.o -c /home/xmy/tryaios/src/task_scheduler.cpp",
+  "file": "/home/xmy/tryaios/src/task_scheduler.cpp",
+  "output": "CMakeFiles/aios_core.dir/src/task_scheduler.cpp.o"
+},
+{
+  "directory": "/home/xmy/tryaios/build",
+  "command": "/usr/bin/c++  -I/home/xmy/tryaios/include -O3 -DNDEBUG -std=c++20 -Wall -Wextra -Wpedantic -o CMakeFiles/aios_core.dir/src/syscall_handler.cpp.o -c /home/xmy/tryaios/src/syscall_handler.cpp",
+  "file": "/home/xmy/tryaios/src/syscall_handler.cpp",
+  "output": "CMakeFiles/aios_core.dir/src/syscall_handler.cpp.o"
+},
+{
+  "directory": "/home/xmy/tryaios/build",
+  "command": "/usr/bin/c++  -I/home/xmy/tryaios/include -O3 -DNDEBUG -std=c++20 -Wall -Wextra -Wpedantic -o CMakeFiles/aios_core.dir/src/syscall_server.cpp.o -c /home/xmy/tryaios/src/syscall_server.cpp",
+  "file": "/home/xmy/tryaios/src/syscall_server.cpp",
+  "output": "CMakeFiles/aios_core.dir/src/syscall_server.cpp.o"
+},
+{
+  "directory": "/home/xmy/tryaios/build",
+  "command": "/usr/bin/c++  -I/home/xmy/tryaios/include -O3 -DNDEBUG -std=c++20 -Wall -Wextra -Wpedantic -o CMakeFiles/aios_core.dir/src/memory_manager.cpp.o -c /home/xmy/tryaios/src/memory_manager.cpp",
+  "file": "/home/xmy/tryaios/src/memory_manager.cpp",
+  "output": "CMakeFiles/aios_core.dir/src/memory_manager.cpp.o"
+},
+{
+  "directory": "/home/xmy/tryaios/build",
+  "command": "/usr/bin/c++  -I/home/xmy/tryaios/include -O3 -DNDEBUG -std=c++20 -Wall -Wextra -Wpedantic -o CMakeFiles/aios_core.dir/src/llm_adapter.cpp.o -c /home/xmy/tryaios/src/llm_adapter.cpp",
+  "file": "/home/xmy/tryaios/src/llm_adapter.cpp",
+  "output": "CMakeFiles/aios_core.dir/src/llm_adapter.cpp.o"
+}
+]
