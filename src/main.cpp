@@ -1,9 +1,14 @@
 #include "aios/agent_task.h"
+#include "aios/agent_registry.h"
+#include "aios/env_loader.h"
 #include "aios/llm_adapter.h"
 #include "aios/memory_manager.h"
-#include "aios/syscall_handler.h"
+#include "aios/sandbox_driver.h"
+#include "aios/security_guard.h"
 #include "aios/syscall_server.h"
 #include "aios/task_scheduler.h"
+#include "aios/vfs_manager.h"
+#include "aios/vfs_node.h"
 
 #include <atomic>
 #include <chrono>
@@ -19,50 +24,89 @@ static void signal_handler(int) {
 }
 
 int main(int argc, char* argv[]) {
-    std::string llm_url = "http://localhost:11434";
-    std::string llm_model = "qwen2.5:7b";
-
-    if (argc >= 2) {
-        llm_model = argv[1];
-    }
-
-    std::printf("=== AIOS Core v0.5.0 - LLM Pipeline Integration ===\n\n");
+    std::printf("=== AIOS Core v1.5.0 - Virtual File System ===\n\n");
 
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    auto llm = std::make_shared<aios::LlmAdapter>(llm_url, llm_model, 120);
-    auto memory_mgr = std::make_shared<aios::MemoryManager>(5, "./swap");
+    auto env = aios::EnvLoader::load(".env");
 
-    if (llm->is_available()) {
-        std::printf("[Main] Ollama service detected at %s (model=%s)\n", llm_url.c_str(), llm_model.c_str());
+    std::string api_key = aios::EnvLoader::get(env, "OPENAI_API_KEY", "");
+    std::string base_url = aios::EnvLoader::get(env, "OPENAI_BASE_URL", "https://api.openai.com");
+    std::string model = aios::EnvLoader::get(env, "OPENAI_MODEL", "gpt-3.5-turbo");
+
+    if (argc >= 2) api_key = argv[1];
+    if (argc >= 3) base_url = argv[2];
+    if (argc >= 4) model = argv[3];
+
+    if (api_key.empty()) {
+        std::printf("[Main] WARNING: No API key found! LLM calls will fail.\n");
     } else {
-        std::printf("[Main] WARNING: Ollama service not available at %s\n", llm_url.c_str());
-        std::printf("[Main] LLM calls will return error messages. Start Ollama first for full pipeline.\n");
+        std::printf("[Main] API Key: %s...%s\n", api_key.substr(0, 6).c_str(), api_key.substr(api_key.size() - 4).c_str());
+    }
+    std::printf("[Main] Base URL: %s\n", base_url.c_str());
+    std::printf("[Main] Model: %s\n", model.c_str());
+
+    auto llm = std::make_shared<aios::LlmAdapter>(api_key, base_url, model, 120);
+
+    std::string emb_key = aios::EnvLoader::get(env, "EMBEDDING_API_KEY", "");
+    std::string emb_url = aios::EnvLoader::get(env, "EMBEDDING_BASE_URL", "");
+    std::string emb_model = aios::EnvLoader::get(env, "EMBEDDING_MODEL", "");
+
+    if (!emb_key.empty() && !emb_url.empty()) {
+        llm->set_embedding_config(emb_key, emb_url, emb_model);
+        std::printf("[Main] Embedding: %s model=%s\n", emb_url.c_str(), emb_model.c_str());
+    } else {
+        std::printf("[Main] WARNING: No embedding config, semantic paging disabled\n");
     }
 
-    auto scheduler = std::make_shared<aios::TaskScheduler>(2, llm, memory_mgr);
-    scheduler->start();
+    auto memory_mgr = std::make_shared<aios::MemoryManager>(15, 5, 10, 5, "./swap");
 
-    auto handler = std::make_shared<aios::SyscallHandler>(
-        [scheduler](int agent_id, int priority, const std::string& payload) {
-            auto task = std::make_shared<aios::AgentTask>(
-                agent_id,
-                priority,
-                aios::TaskStatus::READY,
-                payload
-            );
+    auto& registry = aios::AgentRegistry::instance();
+    registry.register_agent(0, aios::PrivilegeLevel::RING_0);
+
+    auto scheduler = std::make_shared<aios::TaskScheduler>(4, 8, llm, memory_mgr);
+
+    auto sandbox = std::make_shared<aios::SandboxDriver>("http://127.0.0.1:5000", 10);
+    scheduler->register_driver("python_sandbox", sandbox);
+
+    auto& vfs = aios::VfsManager::instance();
+    vfs.init();
+    auto sandbox_exec = std::make_shared<aios::ExecutableNode>("/bin/sandbox", sandbox);
+    vfs.mount("/bin", "sandbox", sandbox_exec);
+
+    auto version_file = std::make_shared<aios::FileNode>("/proc/version", "AIOS Core v1.5.0 (VFS + Ring 0/3 + SecurityGuard)");
+    vfs.mount("/proc", "version", version_file);
+
+    auto dev_mem = std::make_shared<aios::DirectoryNode>("/dev/mem");
+    vfs.mount("/dev", "mem", dev_mem);
+
+    aios::SyscallServer server(
+        [scheduler](std::shared_ptr<aios::AgentTask> task) {
             scheduler->submit(std::move(task));
         },
-        memory_mgr
+        [scheduler](int agent_id) {
+            scheduler->cancel_agent(agent_id);
+        },
+        "0.0.0.0", 8080
     );
 
-    aios::SyscallServer server(handler, "0.0.0.0", 8080);
+    scheduler->set_response_callback([&server](int fd, const std::string& resp) {
+        server.enqueue_response(fd, resp);
+    });
+
+    scheduler->start();
     server.start();
 
-    std::printf("[Main] AIOS Core is running. Press Ctrl+C to stop.\n");
-    std::printf("[Main] Pipeline: Context Injection -> Prompt Formatting -> LLM -> Memory Update\n");
-    std::printf("[Main] Supported syscalls: WRITE_MEMORY, READ_MEMORY, EXECUTE_TOOL\n\n");
+    std::printf("[Main] AIOS Core is running (Virtual File System)\n");
+    std::printf("[Main] I/O: epoll LT + eventfd (Reactor)\n");
+    std::printf("[Main] Dispatch: ThreadPool x4 | IOPool: ThreadPool x8\n");
+    std::printf("[Main] MMU: Semantic Paging + Memory Compression\n");
+    std::printf("[Main] Interrupt: CANCEL_TASK + is_cancelled token\n");
+    std::printf("[Main] Watchdog: Sandbox timeout=10s | LLM timeout=120s\n");
+    std::printf("[Main] Security: Ring 0/3 Privilege + SecurityGuard Code Scanner\n");
+    std::printf("[Main] VFS: /bin/sandbox /proc/version /dev /mem\n");
+    std::printf("[Main] Embedding: %s\n\n", llm->has_embedding_config() ? "ENABLED" : "DISABLED");
 
     while (g_running.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));

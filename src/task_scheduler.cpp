@@ -1,15 +1,21 @@
 #include "aios/task_scheduler.h"
+#include "aios/agent_registry.h"
+#include "aios/security_guard.h"
+#include "aios/vfs_manager.h"
+#include "aios/vfs_node.h"
 
 #include <chrono>
 #include <cstdio>
-#include <sstream>
+#include <nlohmann/json.hpp>
 
 namespace aios {
 
-TaskScheduler::TaskScheduler(size_t worker_count,
+TaskScheduler::TaskScheduler(size_t dispatch_threads,
+                             size_t io_threads,
                              std::shared_ptr<LlmAdapter> llm,
                              std::shared_ptr<MemoryManager> memory_mgr)
-    : worker_count_(worker_count > 0 ? worker_count : 1)
+    : dispatch_pool_(dispatch_threads > 0 ? dispatch_threads : 2)
+    , io_pool_(io_threads > 0 ? io_threads : 4)
     , llm_(std::move(llm))
     , memory_mgr_(std::move(memory_mgr))
 {}
@@ -28,17 +34,63 @@ void TaskScheduler::submit(std::shared_ptr<AgentTask> task) {
     queue_cv_.notify_one();
 }
 
+void TaskScheduler::cancel_agent(int agent_id) {
+    std::printf("[Interrupt] CANCEL_TASK received for agent=%d\n", agent_id);
+
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        std::priority_queue<
+            std::shared_ptr<AgentTask>,
+            std::vector<std::shared_ptr<AgentTask>>,
+            TaskComparator
+        > new_queue;
+        int cancelled_count = 0;
+        while (!ready_queue_.empty()) {
+            auto t = ready_queue_.top();
+            ready_queue_.pop();
+            if (t->agent_id == agent_id) {
+                t->cancel();
+                t->status = TaskStatus::CANCELLED;
+                ++cancelled_count;
+            } else {
+                new_queue.push(std::move(t));
+            }
+        }
+        ready_queue_ = std::move(new_queue);
+        if (cancelled_count > 0) {
+            std::printf("[Interrupt] Cancelled %d queued tasks for agent=%d\n",
+                        cancelled_count, agent_id);
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(active_mutex_);
+        auto it = active_tasks_.find(agent_id);
+        if (it != active_tasks_.end()) {
+            for (auto& t : it->second) {
+                t->cancel();
+                std::printf("[Interrupt] Active task for agent=%d flagged for cancellation\n", agent_id);
+            }
+        }
+    }
+}
+
 void TaskScheduler::start() {
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true)) {
         return;
     }
 
-    for (size_t i = 0; i < worker_count_; ++i) {
-        workers_.emplace_back(&TaskScheduler::worker_loop, this);
+    dispatch_pool_.start();
+    io_pool_.start();
+
+    for (size_t i = 0; i < dispatch_pool_.worker_count(); ++i) {
+        dispatch_pool_.submit([this]() { dispatch_loop(); });
     }
 
-    std::printf("[Scheduler] Started with %zu worker threads (LLM pipeline enabled)\n", worker_count_);
+    std::printf("[Scheduler] Started: dispatch=%zu, io=%zu, drivers=%zu, embedding=%s\n",
+                dispatch_pool_.worker_count(), io_pool_.worker_count(), drivers_.size(),
+                llm_->has_embedding_config() ? "ON" : "OFF");
 }
 
 void TaskScheduler::shutdown() {
@@ -49,49 +101,156 @@ void TaskScheduler::shutdown() {
     }
     queue_cv_.notify_all();
 
-    for (auto& w : workers_) {
-        if (w.joinable()) {
-            w.join();
-        }
-    }
-    workers_.clear();
-
-    std::printf("[Scheduler] Shutdown complete. Pending tasks discarded: %zu\n",
-                ready_queue_.size());
+    io_pool_.shutdown();
+    dispatch_pool_.shutdown();
 
     while (!ready_queue_.empty()) {
         ready_queue_.pop();
     }
+
+    std::printf("[Scheduler] Shutdown complete\n");
 }
 
-std::string TaskScheduler::build_prompt(int agent_id, const std::string& current_payload) {
-    auto pages = memory_mgr_->read_pages(agent_id);
+void TaskScheduler::register_driver(const std::string& name, std::shared_ptr<DeviceDriver> driver) {
+    drivers_[name] = std::move(driver);
+    std::printf("[Scheduler] Registered driver: %s\n", name.c_str());
+}
 
-    std::ostringstream oss;
+void TaskScheduler::set_response_callback(ResponseCallback cb) {
+    response_cb_ = std::move(cb);
+}
 
-    if (!pages.empty()) {
-        oss << "[Conversation History]\n";
-        for (const auto& p : pages) {
-            oss << p.role << ": " << p.content << "\n";
+size_t TaskScheduler::pending_count() const {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    return ready_queue_.size();
+}
+
+size_t TaskScheduler::active_io_count() const {
+    return active_io_tasks_.load();
+}
+
+std::string TaskScheduler::make_response(bool ok, const std::string& message,
+                                          const std::string& data) {
+    nlohmann::json j;
+    j["status"] = ok ? "ok" : "error";
+    j["message"] = message;
+    if (!data.empty()) {
+        auto parsed = nlohmann::json::parse(data, nullptr, false);
+        if (!parsed.is_discarded()) {
+            j["data"] = parsed;
+        } else {
+            j["data"] = data;
         }
-        oss << "\n";
+    }
+    return j.dump() + "\n";
+}
+
+std::vector<ChatMessage> TaskScheduler::build_messages(int agent_id, const std::string& current_payload) {
+    std::vector<float> query_emb;
+    if (llm_->has_embedding_config()) {
+        query_emb = llm_->get_embedding(current_payload);
     }
 
-    oss << "[Current Request]\n";
-    oss << "user: " << current_payload << "\n";
+    std::vector<MemoryPage> pages;
+    if (!query_emb.empty()) {
+        pages = memory_mgr_->read_pages_semantic(agent_id, query_emb);
+    } else {
+        pages = memory_mgr_->read_pages(agent_id);
+    }
 
-    return oss.str();
+    std::string context_block;
+    for (const auto& p : pages) {
+        context_block += "[" + p.role + "]: " + p.content + "\n";
+    }
+
+    std::vector<ChatMessage> messages;
+
+    if (!context_block.empty()) {
+        std::string context_msg =
+            "=== 以下是你的历史记忆上下文（由 AIOS 语义 MMU 检索提供）===\n"
+            "请严格根据这些记忆来回答用户的问题。如果记忆中包含相关信息，必须使用它来回答。\n\n"
+            + context_block +
+            "\n=== 历史记忆上下文结束 ===";
+        messages.push_back({"system", context_msg});
+    }
+
+    messages.push_back({"user", current_payload});
+    return messages;
 }
 
-void TaskScheduler::worker_loop() {
-    size_t worker_id = std::hash<std::thread::id>{}(std::this_thread::get_id()) % worker_count_;
+void TaskScheduler::try_compress(int agent_id) {
+    if (!memory_mgr_->should_compress(agent_id)) return;
+    if (!memory_mgr_->begin_compress(agent_id)) return;
 
-    while (true) {
+    std::printf("[MMU] *** HIGH WATERMARK REACHED | agent=%d | triggering background compression ***\n",
+                agent_id);
+
+    auto oldest = memory_mgr_->extract_oldest_pages(agent_id, 5);
+    if (oldest.size() < 2) {
+        memory_mgr_->end_compress(agent_id);
+        return;
+    }
+
+    size_t oldest_count = oldest.size();
+    std::vector<std::string> page_ids;
+    std::string combined;
+    for (const auto& p : oldest) {
+        page_ids.push_back(p.page_id);
+        combined += "[" + p.role + "] " + p.content + "\n";
+    }
+
+    memory_mgr_->remove_pages(agent_id, page_ids);
+
+    auto llm = llm_;
+    auto mmgr = memory_mgr_;
+
+    try {
+        io_pool_.submit([llm, mmgr, agent_id, oldest_count, combined = std::move(combined)]() {
+            std::printf("[Compress] Agent=%d | LLM summarizing %zu bytes of old memory...\n",
+                        agent_id, combined.size());
+
+            std::string compress_prompt =
+                "You are a kernel memory compressor. Summarize the following conversation "
+                "into a concise statement preserving all key entities, facts, and decisions. "
+                "Remove greetings and filler. Output ONLY the summary:\n\n" + combined;
+
+            std::string summary = llm->generate("", compress_prompt);
+
+            std::printf("[Compress] Agent=%d | Summary: \"%s\"\n",
+                        agent_id,
+                        summary.size() > 200 ? (summary.substr(0, 200) + "...").c_str() : summary.c_str());
+
+            MemoryPage compressed;
+            compressed.agent_id = agent_id;
+            compressed.role = "system";
+            compressed.content = "[Compressed Memory] " + summary;
+            std::string page_id = mmgr->write_page(compressed);
+
+            if (llm->has_embedding_config() && !summary.empty()) {
+                auto emb = llm->get_embedding(compressed.content);
+                if (!emb.empty()) {
+                    mmgr->update_embedding(page_id, agent_id, std::move(emb));
+                }
+            }
+
+            mmgr->end_compress(agent_id);
+
+            std::printf("[Compress] Agent=%d | Compression complete | %zu pages -> 1 compressed page\n",
+                        agent_id, oldest_count);
+        });
+    } catch (const std::exception& e) {
+        memory_mgr_->end_compress(agent_id);
+        std::printf("[Compress] Agent=%d | Failed to submit: %s\n", agent_id, e.what());
+    }
+}
+
+void TaskScheduler::dispatch_loop() {
+    while (running_.load()) {
         std::shared_ptr<AgentTask> task;
 
         {
             std::unique_lock<std::mutex> lock(queue_mutex_);
-            queue_cv_.wait(lock, [this] {
+            bool ok = queue_cv_.wait_for(lock, std::chrono::milliseconds(200), [this] {
                 return !ready_queue_.empty() || !running_.load();
             });
 
@@ -99,56 +258,628 @@ void TaskScheduler::worker_loop() {
                 return;
             }
 
-            if (!ready_queue_.empty()) {
-                task = ready_queue_.top();
-                ready_queue_.pop();
+            if (!ok || ready_queue_.empty()) {
+                continue;
             }
+
+            task = ready_queue_.top();
+            ready_queue_.pop();
         }
 
         if (!task) continue;
 
+        if (task->cancelled()) {
+            std::printf("[Interrupt] Agent=%d task discarded (cancelled before dispatch)\n",
+                        task->agent_id);
+            continue;
+        }
+
         task->status = TaskStatus::RUNNING;
-        active_tasks_.fetch_add(1);
 
-        std::printf("\n[Worker %zu] ========== Agent#%d (priority=%d) PIPELINE START ==========\n",
-                    worker_id, task->agent_id, task->priority);
+        {
+            std::lock_guard<std::mutex> lock(active_mutex_);
+            active_tasks_[task->agent_id].push_back(task);
+        }
 
-        std::printf("[Worker %zu] Step 1: Context Injection | Reading memory for Agent#%d\n",
-                    worker_id, task->agent_id);
-
-        std::printf("[Worker %zu] Step 2: Prompt Formatting | Assembling context + payload\n",
-                    worker_id);
-        std::string prompt = build_prompt(task->agent_id, task->task_payload);
-
-        std::printf("[Worker %zu] Step 3: LLM Execution | Sending to %s (model=%s)\n",
-                    worker_id, llm_->base_url().c_str(), llm_->model().c_str());
-
-        std::string llm_response = llm_->generate(prompt);
-
-        std::printf("[Worker %zu] Step 4: Memory Update | Writing assistant response to Agent#%d memory\n",
-                    worker_id, task->agent_id);
-
-        MemoryPage assistant_page;
-        assistant_page.agent_id = task->agent_id;
-        assistant_page.role = "assistant";
-        assistant_page.content = llm_response;
-        memory_mgr_->write_page(assistant_page);
-
-        task->status = TaskStatus::SUSPENDED;
-
-        std::printf("[Worker %zu] ========== Agent#%d PIPELINE COMPLETE ==========\n",
-                    worker_id, task->agent_id);
-        std::printf("[Worker %zu] Agent#%d LLM Response: \"%s\"\n",
-                    worker_id, task->agent_id,
-                    llm_response.size() > 200 ? (llm_response.substr(0, 200) + "...").c_str() : llm_response.c_str());
-
-        active_tasks_.fetch_sub(1);
+        switch (task->type) {
+            case TaskType::WRITE_MEMORY:
+                handle_write_memory(std::move(task));
+                break;
+            case TaskType::READ_MEMORY:
+                handle_read_memory(std::move(task));
+                break;
+            case TaskType::LLM_CHAT:
+                dispatch_llm_task(std::move(task));
+                break;
+            case TaskType::TOOL_CALL:
+                dispatch_tool_task(std::move(task));
+                break;
+            case TaskType::VFS_CALL:
+                dispatch_vfs_task(std::move(task));
+                break;
+            case TaskType::CANCEL_TASK:
+                break;
+        }
     }
 }
 
-size_t TaskScheduler::pending_count() const {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
-    return ready_queue_.size();
+void TaskScheduler::handle_write_memory(std::shared_ptr<AgentTask> task) {
+    std::printf("[Dispatch] WRITE_MEMORY | agent=%d | role=%s\n",
+                task->agent_id, task->role.c_str());
+
+    if (task->cancelled()) {
+        std::printf("[Interrupt] Agent=%d WRITE_MEMORY cancelled before execution\n",
+                    task->agent_id);
+        return;
+    }
+
+    MemoryPage page;
+    page.agent_id = task->agent_id;
+    page.role = task->role;
+    page.content = task->content;
+
+    std::string page_id = memory_mgr_->write_page(page);
+
+    nlohmann::json resp_data;
+    resp_data["page_id"] = page_id;
+
+    if (response_cb_) {
+        response_cb_(task->client_fd,
+            make_response(true, "memory written for agent " + std::to_string(task->agent_id),
+                          resp_data.dump()));
+    }
+
+    if (llm_->has_embedding_config() && !task->content.empty()) {
+        auto content_copy = task->content;
+        int agent_id = task->agent_id;
+        auto llm = llm_;
+        auto mmgr = memory_mgr_;
+
+        try {
+            io_pool_.submit([llm, mmgr, page_id, agent_id, content_copy]() {
+                std::printf("[IOPool] Async embedding for page %s...\n", page_id.c_str());
+                auto emb = llm->get_embedding(content_copy);
+                if (!emb.empty()) {
+                    mmgr->update_embedding(page_id, agent_id, std::move(emb));
+                }
+            });
+        } catch (const std::exception& e) {
+            std::printf("[Dispatch] Failed to submit embedding task: %s\n", e.what());
+        }
+    }
+
+    try_compress(task->agent_id);
+
+    {
+        std::lock_guard<std::mutex> lock(active_mutex_);
+        auto& vec = active_tasks_[task->agent_id];
+        vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+    }
+}
+
+void TaskScheduler::handle_read_memory(std::shared_ptr<AgentTask> task) {
+    std::printf("[Dispatch] READ_MEMORY | agent=%d | query=\"%s\"\n",
+                task->agent_id, task->keyword.c_str());
+
+    if (task->cancelled()) {
+        std::printf("[Interrupt] Agent=%d READ_MEMORY cancelled\n", task->agent_id);
+        return;
+    }
+
+    if (task->keyword.empty()) {
+        auto pages = memory_mgr_->read_pages(task->agent_id);
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto& p : pages) {
+            nlohmann::json obj;
+            obj["page_id"] = p.page_id;
+            obj["role"] = p.role;
+            obj["content"] = p.content;
+            arr.push_back(obj);
+        }
+
+        if (response_cb_) {
+            response_cb_(task->client_fd,
+                make_response(true, "memory read for agent " + std::to_string(task->agent_id),
+                              arr.dump()));
+        }
+        return;
+    }
+
+    auto page = memory_mgr_->read_page_by_keyword(task->agent_id, task->keyword);
+    if (page.page_id.empty()) {
+        if (response_cb_) {
+            response_cb_(task->client_fd,
+                make_response(false, "page not found for keyword: " + task->keyword));
+        }
+        return;
+    }
+
+    nlohmann::json obj;
+    obj["page_id"] = page.page_id;
+    obj["role"] = page.role;
+    obj["content"] = page.content;
+
+    if (response_cb_) {
+        response_cb_(task->client_fd,
+            make_response(true, "memory read for agent " + std::to_string(task->agent_id),
+                          obj.dump()));
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(active_mutex_);
+        auto& vec = active_tasks_[task->agent_id];
+        vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+    }
+}
+
+void TaskScheduler::dispatch_llm_task(std::shared_ptr<AgentTask> task) {
+    std::printf("[Dispatch] Agent#%d LLM CHAT | payload=\"%s\"\n",
+                task->agent_id,
+                task->task_payload.size() > 80 ? (task->task_payload.substr(0, 80) + "...").c_str() : task->task_payload.c_str());
+
+    if (task->cancelled()) {
+        std::printf("[Interrupt] Agent=%d LLM task cancelled before dispatch\n", task->agent_id);
+        if (response_cb_) {
+            response_cb_(task->client_fd,
+                make_response(false, "task cancelled for agent " + std::to_string(task->agent_id)));
+        }
+        return;
+    }
+
+    auto messages = build_messages(task->agent_id, task->task_payload);
+    std::string system_prompt =
+        "你是一个拥有长期记忆的 AI 助手，运行在 AIOS Core 操作系统内。"
+        "系统会通过语义检索为你提供相关的历史记忆上下文。"
+        "你必须严格根据提供的记忆上下文来回答用户问题。"
+        "如果记忆中包含答案，直接引用；回答要简洁准确。";
+
+    std::printf("[LLM Prompt] System: %s\n", system_prompt.c_str());
+    for (const auto& m : messages) {
+        std::string preview = m.content.size() > 120 ? m.content.substr(0, 120) + "..." : m.content;
+        std::printf("[LLM Prompt] [%s]: %s\n", m.role.c_str(), preview.c_str());
+    }
+
+    active_io_tasks_.fetch_add(1);
+
+    try {
+        io_pool_.submit([this, task, messages = std::move(messages),
+                         system_prompt = std::move(system_prompt)]() {
+            if (task->cancelled()) {
+                std::printf("[Interrupt] Agent=%d LLM task cancelled, skipping HTTP call\n",
+                            task->agent_id);
+                if (response_cb_) {
+                    response_cb_(task->client_fd,
+                        make_response(false, "task cancelled for agent " + std::to_string(task->agent_id)));
+                }
+                active_io_tasks_.fetch_sub(1);
+                return;
+            }
+
+            std::printf("[IOPool] Agent#%d LLM HTTP request started\n", task->agent_id);
+
+            std::string llm_response;
+            try {
+                llm_response = llm_->generate(system_prompt, messages);
+            } catch (const std::exception& e) {
+                std::printf("[IOPool] Agent#%d LLM call exception: %s\n",
+                            task->agent_id, e.what());
+                llm_response = "[System Error: LLM call failed - " + std::string(e.what()) + "]";
+            }
+
+            if (llm_response.find("[LLM ERROR]") != std::string::npos) {
+                std::printf("[IOPool] Agent#%d LLM returned error response\n", task->agent_id);
+
+                MemoryPage err_page;
+                err_page.agent_id = task->agent_id;
+                err_page.role = "system";
+                err_page.content = "[System Error: LLM call failed, response timeout or error]";
+                memory_mgr_->write_page(err_page);
+
+                if (response_cb_) {
+                    response_cb_(task->client_fd,
+                        make_response(false, "LLM call failed for agent " + std::to_string(task->agent_id)));
+                }
+                active_io_tasks_.fetch_sub(1);
+                return;
+            }
+
+            if (task->cancelled()) {
+                std::printf("[Interrupt] Agent=%d LLM task cancelled after HTTP response, discarding\n",
+                            task->agent_id);
+                active_io_tasks_.fetch_sub(1);
+                return;
+            }
+
+            std::printf("[IOPool] Agent#%d LLM HTTP response received (%zu chars)\n",
+                        task->agent_id, llm_response.size());
+
+            MemoryPage page;
+            page.agent_id = task->agent_id;
+            page.role = "assistant";
+            page.content = llm_response;
+            std::string page_id = memory_mgr_->write_page(page);
+
+            if (llm_->has_embedding_config() && !llm_response.empty()) {
+                auto emb = llm_->get_embedding(llm_response);
+                if (!emb.empty()) {
+                    memory_mgr_->update_embedding(page_id, task->agent_id, std::move(emb));
+                }
+            }
+
+            if (response_cb_) {
+                nlohmann::json resp_data;
+                resp_data["response"] = llm_response;
+                response_cb_(task->client_fd,
+                    make_response(true,
+                        "LLM task completed for agent " + std::to_string(task->agent_id),
+                        resp_data.dump()));
+            }
+
+            active_io_tasks_.fetch_sub(1);
+            std::printf("[IOPool] Agent#%d LLM pipeline complete\n", task->agent_id);
+
+            {
+                std::lock_guard<std::mutex> lock(active_mutex_);
+                auto& vec = active_tasks_[task->agent_id];
+                vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+            }
+        });
+    } catch (const std::exception& e) {
+        active_io_tasks_.fetch_sub(1);
+        std::printf("[Dispatch] Agent#%d failed to submit to io_pool: %s\n",
+                    task->agent_id, e.what());
+        if (response_cb_) {
+            response_cb_(task->client_fd,
+                make_response(false, "failed to dispatch LLM task: " + std::string(e.what())));
+        }
+    }
+}
+
+void TaskScheduler::dispatch_tool_task(std::shared_ptr<AgentTask> task) {
+    std::printf("[Dispatch] Agent#%d TOOL CALL | tool=%s | code=%zu bytes\n",
+                task->agent_id, task->tool_name.c_str(), task->tool_code.size());
+
+    if (task->cancelled()) {
+        std::printf("[Interrupt] Agent=%d TOOL task cancelled before dispatch\n", task->agent_id);
+        if (response_cb_) {
+            response_cb_(task->client_fd,
+                make_response(false, "task cancelled for agent " + std::to_string(task->agent_id)));
+        }
+        return;
+    }
+
+    auto& registry = AgentRegistry::instance();
+    auto& guard = SecurityGuard::instance();
+    PrivilegeLevel level = registry.get_level(task->agent_id);
+
+    if (!guard.is_code_safe(task->tool_code, level)) {
+        std::printf("[SecurityGuard] Agent#%d (%s) code REJECTED | tool=%s\n",
+                    task->agent_id, privilege_str(level), task->tool_name.c_str());
+
+        MemoryPage sec_page;
+        sec_page.agent_id = task->agent_id;
+        sec_page.role = "system";
+        sec_page.content = "[System Action] 执行失败，由于安全限制，Ring 3 环境禁止执行涉及 OS 或系统调用的危险代码。";
+        memory_mgr_->write_page(sec_page);
+
+        if (response_cb_) {
+            nlohmann::json resp_data;
+            resp_data["blocked"] = true;
+            resp_data["reason"] = "SecurityGuard: dangerous code pattern detected for Ring 3 agent";
+            response_cb_(task->client_fd,
+                make_response(false,
+                    "code blocked by SecurityGuard for agent " + std::to_string(task->agent_id),
+                    resp_data.dump()));
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(active_mutex_);
+            auto& vec = active_tasks_[task->agent_id];
+            vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+        }
+        return;
+    }
+
+    auto it = drivers_.find(task->tool_name);
+    if (it == drivers_.end()) {
+        std::printf("[Dispatch] ERROR: No driver for tool '%s'\n", task->tool_name.c_str());
+
+        MemoryPage page;
+        page.agent_id = task->agent_id;
+        page.role = "tool";
+        page.content = "[ERROR] No driver registered for tool: " + task->tool_name;
+        memory_mgr_->write_page(page);
+
+        if (response_cb_) {
+            response_cb_(task->client_fd,
+                make_response(false, "No driver for tool: " + task->tool_name));
+        }
+        return;
+    }
+
+    auto driver = it->second;
+    active_io_tasks_.fetch_add(1);
+
+    try {
+        io_pool_.submit([this, task, driver]() {
+            if (task->cancelled()) {
+                std::printf("[Interrupt] Agent=%d TOOL task cancelled, skipping execution\n",
+                            task->agent_id);
+                if (response_cb_) {
+                    response_cb_(task->client_fd,
+                        make_response(false, "task cancelled for agent " + std::to_string(task->agent_id)));
+                }
+                active_io_tasks_.fetch_sub(1);
+                return;
+            }
+
+            std::printf("[IOPool] Agent#%d executing %s\n", task->agent_id, task->tool_name.c_str());
+
+            std::string output;
+            bool timeout = false;
+            try {
+                output = driver->execute(task->tool_code);
+            } catch (const std::exception& e) {
+                std::printf("[IOPool] Agent#%d tool execution exception: %s\n",
+                            task->agent_id, e.what());
+                timeout = true;
+            }
+
+            if (!timeout && output.find("[SANDBOX ERROR] Request failed") != std::string::npos) {
+                timeout = true;
+            }
+
+            if (timeout) {
+                std::printf("[IOPool] Agent#%d TIMEOUT | tool=%s | writing system error memory\n",
+                            task->agent_id, task->tool_name.c_str());
+
+                MemoryPage err_page;
+                err_page.agent_id = task->agent_id;
+                err_page.role = "system";
+                err_page.content = "[System Error: " + task->tool_name +
+                    " execution timeout, killed by kernel watchdog]";
+                memory_mgr_->write_page(err_page);
+
+                if (response_cb_) {
+                    response_cb_(task->client_fd,
+                        make_response(false,
+                            task->tool_name + " execution timeout for agent " +
+                            std::to_string(task->agent_id)));
+                }
+                active_io_tasks_.fetch_sub(1);
+                return;
+            }
+
+            if (task->cancelled()) {
+                std::printf("[Interrupt] Agent=%d TOOL task cancelled after execution, discarding\n",
+                            task->agent_id);
+                active_io_tasks_.fetch_sub(1);
+                return;
+            }
+
+            std::printf("[IOPool] Agent#%d tool output: \"%s\"\n",
+                        task->agent_id,
+                        output.size() > 200 ? (output.substr(0, 200) + "...").c_str() : output.c_str());
+
+            MemoryPage page;
+            page.agent_id = task->agent_id;
+            page.role = "tool";
+            page.content = "[Tool: " + task->tool_name + "]\n" + output;
+            std::string page_id = memory_mgr_->write_page(page);
+
+            if (llm_->has_embedding_config() && !output.empty()) {
+                auto emb = llm_->get_embedding(output);
+                if (!emb.empty()) {
+                    memory_mgr_->update_embedding(page_id, task->agent_id, std::move(emb));
+                }
+            }
+
+            if (response_cb_) {
+                nlohmann::json resp_data;
+                resp_data["tool"] = task->tool_name;
+                resp_data["output"] = output;
+                response_cb_(task->client_fd,
+                    make_response(true,
+                        "tool execution completed for agent " + std::to_string(task->agent_id),
+                        resp_data.dump()));
+            }
+
+            active_io_tasks_.fetch_sub(1);
+            std::printf("[IOPool] Agent#%d tool pipeline complete\n", task->agent_id);
+
+            {
+                std::lock_guard<std::mutex> lock(active_mutex_);
+                auto& vec = active_tasks_[task->agent_id];
+                vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+            }
+        });
+    } catch (const std::exception& e) {
+        active_io_tasks_.fetch_sub(1);
+        std::printf("[Dispatch] Agent#%d failed to submit to io_pool: %s\n",
+                    task->agent_id, e.what());
+        if (response_cb_) {
+            response_cb_(task->client_fd,
+                make_response(false, "failed to dispatch tool task: " + std::string(e.what())));
+        }
+    }
+}
+
+void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
+    std::string action = task->tool_name;
+    std::string vfs_path = task->tool_code;
+    std::string payload = task->task_payload;
+
+    std::printf("[VFS] Agent#%d | action=%s | path=%s | payload=%zu bytes\n",
+                task->agent_id, action.c_str(), vfs_path.c_str(), payload.size());
+
+    if (task->cancelled()) {
+        std::printf("[Interrupt] Agent=%d VFS task cancelled\n", task->agent_id);
+        if (response_cb_) {
+            response_cb_(task->client_fd,
+                make_response(false, "VFS task cancelled for agent " + std::to_string(task->agent_id)));
+        }
+        return;
+    }
+
+    auto& vfs = VfsManager::instance();
+    auto& registry = AgentRegistry::instance();
+    PrivilegeLevel level = registry.get_level(task->agent_id);
+    auto node = vfs.resolve_path(vfs_path);
+
+    if (!node) {
+        node = vfs.resolve_or_create_mem(vfs_path, memory_mgr_);
+    }
+
+    if (!node) {
+        std::printf("[VFS] Path not found: %s\n", vfs_path.c_str());
+        if (response_cb_) {
+            response_cb_(task->client_fd,
+                make_response(false, "VFS path not found: " + vfs_path));
+        }
+        {
+            std::lock_guard<std::mutex> lock(active_mutex_);
+            auto& vec = active_tasks_[task->agent_id];
+            vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+        }
+        return;
+    }
+
+    if (action == "READ") {
+        if (node->node_type() == VfsNodeType::DEVICE) {
+            auto mem_dev = std::dynamic_pointer_cast<MemoryDeviceNode>(node);
+            if (mem_dev && !registry.can_access(task->agent_id, mem_dev->agent_id())) {
+                std::printf("[Security] BLOCKED | Agent#%d (%s) -> VFS READ /dev/mem/%d | Cross-agent memory access denied\n",
+                            task->agent_id, privilege_str(level), mem_dev->agent_id());
+                if (response_cb_) {
+                    nlohmann::json err;
+                    err["status"] = "error";
+                    err["message"] = "[Security Fault] Ring 3 Agent 无权越权访问";
+                    response_cb_(task->client_fd, err.dump() + "\n");
+                }
+                {
+                    std::lock_guard<std::mutex> lock(active_mutex_);
+                    auto& vec = active_tasks_[task->agent_id];
+                    vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+                }
+                return;
+            }
+        }
+
+        std::string content = node->read();
+        std::printf("[VFS] READ %s -> %zu bytes\n", vfs_path.c_str(), content.size());
+        if (response_cb_) {
+            nlohmann::json resp_data;
+            resp_data["path"] = vfs_path;
+            resp_data["content"] = content;
+            resp_data["type"] = node_type_str(node->node_type());
+            response_cb_(task->client_fd,
+                make_response(true, "VFS READ completed", resp_data.dump()));
+        }
+    } else if (action == "WRITE") {
+        bool ok = node->write(payload);
+        std::printf("[VFS] WRITE %s -> %s\n", vfs_path.c_str(), ok ? "ok" : "failed");
+        if (response_cb_) {
+            nlohmann::json resp_data;
+            resp_data["path"] = vfs_path;
+            resp_data["written"] = ok;
+            response_cb_(task->client_fd,
+                make_response(ok, ok ? "VFS WRITE completed" : "VFS WRITE failed", resp_data.dump()));
+        }
+    } else if (action == "EXECUTE") {
+        if (node->node_type() != VfsNodeType::EXECUTABLE) {
+            std::printf("[VFS] EXECUTE failed: %s is not executable [%s]\n",
+                        vfs_path.c_str(), node_type_str(node->node_type()));
+            if (response_cb_) {
+                response_cb_(task->client_fd,
+                    make_response(false, "VFS node is not executable: " + vfs_path));
+            }
+        } else {
+            auto& guard = SecurityGuard::instance();
+
+            if (!guard.is_code_safe(payload, level)) {
+                std::printf("[VFS+SecurityGuard] Agent#%d (%s) code REJECTED at %s\n",
+                            task->agent_id, privilege_str(level), vfs_path.c_str());
+
+                MemoryPage sec_page;
+                sec_page.agent_id = task->agent_id;
+                sec_page.role = "system";
+                sec_page.content = "[System Action] 执行失败，由于安全限制，Ring 3 环境禁止执行涉及 OS 或系统调用的危险代码。";
+                memory_mgr_->write_page(sec_page);
+
+                if (response_cb_) {
+                    nlohmann::json resp_data;
+                    resp_data["blocked"] = true;
+                    resp_data["reason"] = "SecurityGuard: dangerous code pattern detected for Ring 3 agent";
+                    response_cb_(task->client_fd,
+                        make_response(false, "VFS EXECUTE blocked by SecurityGuard", resp_data.dump()));
+                }
+            } else {
+                active_io_tasks_.fetch_add(1);
+                try {
+                    io_pool_.submit([this, task, node, payload, vfs_path]() {
+                        std::printf("[VFS-IOPool] Executing %s for Agent#%d\n",
+                                    vfs_path.c_str(), task->agent_id);
+
+                        std::string output = node->execute(payload);
+
+                        std::printf("[VFS-IOPool] %s output: \"%s\"\n",
+                                    vfs_path.c_str(),
+                                    output.size() > 200 ? (output.substr(0, 200) + "...").c_str() : output.c_str());
+
+                        MemoryPage page;
+                        page.agent_id = task->agent_id;
+                        page.role = "tool";
+                        page.content = "[VFS: " + vfs_path + "]\n" + output;
+                        std::string page_id = memory_mgr_->write_page(page);
+
+                        if (llm_->has_embedding_config() && !output.empty()) {
+                            auto emb = llm_->get_embedding(output);
+                            if (!emb.empty()) {
+                                memory_mgr_->update_embedding(page_id, task->agent_id, std::move(emb));
+                            }
+                        }
+
+                        if (response_cb_) {
+                            nlohmann::json resp_data;
+                            resp_data["path"] = vfs_path;
+                            resp_data["output"] = output;
+                            response_cb_(task->client_fd,
+                                make_response(true, "VFS EXECUTE completed", resp_data.dump()));
+                        }
+
+                        active_io_tasks_.fetch_sub(1);
+
+                        {
+                            std::lock_guard<std::mutex> lock(active_mutex_);
+                            auto& vec = active_tasks_[task->agent_id];
+                            vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+                        }
+                    });
+                } catch (const std::exception& e) {
+                    active_io_tasks_.fetch_sub(1);
+                    std::printf("[VFS] Agent#%d failed to submit to io_pool: %s\n",
+                                task->agent_id, e.what());
+                    if (response_cb_) {
+                        response_cb_(task->client_fd,
+                            make_response(false, "VFS EXECUTE dispatch failed: " + std::string(e.what())));
+                    }
+                }
+                return;
+            }
+        }
+    } else {
+        std::printf("[VFS] Unknown action: %s\n", action.c_str());
+        if (response_cb_) {
+            response_cb_(task->client_fd,
+                make_response(false, "Unknown VFS action: " + action));
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(active_mutex_);
+        auto& vec = active_tasks_[task->agent_id];
+        vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+    }
 }
 
 } // namespace aios

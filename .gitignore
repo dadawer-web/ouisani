@@ -1,0 +1,19 @@
+# Environment
+.env
+
+# Build
+build/
+
+# Swap files
+swap/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Compiled
+*.o
+*.out

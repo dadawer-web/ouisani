@@ -129,6 +129,30 @@ aios_core/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/build
 .PHONY : aios_core/fast
 
+src/env_loader.o: src/env_loader.cpp.o
+.PHONY : src/env_loader.o
+
+# target to build an object file
+src/env_loader.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/src/env_loader.cpp.o
+.PHONY : src/env_loader.cpp.o
+
+src/env_loader.i: src/env_loader.cpp.i
+.PHONY : src/env_loader.i
+
+# target to preprocess a source file
+src/env_loader.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/src/env_loader.cpp.i
+.PHONY : src/env_loader.cpp.i
+
+src/env_loader.s: src/env_loader.cpp.s
+.PHONY : src/env_loader.s
+
+# target to generate assembly for a file
+src/env_loader.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/src/env_loader.cpp.s
+.PHONY : src/env_loader.cpp.s
+
 src/llm_adapter.o: src/llm_adapter.cpp.o
 .PHONY : src/llm_adapter.o
 
@@ -201,29 +225,29 @@ src/memory_manager.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/src/memory_manager.cpp.s
 .PHONY : src/memory_manager.cpp.s
 
-src/syscall_handler.o: src/syscall_handler.cpp.o
-.PHONY : src/syscall_handler.o
+src/sandbox_driver.o: src/sandbox_driver.cpp.o
+.PHONY : src/sandbox_driver.o
 
 # target to build an object file
-src/syscall_handler.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/src/syscall_handler.cpp.o
-.PHONY : src/syscall_handler.cpp.o
+src/sandbox_driver.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.o
+.PHONY : src/sandbox_driver.cpp.o
 
-src/syscall_handler.i: src/syscall_handler.cpp.i
-.PHONY : src/syscall_handler.i
+src/sandbox_driver.i: src/sandbox_driver.cpp.i
+.PHONY : src/sandbox_driver.i
 
 # target to preprocess a source file
-src/syscall_handler.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/src/syscall_handler.cpp.i
-.PHONY : src/syscall_handler.cpp.i
+src/sandbox_driver.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.i
+.PHONY : src/sandbox_driver.cpp.i
 
-src/syscall_handler.s: src/syscall_handler.cpp.s
-.PHONY : src/syscall_handler.s
+src/sandbox_driver.s: src/sandbox_driver.cpp.s
+.PHONY : src/sandbox_driver.s
 
 # target to generate assembly for a file
-src/syscall_handler.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/src/syscall_handler.cpp.s
-.PHONY : src/syscall_handler.cpp.s
+src/sandbox_driver.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.s
+.PHONY : src/sandbox_driver.cpp.s
 
 src/syscall_server.o: src/syscall_server.cpp.o
 .PHONY : src/syscall_server.o
@@ -273,6 +297,30 @@ src/task_scheduler.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/src/task_scheduler.cpp.s
 .PHONY : src/task_scheduler.cpp.s
 
+src/thread_pool.o: src/thread_pool.cpp.o
+.PHONY : src/thread_pool.o
+
+# target to build an object file
+src/thread_pool.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/src/thread_pool.cpp.o
+.PHONY : src/thread_pool.cpp.o
+
+src/thread_pool.i: src/thread_pool.cpp.i
+.PHONY : src/thread_pool.i
+
+# target to preprocess a source file
+src/thread_pool.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/src/thread_pool.cpp.i
+.PHONY : src/thread_pool.cpp.i
+
+src/thread_pool.s: src/thread_pool.cpp.s
+.PHONY : src/thread_pool.s
+
+# target to generate assembly for a file
+src/thread_pool.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/aios_core.dir/build.make CMakeFiles/aios_core.dir/src/thread_pool.cpp.s
+.PHONY : src/thread_pool.cpp.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -282,6 +330,9 @@ help:
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
 	@echo "... aios_core"
+	@echo "... src/env_loader.o"
+	@echo "... src/env_loader.i"
+	@echo "... src/env_loader.s"
 	@echo "... src/llm_adapter.o"
 	@echo "... src/llm_adapter.i"
 	@echo "... src/llm_adapter.s"
@@ -291,15 +342,18 @@ help:
 	@echo "... src/memory_manager.o"
 	@echo "... src/memory_manager.i"
 	@echo "... src/memory_manager.s"
-	@echo "... src/syscall_handler.o"
-	@echo "... src/syscall_handler.i"
-	@echo "... src/syscall_handler.s"
+	@echo "... src/sandbox_driver.o"
+	@echo "... src/sandbox_driver.i"
+	@echo "... src/sandbox_driver.s"
 	@echo "... src/syscall_server.o"
 	@echo "... src/syscall_server.i"
 	@echo "... src/syscall_server.s"
 	@echo "... src/task_scheduler.o"
 	@echo "... src/task_scheduler.i"
 	@echo "... src/task_scheduler.s"
+	@echo "... src/thread_pool.o"
+	@echo "... src/thread_pool.i"
+	@echo "... src/thread_pool.s"
 .PHONY : help
 
 

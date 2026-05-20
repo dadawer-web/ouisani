@@ -97,19 +97,19 @@ CMakeFiles/aios_core.dir/src/task_scheduler.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/aios_core.dir/src/task_scheduler.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/xmy/tryaios/src/task_scheduler.cpp -o CMakeFiles/aios_core.dir/src/task_scheduler.cpp.s
 
-CMakeFiles/aios_core.dir/src/syscall_handler.cpp.o: CMakeFiles/aios_core.dir/flags.make
-CMakeFiles/aios_core.dir/src/syscall_handler.cpp.o: /home/xmy/tryaios/src/syscall_handler.cpp
-CMakeFiles/aios_core.dir/src/syscall_handler.cpp.o: CMakeFiles/aios_core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/xmy/tryaios/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/aios_core.dir/src/syscall_handler.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/aios_core.dir/src/syscall_handler.cpp.o -MF CMakeFiles/aios_core.dir/src/syscall_handler.cpp.o.d -o CMakeFiles/aios_core.dir/src/syscall_handler.cpp.o -c /home/xmy/tryaios/src/syscall_handler.cpp
+CMakeFiles/aios_core.dir/src/thread_pool.cpp.o: CMakeFiles/aios_core.dir/flags.make
+CMakeFiles/aios_core.dir/src/thread_pool.cpp.o: /home/xmy/tryaios/src/thread_pool.cpp
+CMakeFiles/aios_core.dir/src/thread_pool.cpp.o: CMakeFiles/aios_core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/xmy/tryaios/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/aios_core.dir/src/thread_pool.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/aios_core.dir/src/thread_pool.cpp.o -MF CMakeFiles/aios_core.dir/src/thread_pool.cpp.o.d -o CMakeFiles/aios_core.dir/src/thread_pool.cpp.o -c /home/xmy/tryaios/src/thread_pool.cpp
 
-CMakeFiles/aios_core.dir/src/syscall_handler.cpp.i: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/aios_core.dir/src/syscall_handler.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/xmy/tryaios/src/syscall_handler.cpp > CMakeFiles/aios_core.dir/src/syscall_handler.cpp.i
+CMakeFiles/aios_core.dir/src/thread_pool.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/aios_core.dir/src/thread_pool.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/xmy/tryaios/src/thread_pool.cpp > CMakeFiles/aios_core.dir/src/thread_pool.cpp.i
 
-CMakeFiles/aios_core.dir/src/syscall_handler.cpp.s: cmake_force
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/aios_core.dir/src/syscall_handler.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/xmy/tryaios/src/syscall_handler.cpp -o CMakeFiles/aios_core.dir/src/syscall_handler.cpp.s
+CMakeFiles/aios_core.dir/src/thread_pool.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/aios_core.dir/src/thread_pool.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/xmy/tryaios/src/thread_pool.cpp -o CMakeFiles/aios_core.dir/src/thread_pool.cpp.s
 
 CMakeFiles/aios_core.dir/src/syscall_server.cpp.o: CMakeFiles/aios_core.dir/flags.make
 CMakeFiles/aios_core.dir/src/syscall_server.cpp.o: /home/xmy/tryaios/src/syscall_server.cpp
@@ -153,27 +153,61 @@ CMakeFiles/aios_core.dir/src/llm_adapter.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/aios_core.dir/src/llm_adapter.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/xmy/tryaios/src/llm_adapter.cpp -o CMakeFiles/aios_core.dir/src/llm_adapter.cpp.s
 
+CMakeFiles/aios_core.dir/src/env_loader.cpp.o: CMakeFiles/aios_core.dir/flags.make
+CMakeFiles/aios_core.dir/src/env_loader.cpp.o: /home/xmy/tryaios/src/env_loader.cpp
+CMakeFiles/aios_core.dir/src/env_loader.cpp.o: CMakeFiles/aios_core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/xmy/tryaios/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building CXX object CMakeFiles/aios_core.dir/src/env_loader.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/aios_core.dir/src/env_loader.cpp.o -MF CMakeFiles/aios_core.dir/src/env_loader.cpp.o.d -o CMakeFiles/aios_core.dir/src/env_loader.cpp.o -c /home/xmy/tryaios/src/env_loader.cpp
+
+CMakeFiles/aios_core.dir/src/env_loader.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/aios_core.dir/src/env_loader.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/xmy/tryaios/src/env_loader.cpp > CMakeFiles/aios_core.dir/src/env_loader.cpp.i
+
+CMakeFiles/aios_core.dir/src/env_loader.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/aios_core.dir/src/env_loader.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/xmy/tryaios/src/env_loader.cpp -o CMakeFiles/aios_core.dir/src/env_loader.cpp.s
+
+CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.o: CMakeFiles/aios_core.dir/flags.make
+CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.o: /home/xmy/tryaios/src/sandbox_driver.cpp
+CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.o: CMakeFiles/aios_core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/xmy/tryaios/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building CXX object CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.o -MF CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.o.d -o CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.o -c /home/xmy/tryaios/src/sandbox_driver.cpp
+
+CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/xmy/tryaios/src/sandbox_driver.cpp > CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.i
+
+CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/xmy/tryaios/src/sandbox_driver.cpp -o CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.s
+
 # Object files for target aios_core
 aios_core_OBJECTS = \
 "CMakeFiles/aios_core.dir/src/main.cpp.o" \
 "CMakeFiles/aios_core.dir/src/task_scheduler.cpp.o" \
-"CMakeFiles/aios_core.dir/src/syscall_handler.cpp.o" \
+"CMakeFiles/aios_core.dir/src/thread_pool.cpp.o" \
 "CMakeFiles/aios_core.dir/src/syscall_server.cpp.o" \
 "CMakeFiles/aios_core.dir/src/memory_manager.cpp.o" \
-"CMakeFiles/aios_core.dir/src/llm_adapter.cpp.o"
+"CMakeFiles/aios_core.dir/src/llm_adapter.cpp.o" \
+"CMakeFiles/aios_core.dir/src/env_loader.cpp.o" \
+"CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.o"
 
 # External object files for target aios_core
 aios_core_EXTERNAL_OBJECTS =
 
 aios_core: CMakeFiles/aios_core.dir/src/main.cpp.o
 aios_core: CMakeFiles/aios_core.dir/src/task_scheduler.cpp.o
-aios_core: CMakeFiles/aios_core.dir/src/syscall_handler.cpp.o
+aios_core: CMakeFiles/aios_core.dir/src/thread_pool.cpp.o
 aios_core: CMakeFiles/aios_core.dir/src/syscall_server.cpp.o
 aios_core: CMakeFiles/aios_core.dir/src/memory_manager.cpp.o
 aios_core: CMakeFiles/aios_core.dir/src/llm_adapter.cpp.o
+aios_core: CMakeFiles/aios_core.dir/src/env_loader.cpp.o
+aios_core: CMakeFiles/aios_core.dir/src/sandbox_driver.cpp.o
 aios_core: CMakeFiles/aios_core.dir/build.make
+aios_core: /usr/lib/x86_64-linux-gnu/libssl.so
+aios_core: /usr/lib/x86_64-linux-gnu/libcrypto.so
 aios_core: CMakeFiles/aios_core.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/xmy/tryaios/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Linking CXX executable aios_core"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/xmy/tryaios/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Linking CXX executable aios_core"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/aios_core.dir/link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.

@@ -1,5 +1,6 @@
 #include "aios/memory_manager.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -15,6 +16,9 @@ std::string MemoryPage::to_json() const {
     j["timestamp"] = timestamp;
     j["role"] = role;
     j["content"] = content;
+    if (!embedding.empty()) {
+        j["embedding"] = embedding;
+    }
     return j.dump();
 }
 
@@ -26,6 +30,9 @@ MemoryPage MemoryPage::from_json(const std::string& json_str) {
     p.timestamp = j.value("timestamp", 0ULL);
     p.role = j.value("role", "");
     p.content = j.value("content", "");
+    if (j.contains("embedding") && j["embedding"].is_array()) {
+        p.embedding = j["embedding"].get<std::vector<float>>();
+    }
     return p;
 }
 
@@ -67,6 +74,14 @@ bool LruMemoryCache::contains(const std::string& page_id) const {
     return map_.find(page_id) != map_.end();
 }
 
+bool LruMemoryCache::remove(const std::string& page_id) {
+    auto it = map_.find(page_id);
+    if (it == map_.end()) return false;
+    list_.erase(it->second);
+    map_.erase(it);
+    return true;
+}
+
 size_t LruMemoryCache::size() const {
     return list_.size();
 }
@@ -86,8 +101,13 @@ MemoryPage LruMemoryCache::evict_lru() {
     return evicted;
 }
 
-MemoryManager::MemoryManager(size_t context_window_size, const std::string& swap_dir)
+MemoryManager::MemoryManager(size_t context_window_size, size_t semantic_top_k,
+                             size_t compress_threshold, size_t compress_count,
+                             const std::string& swap_dir)
     : context_window_size_(context_window_size)
+    , semantic_top_k_(semantic_top_k)
+    , compress_threshold_(compress_threshold)
+    , compress_count_(compress_count)
     , swap_dir_(swap_dir)
 {
     ensure_swap_dir();
@@ -101,14 +121,14 @@ LruMemoryCache& MemoryManager::get_or_create_cache(int agent_id) {
 }
 
 std::string MemoryManager::write_page(const MemoryPage& page) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
 
     auto& cache = get_or_create_cache(page.agent_id);
 
     if (cache.size() >= cache.capacity()) {
         MemoryPage evicted = cache.evict_lru();
         if (!evicted.page_id.empty()) {
-            std::printf("[Swap Out] Agent %d 内存溢出，页面 %s 已写入磁盘\n",
+            std::printf("[Swap Out] Agent %d context overflow, page %s swapped to disk\n",
                         evicted.agent_id, evicted.page_id.c_str());
             swap_out(evicted.agent_id, evicted);
         }
@@ -122,22 +142,38 @@ std::string MemoryManager::write_page(const MemoryPage& page) {
 
     cache.put(stored);
 
-    std::printf("[MemoryManager] WRITE | agent=%d | page_id=%s | role=%s | in_memory=%zu/%zu\n",
+    std::printf("[MMU] WRITE | agent=%d | page=%s | role=%s | emb=%zu | in_mem=%zu/%zu\n",
                 stored.agent_id, stored.page_id.c_str(), stored.role.c_str(),
-                cache.size(), cache.capacity());
+                stored.embedding.size(), cache.size(), cache.capacity());
 
     return stored.page_id;
 }
 
+void MemoryManager::update_embedding(const std::string& page_id, int agent_id,
+                                      std::vector<float> embedding) {
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+
+    auto it = caches_.find(agent_id);
+    if (it == caches_.end()) return;
+
+    auto* page = it->second.get(page_id);
+    if (page) {
+        page->embedding = std::move(embedding);
+        std::printf("[MMU] EMBED | agent=%d | page=%s | dim=%zu\n",
+                    agent_id, page_id.c_str(), page->embedding.size());
+    }
+}
+
 std::vector<MemoryPage> MemoryManager::read_pages(int agent_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
 
     auto it = caches_.find(agent_id);
     if (it == caches_.end() || it->second.size() == 0) {
-        std::printf("[MemoryManager] READ | agent=%d | memory empty, loading from swap...\n",
-                    agent_id);
+        lock.unlock();
+        std::printf("[MMU] READ | agent=%d | memory empty, loading from swap...\n", agent_id);
         auto swapped = swap_in_all(agent_id);
         if (!swapped.empty()) {
+            std::unique_lock<std::shared_mutex> wlock(rw_mutex_);
             auto& cache = get_or_create_cache(agent_id);
             for (auto& p : swapped) {
                 p.timestamp = ++page_counter_;
@@ -152,13 +188,86 @@ std::vector<MemoryPage> MemoryManager::read_pages(int agent_id) {
         it->second.get(p.page_id);
     }
 
-    std::printf("[MemoryManager] READ | agent=%d | returned %zu pages from memory\n",
+    std::printf("[MMU] READ | agent=%d | returned %zu pages from memory\n",
                 agent_id, pages.size());
     return pages;
 }
 
+std::vector<MemoryPage> MemoryManager::read_pages_semantic(int agent_id,
+                                                            const std::vector<float>& query_embedding,
+                                                            size_t top_k) {
+    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+
+    if (top_k == 0) top_k = semantic_top_k_;
+
+    std::vector<MemoryPage> all_pages;
+
+    auto it = caches_.find(agent_id);
+    if (it != caches_.end()) {
+        all_pages = it->second.get_all();
+    }
+
+    if (all_pages.empty()) {
+        std::printf("[MMU] SEMANTIC_READ | agent=%d | no pages found\n", agent_id);
+        return {};
+    }
+
+    if (query_embedding.empty()) {
+        std::printf("[MMU] SEMANTIC_READ | agent=%d | no query embedding, fallback to LRU\n", agent_id);
+        if (all_pages.size() > top_k) {
+            all_pages.resize(top_k);
+        }
+        return all_pages;
+    }
+
+    struct ScoredPage {
+        float score;
+        MemoryPage page;
+    };
+    std::vector<ScoredPage> scored;
+    scored.reserve(all_pages.size());
+
+    size_t with_emb = 0;
+    for (auto& p : all_pages) {
+        float score = 0.0f;
+        if (!p.embedding.empty() && p.embedding.size() == query_embedding.size()) {
+            score = CosineSimilarity(query_embedding, p.embedding);
+            ++with_emb;
+        }
+        std::string preview = p.content.size() > 60 ? p.content.substr(0, 60) + "..." : p.content;
+        std::printf("[MMU] SCORE | agent=%d | page=%s | role=%s | score=%.4f | emb=%zu | \"%s\"\n",
+                    agent_id, p.page_id.c_str(), p.role.c_str(), score,
+                    p.embedding.size(), preview.c_str());
+        scored.push_back({score, std::move(p)});
+    }
+
+    std::partial_sort(scored.begin(),
+                       scored.begin() + std::min(top_k, scored.size()),
+                       scored.end(),
+                       [](const ScoredPage& a, const ScoredPage& b) {
+                           return a.score > b.score;
+                       });
+
+    std::vector<MemoryPage> result;
+    size_t k = std::min(top_k, scored.size());
+    result.reserve(k);
+    for (size_t i = 0; i < k; ++i) {
+        std::string preview = scored[i].page.content.size() > 60
+            ? scored[i].page.content.substr(0, 60) + "..." : scored[i].page.content;
+        std::printf("[MMU] TOP%d | page=%s | score=%.4f | \"%s\"\n",
+                    static_cast<int>(i + 1), scored[i].page.page_id.c_str(),
+                    scored[i].score, preview.c_str());
+        result.push_back(std::move(scored[i].page));
+    }
+
+    std::printf("[MMU] SEMANTIC_READ | agent=%d | total=%zu | with_emb=%zu | top_%zu selected\n",
+                agent_id, all_pages.size(), with_emb, k);
+
+    return result;
+}
+
 MemoryPage MemoryManager::read_page_by_keyword(int agent_id, const std::string& keyword) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
 
     auto it = caches_.find(agent_id);
     if (it != caches_.end()) {
@@ -166,37 +275,87 @@ MemoryPage MemoryManager::read_page_by_keyword(int agent_id, const std::string& 
         for (const auto& p : all) {
             if (p.content.find(keyword) != std::string::npos) {
                 it->second.get(p.page_id);
-                std::printf("[MemoryManager] READ_PAGE | agent=%d | HIT in memory | keyword=\"%s\" | page=%s\n",
+                std::printf("[MMU] KEYWORD_HIT | agent=%d | keyword=\"%s\" | page=%s\n",
                             agent_id, keyword.c_str(), p.page_id.c_str());
                 return p;
             }
         }
     }
 
-    std::printf("[Page Fault] 发生缺页中断，从磁盘查找 agent=%d keyword=\"%s\"\n",
-                agent_id, keyword.c_str());
-
-    MemoryPage* found = swap_in_by_keyword(agent_id, keyword);
-    if (found) {
-        return *found;
-    }
-
-    std::printf("[MemoryManager] READ_PAGE | agent=%d | NOT FOUND | keyword=\"%s\"\n",
-                agent_id, keyword.c_str());
+    std::printf("[MMU] KEYWORD_MISS | agent=%d | keyword=\"%s\"\n", agent_id, keyword.c_str());
     return {};
 }
 
 size_t MemoryManager::in_memory_count(int agent_id) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
     auto it = caches_.find(agent_id);
     return it != caches_.end() ? it->second.size() : 0;
+}
+
+bool MemoryManager::should_compress(int agent_id) {
+    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+    auto it = caches_.find(agent_id);
+    if (it == caches_.end()) return false;
+    return it->second.size() >= compress_threshold_;
+}
+
+bool MemoryManager::begin_compress(int agent_id) {
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+    if (compressing_agents_.count(agent_id) > 0) {
+        return false;
+    }
+    compressing_agents_.insert(agent_id);
+    std::printf("[MMU] COMPRESS_LOCK | agent=%d | compression started\n", agent_id);
+    return true;
+}
+
+void MemoryManager::end_compress(int agent_id) {
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+    compressing_agents_.erase(agent_id);
+    std::printf("[MMU] COMPRESS_UNLOCK | agent=%d | compression finished\n", agent_id);
+}
+
+std::vector<MemoryPage> MemoryManager::extract_oldest_pages(int agent_id, size_t count) {
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+
+    auto it = caches_.find(agent_id);
+    if (it == caches_.end()) return {};
+
+    auto all = it->second.get_all();
+
+    std::sort(all.begin(), all.end(),
+              [](const MemoryPage& a, const MemoryPage& b) {
+                  return a.timestamp < b.timestamp;
+              });
+
+    size_t n = std::min(count, all.size());
+    std::vector<MemoryPage> oldest(all.begin(), all.begin() + static_cast<ptrdiff_t>(n));
+
+    std::printf("[MMU] EXTRACT | agent=%d | extracted %zu oldest pages (timestamps: %zu..%zu)\n",
+                agent_id, n, oldest.front().timestamp, oldest.back().timestamp);
+
+    return oldest;
+}
+
+void MemoryManager::remove_pages(int agent_id, const std::vector<std::string>& page_ids) {
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+
+    auto it = caches_.find(agent_id);
+    if (it == caches_.end()) return;
+
+    for (const auto& pid : page_ids) {
+        it->second.remove(pid);
+    }
+
+    std::printf("[MMU] REMOVE | agent=%d | removed %zu pages | remaining=%zu\n",
+                agent_id, page_ids.size(), it->second.size());
 }
 
 void MemoryManager::swap_out(int agent_id, const MemoryPage& page) {
     std::string path = swap_filepath(agent_id);
     std::ofstream ofs(path, std::ios::app);
     if (!ofs.is_open()) {
-        std::printf("[MemoryManager] ERROR: cannot open swap file %s\n", path.c_str());
+        std::printf("[MMU] ERROR: cannot open swap file %s\n", path.c_str());
         return;
     }
     ofs << page.to_json() << "\n";
@@ -222,76 +381,16 @@ std::vector<MemoryPage> MemoryManager::swap_in_all(int agent_id) {
 
     if (!result.empty()) {
         std::filesystem::remove(path);
-        std::printf("[Swap In] Agent %d: 从磁盘换入 %zu 个页面\n",
+        std::printf("[Swap In] Agent %d: loaded %zu pages from disk\n",
                     agent_id, result.size());
     }
     return result;
 }
 
-MemoryPage* MemoryManager::swap_in_by_keyword(int agent_id, const std::string& keyword) {
-    std::string path = swap_filepath(agent_id);
-    std::vector<MemoryPage> all_swapped;
-    size_t found_index = static_cast<size_t>(-1);
-
-    {
-        std::ifstream ifs(path);
-        if (!ifs.is_open()) {
-            std::printf("[Swap In] Agent %d: 无 swap 文件\n", agent_id);
-            return nullptr;
-        }
-
-        std::string line;
-        while (std::getline(ifs, line)) {
-            if (line.empty()) continue;
-            try {
-                auto page = MemoryPage::from_json(line);
-                if (found_index == static_cast<size_t>(-1) &&
-                    page.content.find(keyword) != std::string::npos) {
-                    found_index = all_swapped.size();
-                }
-                all_swapped.push_back(std::move(page));
-            } catch (...) {}
-        }
-        ifs.close();
-    }
-
-    if (found_index != static_cast<size_t>(-1)) {
-        std::filesystem::remove(path);
-
-        auto& cache = get_or_create_cache(agent_id);
-        if (cache.size() >= cache.capacity()) {
-            MemoryPage evicted = cache.evict_lru();
-            if (!evicted.page_id.empty()) {
-                std::printf("[Swap Out] Agent %d 内存溢出，页面 %s 已写入磁盘\n",
-                            evicted.agent_id, evicted.page_id.c_str());
-                swap_out(evicted.agent_id, evicted);
-            }
-        }
-
-        all_swapped[found_index].timestamp = ++page_counter_;
-        cache.put(all_swapped[found_index]);
-
-        for (size_t i = 0; i < all_swapped.size(); ++i) {
-            if (i != found_index) {
-                swap_out(agent_id, all_swapped[i]);
-            }
-        }
-
-        std::printf("[Page Fault] 发生缺页中断，从磁盘换入页面 %s\n",
-                    all_swapped[found_index].page_id.c_str());
-
-        static thread_local MemoryPage result;
-        result = all_swapped[found_index];
-        return &result;
-    }
-
-    return nullptr;
-}
-
 void MemoryManager::ensure_swap_dir() const {
     if (!std::filesystem::exists(swap_dir_)) {
         std::filesystem::create_directories(swap_dir_);
-        std::printf("[MemoryManager] Created swap directory: %s\n", swap_dir_.c_str());
+        std::printf("[MMU] Created swap directory: %s\n", swap_dir_.c_str());
     }
 }
 
