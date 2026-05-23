@@ -20,7 +20,8 @@ enum class TaskType {
     WRITE_MEMORY,
     READ_MEMORY,
     CANCEL_TASK,
-    VFS_CALL
+    VFS_CALL,
+    PROCESS_CTRL
 };
 
 struct AgentTask {

@@ -60,6 +60,7 @@ private:
     void dispatch_llm_task(std::shared_ptr<AgentTask> task);
     void dispatch_tool_task(std::shared_ptr<AgentTask> task);
     void dispatch_vfs_task(std::shared_ptr<AgentTask> task);
+    void dispatch_process_ctrl(std::shared_ptr<AgentTask> task);
     void try_compress(int agent_id);
     std::vector<ChatMessage> build_messages(int agent_id, const std::string& current_payload);
 

@@ -92,6 +92,10 @@ public:
     std::vector<MemoryPage> extract_oldest_pages(int agent_id, size_t count);
     void remove_pages(int agent_id, const std::vector<std::string>& page_ids);
 
+    bool create_snapshot(int agent_id, const std::string& filepath);
+    bool restore_snapshot(int agent_id, const std::string& filepath);
+    bool purge_agent(int agent_id);
+
 private:
     LruMemoryCache& get_or_create_cache(int agent_id);
     void swap_out(int agent_id, const MemoryPage& page);

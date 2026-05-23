@@ -1,6 +1,7 @@
 #pragma once
 
 #include "aios/agent_task.h"
+#include "aios/instruction_decoder.h"
 
 #include <atomic>
 #include <functional>
@@ -10,8 +11,11 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace aios {
+
+class ThreadPool;
 
 struct PendingResponse {
     int fd;
@@ -47,6 +51,9 @@ private:
     void drain_response_queue();
     void mod_fd(int fd, uint32_t events);
     void parse_and_dispatch(int fd, const std::string& line);
+    void decode_and_dispatch(int fd, const std::string& natural_language);
+    FlatCommand keyword_route(const std::string& input);
+    void dispatch_flat(int fd, const FlatCommand& cmd, const std::string& original_text);
 
     SubmitTaskFn submit_fn_;
     CancelTaskFn cancel_fn_;
@@ -59,6 +66,8 @@ private:
 
     std::thread io_thread_;
     std::atomic<bool> running_{false};
+
+    std::unique_ptr<ThreadPool> decode_pool_;
 
     struct ClientConn {
         std::string read_buf;

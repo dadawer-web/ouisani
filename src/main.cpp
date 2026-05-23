@@ -1,6 +1,8 @@
 #include "aios/agent_task.h"
 #include "aios/agent_registry.h"
+#include "aios/cache_manager.h"
 #include "aios/env_loader.h"
+#include "aios/instruction_decoder.h"
 #include "aios/llm_adapter.h"
 #include "aios/memory_manager.h"
 #include "aios/sandbox_driver.h"
@@ -13,9 +15,12 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <fcntl.h>
 #include <memory>
 #include <signal.h>
 #include <string>
+#include <sys/file.h>
+#include <unistd.h>
 
 static std::atomic<bool> g_running{true};
 
@@ -24,7 +29,16 @@ static void signal_handler(int) {
 }
 
 int main(int argc, char* argv[]) {
-    std::printf("=== AIOS Core v1.5.0 - Virtual File System ===\n\n");
+    std::printf("=== AIOS Core v1.8.0 - Checkpointing & Hibernation ===\n\n");
+
+    static int lock_fd = ::open("/tmp/aios_core.lock", O_CREAT | O_RDWR, 0666);
+    if (lock_fd >= 0) {
+        if (flock(lock_fd, LOCK_EX | LOCK_NB) != 0) {
+            std::printf("[Main] FATAL: Another AIOS Core instance is already running!\n");
+            std::printf("[Main] Kill it first: pkill -9 aios_core\n");
+            return 1;
+        }
+    }
 
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -81,6 +95,28 @@ int main(int argc, char* argv[]) {
     auto dev_mem = std::make_shared<aios::DirectoryNode>("/dev/mem");
     vfs.mount("/dev", "mem", dev_mem);
 
+    auto tmp = std::make_shared<aios::DirectoryNode>("/tmp");
+    vfs.mount("/", "tmp", tmp);
+    auto pipes = std::make_shared<aios::DirectoryNode>("/tmp/pipes");
+    vfs.mount("/tmp", "pipes", pipes);
+
+    auto pipe_101_102 = std::make_shared<aios::PipeNode>("/tmp/pipes/agent_101_to_102");
+    vfs.mount("/tmp/pipes", "agent_101_to_102", pipe_101_102);
+
+    auto var_dir = std::make_shared<aios::DirectoryNode>("/var");
+    vfs.mount("/", "var", var_dir);
+    auto snapshots_dir = std::make_shared<aios::DirectoryNode>("/var/snapshots");
+    vfs.mount("/var", "snapshots", snapshots_dir);
+
+    auto& cache_mgr = aios::CacheManager::instance();
+    cache_mgr.set_threshold(0.90f);
+    cache_mgr.set_max_entries(1000);
+
+    std::string decoder_sock = aios::EnvLoader::get(env, "DECODER_UDS_PATH", "/tmp/aios_decoder.sock");
+
+    auto& decoder = aios::InstructionDecoder::GetInstance();
+    bool decoder_ok = decoder.Initialize(decoder_sock);
+
     aios::SyscallServer server(
         [scheduler](std::shared_ptr<aios::AgentTask> task) {
             scheduler->submit(std::move(task));
@@ -98,14 +134,20 @@ int main(int argc, char* argv[]) {
     scheduler->start();
     server.start();
 
-    std::printf("[Main] AIOS Core is running (Virtual File System)\n");
+    std::printf("[Main] AIOS Core is running (Checkpointing & Hibernation)\n");
     std::printf("[Main] I/O: epoll LT + eventfd (Reactor)\n");
     std::printf("[Main] Dispatch: ThreadPool x4 | IOPool: ThreadPool x8\n");
     std::printf("[Main] MMU: Semantic Paging + Memory Compression\n");
     std::printf("[Main] Interrupt: CANCEL_TASK + is_cancelled token\n");
     std::printf("[Main] Watchdog: Sandbox timeout=10s | LLM timeout=120s\n");
     std::printf("[Main] Security: Ring 0/3 Privilege + SecurityGuard Code Scanner\n");
-    std::printf("[Main] VFS: /bin/sandbox /proc/version /dev /mem\n");
+    std::printf("[Main] VFS: /bin/sandbox /bin/wasm_sandbox /proc/version /dev/mem /tmp/pipes /var/snapshots\n");
+    std::printf("[Main] TLB: Semantic Cache (threshold=0.90, max=1000)\n");
+    std::printf("[Main] IPC: PipeNode (blocking read + notify write)\n");
+    std::printf("[Main] Checkpoint: SNAPSHOT / RESTORE (process hibernation)\n");
+    std::printf("[Main] Decoder: %s | UDS: %s\n",
+                decoder_ok ? "VIA DAEMON (UDS)" : "DISABLED",
+                decoder_sock.c_str());
     std::printf("[Main] Embedding: %s\n\n", llm->has_embedding_config() ? "ENABLED" : "DISABLED");
 
     while (g_running.load()) {
@@ -115,7 +157,6 @@ int main(int argc, char* argv[]) {
     std::printf("\n[Main] Signal received, shutting down...\n");
     server.shutdown();
     scheduler->shutdown();
-
     std::printf("[Main] AIOS Core exited cleanly.\n");
     return 0;
 }

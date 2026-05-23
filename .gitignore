@@ -1,19 +1,33 @@
-# Environment
 .env
+.env.*
 
-# Build
 build/
 
-# Swap files
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+models/
+*.gguf
+*.bin
+
+llama.cpp/
+
+snapshots/
 swap/
 
-# IDE
+*.o
+*.out
+*.wasm
+*.so
+*.a
+
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# Compiled
-*.o
-*.out
+/tmp/

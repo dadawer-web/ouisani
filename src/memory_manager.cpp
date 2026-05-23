@@ -398,4 +398,163 @@ std::string MemoryManager::swap_filepath(int agent_id) const {
     return swap_dir_ + "/swap_agent_" + std::to_string(agent_id) + ".jsonl";
 }
 
+bool MemoryManager::create_snapshot(int agent_id, const std::string& filepath) {
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+
+    std::vector<MemoryPage> all_pages;
+
+    auto it = caches_.find(agent_id);
+    if (it != caches_.end()) {
+        all_pages = it->second.get_all();
+    }
+
+    auto swapped = swap_in_all(agent_id);
+    for (auto& p : swapped) {
+        all_pages.push_back(std::move(p));
+    }
+
+    if (all_pages.empty()) {
+        std::printf("[Snapshot] Agent#%d has no pages to snapshot\n", agent_id);
+        return false;
+    }
+
+    nlohmann::json snapshot;
+    snapshot["agent_id"] = agent_id;
+    snapshot["version"] = "1.0";
+    snapshot["page_count"] = all_pages.size();
+
+    nlohmann::json pages_arr = nlohmann::json::array();
+    for (const auto& page : all_pages) {
+        nlohmann::json pj;
+        pj["page_id"] = page.page_id;
+        pj["agent_id"] = page.agent_id;
+        pj["timestamp"] = page.timestamp;
+        pj["role"] = page.role;
+        pj["content"] = page.content;
+        if (!page.embedding.empty()) {
+            pj["embedding"] = page.embedding;
+        }
+        pages_arr.push_back(std::move(pj));
+    }
+    snapshot["pages"] = std::move(pages_arr);
+
+    std::string dir = filepath.substr(0, filepath.rfind('/'));
+    if (!dir.empty() && !std::filesystem::exists(dir)) {
+        std::filesystem::create_directories(dir);
+    }
+
+    std::ofstream ofs(filepath);
+    if (!ofs.is_open()) {
+        std::printf("[Snapshot] ERROR: cannot open file %s for writing\n", filepath.c_str());
+        return false;
+    }
+
+    ofs << snapshot.dump(2);
+    ofs.close();
+
+    size_t emb_count = 0;
+    for (const auto& p : all_pages) {
+        if (!p.embedding.empty()) emb_count++;
+    }
+
+    std::printf("[Snapshot] Agent#%d frozen | pages=%zu | with_embedding=%zu | file=%s\n",
+                agent_id, all_pages.size(), emb_count, filepath.c_str());
+    return true;
+}
+
+bool MemoryManager::restore_snapshot(int agent_id, const std::string& filepath) {
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+
+    if (!std::filesystem::exists(filepath)) {
+        std::printf("[Restore] ERROR: snapshot file not found: %s\n", filepath.c_str());
+        return false;
+    }
+
+    std::ifstream ifs(filepath);
+    if (!ifs.is_open()) {
+        std::printf("[Restore] ERROR: cannot open file %s for reading\n", filepath.c_str());
+        return false;
+    }
+
+    std::string content((std::istreambuf_iterator<char>(ifs)),
+                         std::istreambuf_iterator<char>());
+    ifs.close();
+
+    nlohmann::json snapshot;
+    try {
+        snapshot = nlohmann::json::parse(content);
+    } catch (const nlohmann::json::parse_error& e) {
+        std::printf("[Restore] ERROR: JSON parse failed: %s\n", e.what());
+        return false;
+    }
+
+    int snap_agent = snapshot.value("agent_id", -1);
+    if (snap_agent != agent_id) {
+        std::printf("[Restore] ERROR: agent_id mismatch: snapshot=%d, requested=%d\n",
+                    snap_agent, agent_id);
+        return false;
+    }
+
+    caches_.erase(agent_id);
+    auto& cache = get_or_create_cache(agent_id);
+
+    size_t restored_count = 0;
+    size_t emb_count = 0;
+
+    if (snapshot.contains("pages") && snapshot["pages"].is_array()) {
+        for (const auto& pj : snapshot["pages"]) {
+            MemoryPage page;
+            page.page_id = pj.value("page_id", "");
+            page.agent_id = pj.value("agent_id", agent_id);
+            page.timestamp = pj.value("timestamp", 0ULL);
+            page.role = pj.value("role", "");
+            page.content = pj.value("content", "");
+            if (pj.contains("embedding") && pj["embedding"].is_array()) {
+                page.embedding = pj["embedding"].get<std::vector<float>>();
+                emb_count++;
+            }
+
+            if (page.page_id.empty()) {
+                page.page_id = "page_" + std::to_string(agent_id) + "_" + std::to_string(++page_counter_);
+            }
+            page.timestamp = ++page_counter_;
+
+            cache.put(page);
+            restored_count++;
+        }
+    }
+
+    std::printf("[Restore] Agent#%d resurrected | pages=%zu | with_embedding=%zu | from=%s\n",
+                agent_id, restored_count, emb_count, filepath.c_str());
+    return true;
+}
+
+bool MemoryManager::purge_agent(int agent_id) {
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
+
+    size_t mem_pages = 0;
+    auto it = caches_.find(agent_id);
+    if (it != caches_.end()) {
+        mem_pages = it->second.size();
+        caches_.erase(it);
+    }
+
+    std::string sf = swap_filepath(agent_id);
+    size_t swap_pages = 0;
+    if (std::filesystem::exists(sf)) {
+        std::ifstream ifs(sf);
+        std::string line;
+        while (std::getline(ifs, line)) {
+            if (!line.empty()) ++swap_pages;
+        }
+        std::filesystem::remove(sf);
+    }
+
+    compressing_agents_.erase(agent_id);
+
+    std::printf("[Purge] Agent#%d memory PURGED | in_mem=%zu | swap=%zu | total=%zu\n",
+                agent_id, mem_pages, swap_pages, mem_pages + swap_pages);
+    return true;
+}
+
 } // namespace aios

@@ -1,8 +1,11 @@
 #include "aios/task_scheduler.h"
 #include "aios/agent_registry.h"
+#include "aios/cache_manager.h"
+#include "aios/compiler_bridge.h"
 #include "aios/security_guard.h"
 #include "aios/vfs_manager.h"
 #include "aios/vfs_node.h"
+#include "aios/wasm_node.h"
 
 #include <chrono>
 #include <cstdio>
@@ -297,6 +300,9 @@ void TaskScheduler::dispatch_loop() {
             case TaskType::VFS_CALL:
                 dispatch_vfs_task(std::move(task));
                 break;
+            case TaskType::PROCESS_CTRL:
+                dispatch_process_ctrl(std::move(task));
+                break;
             case TaskType::CANCEL_TASK:
                 break;
         }
@@ -439,11 +445,54 @@ void TaskScheduler::dispatch_llm_task(std::shared_ptr<AgentTask> task) {
         std::printf("[LLM Prompt] [%s]: %s\n", m.role.c_str(), preview.c_str());
     }
 
+    auto& cache_mgr = CacheManager::instance();
+    std::vector<float> query_embedding;
+
+    if (llm_->has_embedding_config()) {
+        query_embedding = llm_->get_embedding(task->task_payload);
+
+        if (!query_embedding.empty()) {
+            std::string cached_response = cache_mgr.check_cache(query_embedding, task->task_payload);
+            if (!cached_response.empty()) {
+                MemoryPage page;
+                page.agent_id = task->agent_id;
+                page.role = "assistant";
+                page.content = cached_response;
+                std::string page_id = memory_mgr_->write_page(page);
+
+                if (llm_->has_embedding_config()) {
+                    auto emb = llm_->get_embedding(cached_response);
+                    if (!emb.empty()) {
+                        memory_mgr_->update_embedding(page_id, task->agent_id, std::move(emb));
+                    }
+                }
+
+                if (response_cb_) {
+                    nlohmann::json resp_data;
+                    resp_data["response"] = cached_response;
+                    resp_data["cache_hit"] = true;
+                    response_cb_(task->client_fd,
+                        make_response(true,
+                            "LLM task completed (cache hit) for agent " + std::to_string(task->agent_id),
+                            resp_data.dump()));
+                }
+
+                {
+                    std::lock_guard<std::mutex> lock(active_mutex_);
+                    auto& vec = active_tasks_[task->agent_id];
+                    vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+                }
+                return;
+            }
+        }
+    }
+
     active_io_tasks_.fetch_add(1);
 
     try {
         io_pool_.submit([this, task, messages = std::move(messages),
-                         system_prompt = std::move(system_prompt)]() {
+                         system_prompt = std::move(system_prompt),
+                         query_embedding = std::move(query_embedding)]() {
             if (task->cancelled()) {
                 std::printf("[Interrupt] Agent=%d LLM task cancelled, skipping HTTP call\n",
                             task->agent_id);
@@ -492,6 +541,10 @@ void TaskScheduler::dispatch_llm_task(std::shared_ptr<AgentTask> task) {
 
             std::printf("[IOPool] Agent#%d LLM HTTP response received (%zu chars)\n",
                         task->agent_id, llm_response.size());
+
+            if (!query_embedding.empty() && !llm_response.empty()) {
+                CacheManager::instance().add_cache(query_embedding, task->task_payload, llm_response);
+            }
 
             MemoryPage page;
             page.agent_id = task->agent_id;
@@ -724,6 +777,133 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
     auto& vfs = VfsManager::instance();
     auto& registry = AgentRegistry::instance();
     PrivilegeLevel level = registry.get_level(task->agent_id);
+
+    if (action == "COMPILE_AND_EXECUTE") {
+        std::string c_code = payload;
+        std::string wasm_func = "_start";
+        std::vector<int32_t> wasm_args;
+
+        nlohmann::json j;
+        if (!payload.empty()) {
+            auto parsed = nlohmann::json::parse(payload, nullptr, false);
+            if (!parsed.is_discarded() && parsed.is_object()) {
+                if (parsed.contains("code") && parsed["code"].is_string()) {
+                    c_code = parsed["code"].get<std::string>();
+                }
+                if (parsed.contains("func") && parsed["func"].is_string()) {
+                    wasm_func = parsed["func"].get<std::string>();
+                }
+                if (parsed.contains("args") && parsed["args"].is_array()) {
+                    for (const auto& arg : parsed["args"]) {
+                        if (arg.is_number_integer()) {
+                            wasm_args.push_back(arg.get<int32_t>());
+                        }
+                    }
+                }
+            }
+        }
+
+        std::printf("[VFS-COMPILE] Agent#%d | C source: %zu bytes | func=%s\n",
+                    task->agent_id, c_code.size(), wasm_func.c_str());
+
+        active_io_tasks_.fetch_add(1);
+        try {
+            io_pool_.submit([this, task, c_code = std::move(c_code),
+                             wasm_func = std::move(wasm_func),
+                             wasm_args = std::move(wasm_args)]() {
+                CompileResult compile_res = CompilerBridge::CompileToWasm(
+                    task->agent_id, c_code);
+
+                if (!compile_res.success) {
+                    std::printf("[VFS-COMPILE] Agent#%d | Compile FAILED: %s\n",
+                                task->agent_id, compile_res.error_msg.c_str());
+
+                    if (response_cb_) {
+                        nlohmann::json resp_data;
+                        resp_data["stage"] = "compile";
+                        resp_data["success"] = false;
+                        resp_data["error"] = compile_res.error_msg;
+                        resp_data["exit_code"] = compile_res.exit_code;
+                        response_cb_(task->client_fd,
+                            make_response(false, "Compilation failed", resp_data.dump()));
+                    }
+                    active_io_tasks_.fetch_sub(1);
+
+                    {
+                        std::lock_guard<std::mutex> lock(active_mutex_);
+                        auto& vec = active_tasks_[task->agent_id];
+                        vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+                    }
+                    return;
+                }
+
+                std::printf("[VFS-COMPILE] Agent#%d | Compile OK -> %s\n",
+                            task->agent_id, compile_res.wasm_path.c_str());
+
+                std::string mount_path = "/bin/wasm_agent_" + std::to_string(task->agent_id);
+                auto& vfs = VfsManager::instance();
+                auto existing = vfs.resolve_path(mount_path);
+
+                std::shared_ptr<WasmNode> wasm_node;
+                if (existing && existing->node_type() == VfsNodeType::WASM) {
+                    wasm_node = std::dynamic_pointer_cast<WasmNode>(existing);
+                    if (wasm_node) {
+                        wasm_node->set_wasm_file_path(compile_res.wasm_path);
+                        std::printf("[VFS-COMPILE] Agent#%d | Reusing WasmNode: %s -> %s\n",
+                                    task->agent_id, mount_path.c_str(), compile_res.wasm_path.c_str());
+                    }
+                }
+
+                if (!wasm_node) {
+                    wasm_node = std::make_shared<WasmNode>(mount_path, compile_res.wasm_path);
+                    vfs.mount("/bin", "wasm_agent_" + std::to_string(task->agent_id), wasm_node);
+                    std::printf("[VFS-COMPILE] Agent#%d | Dynamic WasmNode mounted: %s\n",
+                                task->agent_id, mount_path.c_str());
+                }
+
+                nlohmann::json exec_payload;
+                exec_payload["file"] = compile_res.wasm_path;
+                exec_payload["func"] = wasm_func;
+                if (!wasm_args.empty()) {
+                    exec_payload["args"] = wasm_args;
+                }
+
+                std::string output = wasm_node->execute(exec_payload.dump());
+
+                std::printf("[VFS-COMPILE] Agent#%d | Execute result: %s\n",
+                            task->agent_id, output.c_str());
+
+                if (response_cb_) {
+                    nlohmann::json resp_data;
+                    resp_data["stage"] = "complete";
+                    resp_data["compile"] = true;
+                    resp_data["wasm_path"] = compile_res.wasm_path;
+                    resp_data["mount"] = mount_path;
+                    resp_data["output"] = output;
+                    response_cb_(task->client_fd,
+                        make_response(true, "Compile & Execute completed", resp_data.dump()));
+                }
+
+                active_io_tasks_.fetch_sub(1);
+
+                {
+                    std::lock_guard<std::mutex> lock(active_mutex_);
+                    auto& vec = active_tasks_[task->agent_id];
+                    vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+                }
+            });
+        } catch (const std::exception& e) {
+            active_io_tasks_.fetch_sub(1);
+            std::printf("[VFS-COMPILE] Agent#%d dispatch failed: %s\n",
+                        task->agent_id, e.what());
+            if (response_cb_) {
+                response_cb_(task->client_fd,
+                    make_response(false, "COMPILE_AND_EXECUTE dispatch failed: " + std::string(e.what())));
+            }
+        }
+        return;
+    }
+
     auto node = vfs.resolve_path(vfs_path);
 
     if (!node) {
@@ -745,6 +925,68 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
     }
 
     if (action == "READ") {
+        if (node->node_type() == VfsNodeType::PIPE) {
+            auto pipe = std::dynamic_pointer_cast<PipeNode>(node);
+            if (!pipe) {
+                if (response_cb_) {
+                    response_cb_(task->client_fd,
+                        make_response(false, "VFS path is not a valid pipe: " + vfs_path));
+                }
+                {
+                    std::lock_guard<std::mutex> lock(active_mutex_);
+                    auto& vec = active_tasks_[task->agent_id];
+                    vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+                }
+                return;
+            }
+
+            active_io_tasks_.fetch_add(1);
+            try {
+                io_pool_.submit([this, task, pipe, vfs_path]() {
+                    std::printf("[Pipe-IOPool] Agent#%d blocking READ on %s\n",
+                                task->agent_id, vfs_path.c_str());
+
+                    std::string data = pipe->read_blocking();
+
+                    std::printf("[Pipe-IOPool] Agent#%d received from %s: \"%s\"\n",
+                                task->agent_id, vfs_path.c_str(),
+                                data.size() > 80 ? (data.substr(0, 80) + "...").c_str() : data.c_str());
+
+                    MemoryPage page;
+                    page.agent_id = task->agent_id;
+                    page.role = "pipe";
+                    page.content = "[Pipe: " + vfs_path + "] " + data;
+                    memory_mgr_->write_page(page);
+
+                    if (response_cb_) {
+                        nlohmann::json resp_data;
+                        resp_data["path"] = vfs_path;
+                        resp_data["content"] = data;
+                        resp_data["type"] = "PIPE";
+                        response_cb_(task->client_fd,
+                            make_response(true, "VFS PIPE READ completed", resp_data.dump()));
+                    }
+
+                    active_io_tasks_.fetch_sub(1);
+
+                    {
+                        std::lock_guard<std::mutex> lock(active_mutex_);
+                        auto& vec = active_tasks_[task->agent_id];
+                        vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+                    }
+                });
+            } catch (const std::exception& e) {
+                active_io_tasks_.fetch_sub(1);
+                std::printf("[VFS] Agent#%d failed to submit pipe read: %s\n",
+                            task->agent_id, e.what());
+                if (response_cb_) {
+                    response_cb_(task->client_fd,
+                        make_response(false, "pipe read dispatch failed: " + std::string(e.what())));
+                }
+            }
+            return;
+        }
+
         if (node->node_type() == VfsNodeType::DEVICE) {
             auto mem_dev = std::dynamic_pointer_cast<MemoryDeviceNode>(node);
             if (mem_dev && !registry.can_access(task->agent_id, mem_dev->agent_id())) {
@@ -776,6 +1018,27 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                 make_response(true, "VFS READ completed", resp_data.dump()));
         }
     } else if (action == "WRITE") {
+        if (node->node_type() == VfsNodeType::PIPE) {
+            auto pipe = std::dynamic_pointer_cast<PipeNode>(node);
+            if (pipe) {
+                bool ok = pipe->write(payload);
+                if (response_cb_) {
+                    nlohmann::json resp_data;
+                    resp_data["path"] = vfs_path;
+                    resp_data["written"] = ok;
+                    resp_data["type"] = "PIPE";
+                    response_cb_(task->client_fd,
+                        make_response(ok, ok ? "VFS PIPE WRITE completed (receiver notified)" : "VFS PIPE WRITE failed", resp_data.dump()));
+                }
+                {
+                    std::lock_guard<std::mutex> lock(active_mutex_);
+                    auto& vec = active_tasks_[task->agent_id];
+                    vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+                }
+                return;
+            }
+        }
+
         bool ok = node->write(payload);
         std::printf("[VFS] WRITE %s -> %s\n", vfs_path.c_str(), ok ? "ok" : "failed");
         if (response_cb_) {
@@ -786,7 +1049,8 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                 make_response(ok, ok ? "VFS WRITE completed" : "VFS WRITE failed", resp_data.dump()));
         }
     } else if (action == "EXECUTE") {
-        if (node->node_type() != VfsNodeType::EXECUTABLE) {
+        if (node->node_type() != VfsNodeType::EXECUTABLE &&
+            node->node_type() != VfsNodeType::WASM) {
             std::printf("[VFS] EXECUTE failed: %s is not executable [%s]\n",
                         vfs_path.c_str(), node_type_str(node->node_type()));
             if (response_cb_) {
@@ -794,6 +1058,34 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                     make_response(false, "VFS node is not executable: " + vfs_path));
             }
         } else {
+            if (node->node_type() == VfsNodeType::WASM) {
+                active_io_tasks_.fetch_add(1);
+                try {
+                    io_pool_.submit([this, task, node, payload, vfs_path]() {
+                        std::printf("[VFS-WASM] Executing %s for Agent#%d\n",
+                                    vfs_path.c_str(), task->agent_id);
+
+                        std::string output = node->execute(payload);
+
+                        std::printf("[VFS-WASM] %s output: \"%s\"\n",
+                                    vfs_path.c_str(), output.c_str());
+
+                        if (response_cb_) {
+                            nlohmann::json resp_data;
+                            resp_data["path"] = vfs_path;
+                            resp_data["output"] = output;
+                            response_cb_(task->client_fd,
+                                make_response(true, "WASM execution completed", resp_data.dump()));
+                        }
+
+                        active_io_tasks_.fetch_sub(1);
+                    });
+                } catch (...) {
+                    active_io_tasks_.fetch_sub(1);
+                }
+                return;
+            }
+
             auto& guard = SecurityGuard::instance();
 
             if (!guard.is_code_safe(payload, level)) {
@@ -872,6 +1164,70 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
         if (response_cb_) {
             response_cb_(task->client_fd,
                 make_response(false, "Unknown VFS action: " + action));
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(active_mutex_);
+        auto& vec = active_tasks_[task->agent_id];
+        vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+    }
+}
+
+void TaskScheduler::dispatch_process_ctrl(std::shared_ptr<AgentTask> task) {
+    std::string action = task->tool_name;
+    int agent_id = task->agent_id;
+
+    std::printf("[ProcessCtrl] Agent#%d | action=%s\n", agent_id, action.c_str());
+
+    if (action == "SNAPSHOT") {
+        std::string filepath = "./snapshots/agent_" + std::to_string(agent_id) + ".snapshot.json";
+        bool ok = memory_mgr_->create_snapshot(agent_id, filepath);
+
+        if (response_cb_) {
+            nlohmann::json resp_data;
+            resp_data["action"] = "SNAPSHOT";
+            resp_data["agent_id"] = agent_id;
+            resp_data["filepath"] = filepath;
+            response_cb_(task->client_fd,
+                make_response(ok,
+                    ok ? "Agent#" + std::to_string(agent_id) + " snapshot created"
+                       : "Agent#" + std::to_string(agent_id) + " snapshot failed",
+                    resp_data.dump()));
+        }
+    } else if (action == "RESTORE") {
+        std::string filepath = "./snapshots/agent_" + std::to_string(agent_id) + ".snapshot.json";
+        bool ok = memory_mgr_->restore_snapshot(agent_id, filepath);
+
+        if (response_cb_) {
+            nlohmann::json resp_data;
+            resp_data["action"] = "RESTORE";
+            resp_data["agent_id"] = agent_id;
+            resp_data["filepath"] = filepath;
+            response_cb_(task->client_fd,
+                make_response(ok,
+                    ok ? "Agent#" + std::to_string(agent_id) + " restored from snapshot"
+                       : "Agent#" + std::to_string(agent_id) + " restore failed",
+                    resp_data.dump()));
+        }
+    } else if (action == "PURGE") {
+        bool ok = memory_mgr_->purge_agent(agent_id);
+
+        if (response_cb_) {
+            nlohmann::json resp_data;
+            resp_data["action"] = "PURGE";
+            resp_data["agent_id"] = agent_id;
+            response_cb_(task->client_fd,
+                make_response(ok,
+                    ok ? "Agent#" + std::to_string(agent_id) + " memory purged"
+                       : "Agent#" + std::to_string(agent_id) + " purge failed",
+                    resp_data.dump()));
+        }
+    } else {
+        std::printf("[ProcessCtrl] Unknown action: %s\n", action.c_str());
+        if (response_cb_) {
+            response_cb_(task->client_fd,
+                make_response(false, "Unknown PROCESS_CTRL action: " + action));
         }
     }
 

@@ -1,7 +1,10 @@
 #include "aios/syscall_server.h"
 #include "aios/agent_registry.h"
+#include "aios/instruction_decoder.h"
+#include "aios/thread_pool.h"
 #include "aios/vfs_manager.h"
 
+#include <algorithm>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -15,6 +18,7 @@
 #include <cstdio>
 #include <cstring>
 #include <nlohmann/json.hpp>
+#include <sstream>
 #include <string>
 
 namespace aios {
@@ -33,6 +37,7 @@ SyscallServer::SyscallServer(SubmitTaskFn submit_fn,
     , cancel_fn_(std::move(cancel_fn))
     , host_(host)
     , port_(port)
+    , decode_pool_(std::make_unique<ThreadPool>(2))
 {}
 
 SyscallServer::~SyscallServer() {
@@ -44,6 +49,7 @@ void SyscallServer::start() {
     if (!running_.compare_exchange_strong(expected, true)) {
         return;
     }
+    decode_pool_->start();
     io_thread_ = std::thread(&SyscallServer::io_loop, this);
     std::printf("[Reactor] I/O thread started\n");
 }
@@ -63,6 +69,8 @@ void SyscallServer::shutdown() {
     if (io_thread_.joinable()) {
         io_thread_.join();
     }
+
+    decode_pool_->shutdown();
 
     for (auto& [fd, conn] : clients_) {
         close(fd);
@@ -278,12 +286,33 @@ void SyscallServer::handle_read(int fd) {
 }
 
 void SyscallServer::parse_and_dispatch(int fd, const std::string& line) {
+    std::printf("[parse_and_dispatch] fd=%d | line_len=%zu | first20=%s\n",
+                fd, line.size(), line.substr(0, 20).c_str());
+
+    FlatCommand cmd = InstructionDecoder::ParseFlatCommand(line);
+    if (cmd.valid) {
+        std::printf("[网关] 扁平微指令直达: %s %s\n", cmd.action.c_str(), cmd.arg.c_str());
+        dispatch_flat(fd, cmd, line);
+        return;
+    }
+
     nlohmann::json req;
     try {
         req = nlohmann::json::parse(line);
-    } catch (const nlohmann::json::parse_error& e) {
-        std::printf("[Reactor] JSON parse error: %s\n", e.what());
-        enqueue_response(fd, "{\"status\":\"error\",\"message\":\"invalid JSON\"}\n");
+        std::printf("[parse_and_dispatch] JSON parsed OK, syscall check...\n");
+    } catch (const nlohmann::json::parse_error&) {
+        std::printf("[parse_and_dispatch] NOT JSON, routing to decode_and_dispatch\n");
+        auto& decoder = InstructionDecoder::GetInstance();
+        if (decoder.is_ready()) {
+            decode_pool_->submit([this, fd, line]() {
+                decode_and_dispatch(fd, line);
+            });
+        } else {
+            FlatCommand fallback = keyword_route(line);
+            std::printf("[网关] Daemon不可达，关键词路由: %s %s\n",
+                        fallback.action.c_str(), fallback.arg.c_str());
+            dispatch_flat(fd, fallback, line);
+        }
         return;
     }
 
@@ -347,13 +376,30 @@ void SyscallServer::parse_and_dispatch(int fd, const std::string& line) {
         resp["status"] = "ok";
         resp["message"] = "CANCEL_TASK sent for agent " + std::to_string(target_agent);
         enqueue_response(fd, resp.dump() + "\n");
+    } else if (syscall_name == "PROCESS_CTRL") {
+        std::string action = req.value("action", "");
+        int target_agent = req.value("agent_id", -1);
+        if (action.empty() || target_agent < 0) {
+            enqueue_response(fd, "{\"status\":\"error\",\"message\":\"PROCESS_CTRL requires 'action' and 'agent_id'\"}\n");
+            return;
+        }
+        task = std::make_shared<AgentTask>(
+            target_agent, 0, TaskStatus::READY,
+            action, TaskType::PROCESS_CTRL, action, "", fd
+        );
+        task->tool_name = action;
     } else if (syscall_name == "VFS_CALL") {
         std::string action = req.value("action", "");
         std::string vfs_path = req.value("path", "");
         std::string payload = req.value("payload", "");
 
-        if (action.empty() || vfs_path.empty()) {
-            enqueue_response(fd, "{\"status\":\"error\",\"message\":\"VFS_CALL requires 'action' and 'path'\"}\n");
+        if (action.empty()) {
+            enqueue_response(fd, "{\"status\":\"error\",\"message\":\"VFS_CALL requires 'action'\"}\n");
+            return;
+        }
+
+        if (action != "COMPILE_AND_EXECUTE" && vfs_path.empty()) {
+            enqueue_response(fd, "{\"status\":\"error\",\"message\":\"VFS_CALL requires 'path' for this action\"}\n");
             return;
         }
 
@@ -501,6 +547,178 @@ void SyscallServer::mod_fd(int fd, uint32_t events) {
     ev.events = events;
     ev.data.fd = fd;
     epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ev);
+}
+
+void SyscallServer::decode_and_dispatch(int fd, const std::string& natural_language) {
+    std::printf("[网关] 收到自然语言意图: %s\n", natural_language.c_str());
+
+    auto& decoder = InstructionDecoder::GetInstance();
+    std::string decoded = decoder.Decode(natural_language);
+    std::printf("[译码器] 编译结果: %s\n", decoded.empty() ? "(empty)" : decoded.c_str());
+
+    FlatCommand cmd = InstructionDecoder::ParseFlatCommand(decoded);
+    if (cmd.valid) {
+        std::printf("[译码器] 扁平微指令解析成功: action=%s arg=%s\n",
+                    cmd.action.c_str(), cmd.arg.c_str());
+        FlatCommand kw = keyword_route(natural_language);
+        if (kw.action == "COMPILE_AND_EXECUTE" && cmd.action != "COMPILE_AND_EXECUTE") {
+            std::printf("[译码器] 关键词覆盖: %s -> COMPILE_AND_EXECUTE\n", cmd.action.c_str());
+            cmd = kw;
+        }
+    } else {
+        std::printf("[译码器] 扁平微指令解析失败，回退关键词路由\n");
+        cmd = keyword_route(natural_language);
+        std::printf("[译码器] 关键词路由: action=%s arg=%s\n",
+                    cmd.action.c_str(), cmd.arg.c_str());
+    }
+
+    std::printf("[译码器] 自然语言 -> 系统调用: %s %s\n", cmd.action.c_str(), cmd.arg.c_str());
+    dispatch_flat(fd, cmd, natural_language);
+}
+
+FlatCommand SyscallServer::keyword_route(const std::string& input) {
+    FlatCommand cmd;
+    cmd.arg = input;
+
+    std::string lower = input;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+    if (lower.find("cancel") != std::string::npos ||
+        lower.find("stop") != std::string::npos ||
+        lower.find("abort") != std::string::npos ||
+        lower.find("停掉") != std::string::npos ||
+        lower.find("取消") != std::string::npos) {
+        cmd.action = "CANCEL_TASK";
+    } else if (lower.find("remember") != std::string::npos ||
+               lower.find("save") != std::string::npos ||
+               lower.find("memorize") != std::string::npos ||
+               lower.find("store") != std::string::npos ||
+               lower.find("记住") != std::string::npos) {
+        cmd.action = "EXECUTE_TASK";
+    } else if (lower.find("snapshot") != std::string::npos ||
+               lower.find("freeze") != std::string::npos ||
+               lower.find("hibernate") != std::string::npos ||
+               lower.find("快照") != std::string::npos ||
+               lower.find("冻结") != std::string::npos) {
+        cmd.action = "SNAPSHOT";
+        cmd.arg = "0";
+    } else if (lower.find("compile") != std::string::npos ||
+               lower.find("编译") != std::string::npos ||
+               lower.find("运行代码") != std::string::npos ||
+               lower.find("执行代码") != std::string::npos ||
+               lower.find("run code") != std::string::npos ||
+               lower.find("compile and run") != std::string::npos ||
+               lower.find("编译运行") != std::string::npos) {
+        cmd.action = "COMPILE_AND_EXECUTE";
+        cmd.arg = input;
+    } else if (lower.find("restore") != std::string::npos ||
+               lower.find("resurrect") != std::string::npos ||
+               lower.find("恢复") != std::string::npos) {
+        cmd.action = "RESTORE";
+        cmd.arg = "0";
+    } else if (lower.find("list file") != std::string::npos ||
+               lower.find("show file") != std::string::npos ||
+               lower.find("read") != std::string::npos ||
+               lower.find("vfs") != std::string::npos) {
+        cmd.action = "VFS_READ";
+        cmd.arg = "/";
+    } else {
+        cmd.action = "EXECUTE_TASK";
+    }
+
+    cmd.valid = true;
+    return cmd;
+}
+
+void SyscallServer::dispatch_flat(int fd, const FlatCommand& cmd, const std::string& original_text) {
+    int agent_id = 0;
+    try { agent_id = std::stoi(cmd.arg); } catch (...) { agent_id = 0; }
+
+    std::shared_ptr<AgentTask> task;
+
+    if (cmd.action == "EXECUTE_TASK") {
+        std::string payload = (cmd.arg.find('_') != std::string::npos) ? cmd.arg : original_text;
+        task = std::make_shared<AgentTask>(
+            agent_id, 0, TaskStatus::READY,
+            payload, TaskType::LLM_CHAT, "", payload, fd);
+    } else if (cmd.action == "COMPILE_AND_EXECUTE") {
+        std::string code_payload = cmd.arg.empty() ? original_text : cmd.arg;
+        static const std::vector<std::string> code_markers = {
+            "#include", "int ", "void ", "float ", "double ", "char ", "long ",
+            "return ", "int\t", "void\t"
+        };
+        size_t code_start = std::string::npos;
+        for (const auto& marker : code_markers) {
+            auto pos = code_payload.find(marker);
+            if (pos != std::string::npos) {
+                if (code_start == std::string::npos || pos < code_start) {
+                    code_start = pos;
+                }
+            }
+        }
+        if (code_start != std::string::npos && code_start > 0) {
+            std::printf("[dispatch_flat] 代码提取: 跳过前缀 %zu 字节\n", code_start);
+            code_payload = code_payload.substr(code_start);
+        }
+        nlohmann::json payload_json;
+        payload_json["code"] = code_payload;
+        if (code_payload.find("main") != std::string::npos ||
+            code_payload.find("#include") != std::string::npos) {
+            payload_json["func"] = "_start";
+        } else {
+            size_t paren_pos = code_payload.find('(');
+            if (paren_pos != std::string::npos) {
+                std::string before_paren = code_payload.substr(0, paren_pos);
+                size_t last_space = before_paren.rfind(' ');
+                size_t last_tab = before_paren.rfind('\t');
+                size_t func_start = last_space;
+                if (last_tab != std::string::npos && (func_start == std::string::npos || last_tab > func_start)) {
+                    func_start = last_tab;
+                }
+                if (func_start != std::string::npos) {
+                    payload_json["func"] = before_paren.substr(func_start + 1);
+                } else {
+                    payload_json["func"] = "_start";
+                }
+            } else {
+                payload_json["func"] = "_start";
+            }
+        }
+        std::printf("[dispatch_flat] COMPILE_AND_EXECUTE | func=%s | code_len=%zu\n",
+                    payload_json["func"].get<std::string>().c_str(), code_payload.size());
+        task = std::make_shared<AgentTask>(
+            0, 0, TaskStatus::READY,
+            payload_json.dump(), TaskType::VFS_CALL, "COMPILE_AND_EXECUTE", "", fd);
+    } else if (cmd.action == "CANCEL_TASK") {
+        if (cancel_fn_) {
+            cancel_fn_(agent_id);
+        }
+        enqueue_response(fd, "{\"status\":\"ok\",\"message\":\"CANCEL_TASK sent for agent "
+                         + std::to_string(agent_id) + "\"}\n");
+    } else if (cmd.action == "VFS_READ") {
+        std::string vfs_path = cmd.arg.empty() ? "/" : cmd.arg;
+        task = std::make_shared<AgentTask>(
+            0, 0, TaskStatus::READY,
+            "", TaskType::VFS_CALL, "READ", vfs_path, fd);
+    } else if (cmd.action == "SNAPSHOT") {
+        task = std::make_shared<AgentTask>(
+            agent_id, 0, TaskStatus::READY,
+            "SNAPSHOT", TaskType::PROCESS_CTRL, "SNAPSHOT", "", fd);
+        task->tool_name = "SNAPSHOT";
+    } else if (cmd.action == "RESTORE") {
+        task = std::make_shared<AgentTask>(
+            agent_id, 0, TaskStatus::READY,
+            "RESTORE", TaskType::PROCESS_CTRL, "RESTORE", "", fd);
+        task->tool_name = "RESTORE";
+    } else {
+        task = std::make_shared<AgentTask>(
+            0, 0, TaskStatus::READY,
+            original_text, TaskType::LLM_CHAT, "", original_text, fd);
+    }
+
+    if (task) {
+        submit_fn_(task);
+    }
 }
 
 } // namespace aios

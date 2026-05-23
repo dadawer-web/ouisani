@@ -1,6 +1,7 @@
 #pragma once
 
 #include "aios/vfs_node.h"
+#include "aios/wasm_node.h"
 #include "aios/memory_manager.h"
 
 #include <cstdio>
@@ -36,8 +37,16 @@ public:
         auto proc = std::make_shared<DirectoryNode>("/proc");
         root_->add_child("proc", proc);
 
+        auto tmp = std::make_shared<DirectoryNode>("/tmp");
+        root_->add_child("tmp", tmp);
+
+        auto wasm_sandbox = std::make_shared<WasmNode>(
+            "/bin/wasm_sandbox", "./wasm/test.wasm");
+        bin->add_child("wasm_sandbox", wasm_sandbox);
+
         initialized_ = true;
-        std::printf("[VFS] Root filesystem initialized: /, /bin, /dev, /mem, /proc\n");
+        std::printf("[VFS] Root filesystem initialized: /, /bin, /dev, /mem, /proc, /tmp\n");
+        std::printf("[VFS] WasmEdge sandbox mounted at /bin/wasm_sandbox\n");
     }
 
     bool mount(const std::string& dir_path, const std::string& name,

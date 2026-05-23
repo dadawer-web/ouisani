@@ -3,8 +3,11 @@
 #include "aios/device_driver.h"
 #include "aios/memory_manager.h"
 
+#include <condition_variable>
 #include <cstdio>
 #include <memory>
+#include <mutex>
+#include <queue>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
@@ -16,7 +19,9 @@ enum class VfsNodeType {
     FILE,
     DIRECTORY,
     EXECUTABLE,
-    DEVICE
+    DEVICE,
+    PIPE,
+    WASM
 };
 
 inline const char* node_type_str(VfsNodeType t) {
@@ -25,6 +30,8 @@ inline const char* node_type_str(VfsNodeType t) {
         case VfsNodeType::DIRECTORY:  return "DIR";
         case VfsNodeType::EXECUTABLE: return "EXEC";
         case VfsNodeType::DEVICE:     return "DEV";
+        case VfsNodeType::PIPE:       return "PIPE";
+        case VfsNodeType::WASM:       return "WASM";
     }
     return "UNKNOWN";
 }
@@ -155,6 +162,61 @@ public:
 private:
     int agent_id_;
     std::shared_ptr<MemoryManager> mmgr_;
+};
+
+class PipeNode : public VfsNode {
+public:
+    explicit PipeNode(const std::string& path)
+        : VfsNode(VfsNodeType::PIPE, path) {}
+
+    bool write(const std::string& data) override {
+        {
+            std::lock_guard<std::mutex> lock(mtx_);
+            message_queue_.push(data);
+            std::printf("[Pipe] WRITE %s | queue_size=%zu | data=\"%s\"\n",
+                        path_.c_str(), message_queue_.size(),
+                        data.size() > 60 ? (data.substr(0, 60) + "...").c_str() : data.c_str());
+        }
+        cv_.notify_one();
+        return true;
+    }
+
+    std::string read_blocking() {
+        std::unique_lock<std::mutex> lock(mtx_);
+        std::printf("[Pipe] READ %s | blocking... (queue_size=%zu)\n",
+                    path_.c_str(), message_queue_.size());
+        cv_.wait(lock, [this]() { return !message_queue_.empty(); });
+        std::string data = std::move(message_queue_.front());
+        message_queue_.pop();
+        std::printf("[Pipe] READ %s | received | queue_remaining=%zu | data=\"%s\"\n",
+                    path_.c_str(), message_queue_.size(),
+                    data.size() > 60 ? (data.substr(0, 60) + "...").c_str() : data.c_str());
+        return data;
+    }
+
+    std::string read_nonblocking() {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (message_queue_.empty()) {
+            return "";
+        }
+        std::string data = std::move(message_queue_.front());
+        message_queue_.pop();
+        return data;
+    }
+
+    std::string read() const override {
+        return "[Pipe] Use read_blocking() or read_nonblocking() for pipe nodes";
+    }
+
+    size_t queue_size() const {
+        std::lock_guard<std::mutex> lock(mtx_);
+        return message_queue_.size();
+    }
+
+private:
+    std::queue<std::string> message_queue_;
+    mutable std::mutex mtx_;
+    std::condition_variable cv_;
 };
 
 } // namespace aios
