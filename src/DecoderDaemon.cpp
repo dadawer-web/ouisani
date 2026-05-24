@@ -206,6 +206,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    struct timeval rcv_timeout;
+    rcv_timeout.tv_sec  = 5;
+    rcv_timeout.tv_usec = 0;
+    if (setsockopt(server_fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_timeout, sizeof(rcv_timeout)) < 0) {
+        std::printf("[Daemon] WARNING: setsockopt SO_RCVTIMEO failed: %s\n", std::strerror(errno));
+    }
+
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
     std::strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
@@ -229,15 +236,27 @@ int main(int argc, char* argv[]) {
     while (g_running) {
         int client_fd = accept(server_fd, nullptr, nullptr);
         if (client_fd < 0) {
-            if (errno == EINTR) continue;
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue;
             std::printf("[Daemon] accept() error: %s\n", std::strerror(errno));
             continue;
+        }
+
+        struct timeval client_rcv_timeout;
+        client_rcv_timeout.tv_sec  = 5;
+        client_rcv_timeout.tv_usec = 0;
+        if (setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO,
+                        &client_rcv_timeout, sizeof(client_rcv_timeout)) < 0) {
+            std::printf("[Daemon] WARNING: setsockopt client SO_RCVTIMEO failed: %s\n",
+                        std::strerror(errno));
         }
 
         char buf[MAX_RECV];
         memset(buf, 0, sizeof(buf));
         ssize_t n = recv(client_fd, buf, sizeof(buf) - 1, 0);
         if (n <= 0) {
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                std::printf("[Daemon] recv() timeout on client fd=%d\n", client_fd);
+            }
             close(client_fd);
             continue;
         }

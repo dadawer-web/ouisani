@@ -10,21 +10,18 @@
 #include <condition_variable>
 #include <functional>
 #include <list>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <queue>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 namespace aios {
 
-struct TaskComparator {
-    bool operator()(const std::shared_ptr<AgentTask>& a,
-                    const std::shared_ptr<AgentTask>& b) const {
-        return a->priority < b->priority;
-    }
-};
+constexpr int PRIORITY_QUEUE_COUNT = 3;
 
 using ResponseCallback = std::function<void(int fd, const std::string& response)>;
 
@@ -52,6 +49,7 @@ public:
 
     size_t pending_count() const;
     size_t active_io_count() const;
+    std::string GetSystemStat() const;
 
 private:
     void dispatch_loop();
@@ -62,22 +60,20 @@ private:
     void dispatch_vfs_task(std::shared_ptr<AgentTask> task);
     void dispatch_process_ctrl(std::shared_ptr<AgentTask> task);
     void try_compress(int agent_id);
+    void kswapd_loop();
     std::vector<ChatMessage> build_messages(int agent_id, const std::string& current_payload);
 
     std::string make_response(bool ok, const std::string& message,
                               const std::string& data = "");
 
-    std::priority_queue<
-        std::shared_ptr<AgentTask>,
-        std::vector<std::shared_ptr<AgentTask>>,
-        TaskComparator
-    > ready_queue_;
+    std::queue<std::shared_ptr<AgentTask>> queues_[PRIORITY_QUEUE_COUNT];
 
     mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
 
     ThreadPool dispatch_pool_;
     ThreadPool io_pool_;
+    std::unique_ptr<ThreadPool> wasm_pool_;
 
     std::shared_ptr<LlmAdapter> llm_;
     std::shared_ptr<MemoryManager> memory_mgr_;
@@ -90,6 +86,14 @@ private:
 
     std::atomic<bool> running_{false};
     std::atomic<size_t> active_io_tasks_{0};
+
+    std::atomic<int> active_wasm_vms_{0};
+    static constexpr int MAX_WASM_VMS = 2;
+    std::thread kswapd_thread_;
+    std::map<int, bool> swapped_out_agents_;
+
+    std::atomic<uint64_t> total_tasks_executed_{0};
+    std::atomic<uint64_t> total_page_faults_{0};
 };
 
 } // namespace aios

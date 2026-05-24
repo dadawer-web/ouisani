@@ -11,6 +11,7 @@
 #include "aios/task_scheduler.h"
 #include "aios/vfs_manager.h"
 #include "aios/vfs_node.h"
+#include "aios/wasm_node.h"
 
 #include <atomic>
 #include <chrono>
@@ -21,6 +22,24 @@
 #include <string>
 #include <sys/file.h>
 #include <unistd.h>
+
+namespace aios {
+
+class ProcTopNode : public VfsNode {
+public:
+    ProcTopNode(const std::string& path, std::shared_ptr<TaskScheduler> scheduler)
+        : VfsNode(VfsNodeType::FILE, path), scheduler_(std::move(scheduler)) {}
+
+    std::string read() const override {
+        if (!scheduler_) return "[ERROR] No scheduler bound\n";
+        return scheduler_->GetSystemStat();
+    }
+
+private:
+    std::shared_ptr<TaskScheduler> scheduler_;
+};
+
+}
 
 static std::atomic<bool> g_running{true};
 
@@ -62,6 +81,7 @@ int main(int argc, char* argv[]) {
     std::printf("[Main] Model: %s\n", model.c_str());
 
     auto llm = std::make_shared<aios::LlmAdapter>(api_key, base_url, model, 120);
+    aios::WasmNode::SetGlobalLlm(llm);
 
     std::string emb_key = aios::EnvLoader::get(env, "EMBEDDING_API_KEY", "");
     std::string emb_url = aios::EnvLoader::get(env, "EMBEDDING_BASE_URL", "");
@@ -91,6 +111,9 @@ int main(int argc, char* argv[]) {
 
     auto version_file = std::make_shared<aios::FileNode>("/proc/version", "AIOS Core v1.5.0 (VFS + Ring 0/3 + SecurityGuard)");
     vfs.mount("/proc", "version", version_file);
+
+    auto agent_top = std::make_shared<aios::ProcTopNode>("/proc/agent_top", scheduler);
+    vfs.mount("/proc", "agent_top", agent_top);
 
     auto dev_mem = std::make_shared<aios::DirectoryNode>("/dev/mem");
     vfs.mount("/dev", "mem", dev_mem);

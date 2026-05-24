@@ -145,8 +145,12 @@ CompileResult CompilerBridge::CompileToWasm(int agent_id, const std::string& c_c
 
             args = {
                 clang_path,
-                "--target=wasm32-wasi",
+                "--target=wasm32-wasi-threads",
                 "--sysroot=" + std::string(WASI_SYSROOT_PATH),
+                "-pthread",
+                "-matomics",
+                "-mbulk-memory",
+                "-msimd128",
                 "-O3",
                 "-o", wasm_file_path,
                 c_file_path
@@ -159,8 +163,12 @@ CompileResult CompilerBridge::CompileToWasm(int agent_id, const std::string& c_c
 
             args = {
                 clang_path,
-                "--target=wasm32-wasi",
+                "--target=wasm32-wasi-threads",
                 "--sysroot=" + std::string(WASI_SYSROOT_PATH),
+                "-pthread",
+                "-matomics",
+                "-mbulk-memory",
+                "-msimd128",
                 "-nostdlib",
                 "-Wl,--no-entry",
                 "-Wl,--export-all",
@@ -172,6 +180,10 @@ CompileResult CompilerBridge::CompileToWasm(int agent_id, const std::string& c_c
             args = {
                 "clang",
                 "--target=wasm32",
+                "-pthread",
+                "-matomics",
+                "-mbulk-memory",
+                "-msimd128",
                 "-nostdlib",
                 "-Wl,--no-entry",
                 "-Wl,--export-all",

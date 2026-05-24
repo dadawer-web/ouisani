@@ -3,6 +3,7 @@
 #include "aios/instruction_decoder.h"
 #include "aios/thread_pool.h"
 #include "aios/vfs_manager.h"
+#include "aios/wasm_node.h"
 
 #include <algorithm>
 #include <arpa/inet.h>
@@ -369,9 +370,7 @@ void SyscallServer::parse_and_dispatch(int fd, const std::string& line) {
             enqueue_response(fd, err.dump() + "\n");
             return;
         }
-        if (cancel_fn_) {
-            cancel_fn_(target_agent);
-        }
+        aios::WasmNode::SendSignal(target_agent, 15);
         nlohmann::json resp;
         resp["status"] = "ok";
         resp["message"] = "CANCEL_TASK sent for agent " + std::to_string(target_agent);
@@ -690,9 +689,7 @@ void SyscallServer::dispatch_flat(int fd, const FlatCommand& cmd, const std::str
             0, 0, TaskStatus::READY,
             payload_json.dump(), TaskType::VFS_CALL, "COMPILE_AND_EXECUTE", "", fd);
     } else if (cmd.action == "CANCEL_TASK") {
-        if (cancel_fn_) {
-            cancel_fn_(agent_id);
-        }
+        aios::WasmNode::SendSignal(agent_id, 15);
         enqueue_response(fd, "{\"status\":\"ok\",\"message\":\"CANCEL_TASK sent for agent "
                          + std::to_string(agent_id) + "\"}\n");
     } else if (cmd.action == "VFS_READ") {

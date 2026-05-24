@@ -19,6 +19,7 @@ TaskScheduler::TaskScheduler(size_t dispatch_threads,
                              std::shared_ptr<MemoryManager> memory_mgr)
     : dispatch_pool_(dispatch_threads > 0 ? dispatch_threads : 2)
     , io_pool_(io_threads > 0 ? io_threads : 4)
+    , wasm_pool_(std::make_unique<ThreadPool>(2))
     , llm_(std::move(llm))
     , memory_mgr_(std::move(memory_mgr))
 {}
@@ -32,7 +33,19 @@ void TaskScheduler::submit(std::shared_ptr<AgentTask> task) {
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         task->status = TaskStatus::READY;
-        ready_queue_.push(std::move(task));
+
+        int qidx = 1;
+        if (task->type == TaskType::PROCESS_CTRL) {
+            qidx = 0;
+        } else if (task->type == TaskType::VFS_CALL && task->tool_name == "COMPILE_AND_EXECUTE") {
+            qidx = 2;
+        }
+
+        const char* qnames[] = {"Q0-CTRL", "Q1-IO", "Q2-CPU"};
+        std::printf("[Scheduler] Task routed to %s | agent=%d | type=%d\n",
+                    qnames[qidx], task->agent_id, static_cast<int>(task->type));
+
+        queues_[qidx].push(std::move(task));
     }
     queue_cv_.notify_one();
 }
@@ -42,24 +55,22 @@ void TaskScheduler::cancel_agent(int agent_id) {
 
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
-        std::priority_queue<
-            std::shared_ptr<AgentTask>,
-            std::vector<std::shared_ptr<AgentTask>>,
-            TaskComparator
-        > new_queue;
         int cancelled_count = 0;
-        while (!ready_queue_.empty()) {
-            auto t = ready_queue_.top();
-            ready_queue_.pop();
-            if (t->agent_id == agent_id) {
-                t->cancel();
-                t->status = TaskStatus::CANCELLED;
-                ++cancelled_count;
-            } else {
-                new_queue.push(std::move(t));
+        for (int i = 0; i < PRIORITY_QUEUE_COUNT; ++i) {
+            std::queue<std::shared_ptr<AgentTask>> new_queue;
+            while (!queues_[i].empty()) {
+                auto t = queues_[i].front();
+                queues_[i].pop();
+                if (t->agent_id == agent_id) {
+                    t->cancel();
+                    t->status = TaskStatus::CANCELLED;
+                    ++cancelled_count;
+                } else {
+                    new_queue.push(std::move(t));
+                }
             }
+            queues_[i] = std::move(new_queue);
         }
-        ready_queue_ = std::move(new_queue);
         if (cancelled_count > 0) {
             std::printf("[Interrupt] Cancelled %d queued tasks for agent=%d\n",
                         cancelled_count, agent_id);
@@ -86,14 +97,19 @@ void TaskScheduler::start() {
 
     dispatch_pool_.start();
     io_pool_.start();
+    wasm_pool_->start();
 
     for (size_t i = 0; i < dispatch_pool_.worker_count(); ++i) {
         dispatch_pool_.submit([this]() { dispatch_loop(); });
     }
 
-    std::printf("[Scheduler] Started: dispatch=%zu, io=%zu, drivers=%zu, embedding=%s\n",
-                dispatch_pool_.worker_count(), io_pool_.worker_count(), drivers_.size(),
+    kswapd_thread_ = std::thread(&TaskScheduler::kswapd_loop, this);
+
+    std::printf("[Scheduler] Started: dispatch=%zu, io=%zu, wasm=%zu, drivers=%zu, embedding=%s\n",
+                dispatch_pool_.worker_count(), io_pool_.worker_count(),
+                wasm_pool_->worker_count(), drivers_.size(),
                 llm_->has_embedding_config() ? "ON" : "OFF");
+    std::printf("[Scheduler] kswapd daemon launched | MAX_WASM_VMS=%d\n", MAX_WASM_VMS);
 }
 
 void TaskScheduler::shutdown() {
@@ -105,10 +121,22 @@ void TaskScheduler::shutdown() {
     queue_cv_.notify_all();
 
     io_pool_.shutdown();
+    wasm_pool_->shutdown();
     dispatch_pool_.shutdown();
 
-    while (!ready_queue_.empty()) {
-        ready_queue_.pop();
+    if (kswapd_thread_.joinable()) {
+        kswapd_thread_.join();
+    }
+
+    while (true) {
+        bool any = false;
+        for (int i = 0; i < PRIORITY_QUEUE_COUNT; ++i) {
+            if (!queues_[i].empty()) {
+                queues_[i].pop();
+                any = true;
+            }
+        }
+        if (!any) break;
     }
 
     std::printf("[Scheduler] Shutdown complete\n");
@@ -125,11 +153,36 @@ void TaskScheduler::set_response_callback(ResponseCallback cb) {
 
 size_t TaskScheduler::pending_count() const {
     std::lock_guard<std::mutex> lock(queue_mutex_);
-    return ready_queue_.size();
+    size_t total = 0;
+    for (int i = 0; i < PRIORITY_QUEUE_COUNT; ++i) {
+        total += queues_[i].size();
+    }
+    return total;
 }
 
 size_t TaskScheduler::active_io_count() const {
     return active_io_tasks_.load();
+}
+
+std::string TaskScheduler::GetSystemStat() const {
+    size_t q0 = 0, q1 = 0, q2 = 0;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        q0 = queues_[0].size();
+        q1 = queues_[1].size();
+        q2 = queues_[2].size();
+    }
+
+    nlohmann::json j;
+    j["q0_len"] = q0;
+    j["q1_len"] = q1;
+    j["q2_len"] = q2;
+    j["active_vms"] = active_wasm_vms_.load();
+    j["max_vms"] = MAX_WASM_VMS;
+    j["page_faults"] = total_page_faults_.load();
+    j["total_tasks"] = total_tasks_executed_.load();
+    j["active_io"] = active_io_tasks_.load();
+    return j.dump();
 }
 
 std::string TaskScheduler::make_response(bool ok, const std::string& message,
@@ -247,6 +300,52 @@ void TaskScheduler::try_compress(int agent_id) {
     }
 }
 
+void TaskScheduler::kswapd_loop() {
+    std::printf("[Ring 0 | kswapd] Daemon thread started\n");
+
+    while (running_.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        int current_vms = active_wasm_vms_.load();
+
+        if (current_vms <= MAX_WASM_VMS) {
+            continue;
+        }
+
+        std::printf("[Ring 0 | kswapd] Scan | active_vms=%d / max=%d\n",
+                    current_vms, MAX_WASM_VMS);
+
+        int victim_agent = -1;
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            for (auto& [aid, swapped] : swapped_out_agents_) {
+                if (!swapped) {
+                    victim_agent = aid;
+                    break;
+                }
+            }
+        }
+
+        if (victim_agent < 0) continue;
+
+        std::printf("[Ring 0 | kswapd] 物理内存不足！正在触发 Swap Out... 将 Agent %d 核心转储到磁盘。\n",
+                    victim_agent);
+
+        WasmNode::SendSignal(victim_agent, 19);
+
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            swapped_out_agents_[victim_agent] = true;
+        }
+        active_wasm_vms_.fetch_sub(1);
+
+        std::printf("[Ring 0 | kswapd] Agent %d 已换出至 Swap 分区 | active_vms=%d\n",
+                    victim_agent, active_wasm_vms_.load());
+    }
+
+    std::printf("[Ring 0 | kswapd] Daemon thread exiting\n");
+}
+
 void TaskScheduler::dispatch_loop() {
     while (running_.load()) {
         std::shared_ptr<AgentTask> task;
@@ -254,19 +353,32 @@ void TaskScheduler::dispatch_loop() {
         {
             std::unique_lock<std::mutex> lock(queue_mutex_);
             bool ok = queue_cv_.wait_for(lock, std::chrono::milliseconds(200), [this] {
-                return !ready_queue_.empty() || !running_.load();
+                for (int i = 0; i < PRIORITY_QUEUE_COUNT; ++i) {
+                    if (!queues_[i].empty()) return true;
+                }
+                return !running_.load();
             });
 
-            if (!running_.load() && ready_queue_.empty()) {
+            bool all_empty = true;
+            for (int i = 0; i < PRIORITY_QUEUE_COUNT; ++i) {
+                if (!queues_[i].empty()) { all_empty = false; break; }
+            }
+
+            if (!running_.load() && all_empty) {
                 return;
             }
 
-            if (!ok || ready_queue_.empty()) {
+            if (!ok || all_empty) {
                 continue;
             }
 
-            task = ready_queue_.top();
-            ready_queue_.pop();
+            for (int i = 0; i < PRIORITY_QUEUE_COUNT; ++i) {
+                if (!queues_[i].empty()) {
+                    task = queues_[i].front();
+                    queues_[i].pop();
+                    break;
+                }
+            }
         }
 
         if (!task) continue;
@@ -278,6 +390,7 @@ void TaskScheduler::dispatch_loop() {
         }
 
         task->status = TaskStatus::RUNNING;
+        total_tasks_executed_.fetch_add(1);
 
         {
             std::lock_guard<std::mutex> lock(active_mutex_);
@@ -781,7 +894,10 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
     if (action == "COMPILE_AND_EXECUTE") {
         std::string c_code = payload;
         std::string wasm_func = "_start";
+        std::string wasm_stdin;
         std::vector<int32_t> wasm_args;
+        int restore_agent_id = -1;
+        std::string precompiled_wasm;
 
         nlohmann::json j;
         if (!payload.empty()) {
@@ -793,6 +909,9 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                 if (parsed.contains("func") && parsed["func"].is_string()) {
                     wasm_func = parsed["func"].get<std::string>();
                 }
+                if (parsed.contains("stdin") && parsed["stdin"].is_string()) {
+                    wasm_stdin = parsed["stdin"].get<std::string>();
+                }
                 if (parsed.contains("args") && parsed["args"].is_array()) {
                     for (const auto& arg : parsed["args"]) {
                         if (arg.is_number_integer()) {
@@ -800,19 +919,64 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                         }
                     }
                 }
+                if (parsed.contains("restore_agent_id") && parsed["restore_agent_id"].is_number_integer()) {
+                    restore_agent_id = parsed["restore_agent_id"].get<int>();
+                }
+                if (parsed.contains("file") && parsed["file"].is_string()) {
+                    precompiled_wasm = parsed["file"].get<std::string>();
+                }
             }
         }
 
-        std::printf("[VFS-COMPILE] Agent#%d | C source: %zu bytes | func=%s\n",
-                    task->agent_id, c_code.size(), wasm_func.c_str());
+        std::printf("[VFS-COMPILE] Agent#%d | C source: %zu bytes | func=%s | stdin=%zu bytes\n",
+                    task->agent_id, c_code.size(), wasm_func.c_str(), wasm_stdin.size());
 
         active_io_tasks_.fetch_add(1);
+        active_wasm_vms_.fetch_add(1);
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            if (swapped_out_agents_.find(task->agent_id) == swapped_out_agents_.end()) {
+                swapped_out_agents_[task->agent_id] = false;
+            }
+        }
         try {
-            io_pool_.submit([this, task, c_code = std::move(c_code),
+            wasm_pool_->submit([this, task, c_code = std::move(c_code),
                              wasm_func = std::move(wasm_func),
-                             wasm_args = std::move(wasm_args)]() {
-                CompileResult compile_res = CompilerBridge::CompileToWasm(
-                    task->agent_id, c_code);
+                             wasm_args = std::move(wasm_args),
+                             wasm_stdin = std::move(wasm_stdin),
+                             restore_agent_id,
+                             precompiled_wasm = std::move(precompiled_wasm)]() mutable {
+                bool need_swap_in = false;
+                {
+                    std::lock_guard<std::mutex> lock(queue_mutex_);
+                    auto it = swapped_out_agents_.find(task->agent_id);
+                    if (it != swapped_out_agents_.end() && it->second) {
+                        need_swap_in = true;
+                    }
+                }
+
+                if (need_swap_in) {
+                    std::printf("[Ring 0 | MMU] 触发缺页中断 (Page Fault)！正在将 Agent %d 从 Swap 分区拉回物理内存...\n",
+                                task->agent_id);
+                    restore_agent_id = task->agent_id;
+                    total_page_faults_.fetch_add(1);
+                    {
+                        std::lock_guard<std::mutex> lock(queue_mutex_);
+                        swapped_out_agents_[task->agent_id] = false;
+                    }
+                }
+
+                CompileResult compile_res;
+                if (!precompiled_wasm.empty()) {
+                    compile_res.success = true;
+                    compile_res.wasm_path = precompiled_wasm;
+                    compile_res.exit_code = 0;
+                    std::printf("[VFS-COMPILE] Agent#%d | Using precompiled WASM: %s\n",
+                                task->agent_id, precompiled_wasm.c_str());
+                } else {
+                    compile_res = CompilerBridge::CompileToWasm(
+                        task->agent_id, c_code);
+                }
 
                 if (!compile_res.success) {
                     std::printf("[VFS-COMPILE] Agent#%d | Compile FAILED: %s\n",
@@ -828,6 +992,7 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                             make_response(false, "Compilation failed", resp_data.dump()));
                     }
                     active_io_tasks_.fetch_sub(1);
+                    active_wasm_vms_.fetch_sub(1);
 
                     {
                         std::lock_guard<std::mutex> lock(active_mutex_);
@@ -867,6 +1032,12 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                 if (!wasm_args.empty()) {
                     exec_payload["args"] = wasm_args;
                 }
+                if (!wasm_stdin.empty()) {
+                    exec_payload["stdin"] = wasm_stdin;
+                }
+                if (restore_agent_id > 0) {
+                    exec_payload["restore_agent_id"] = restore_agent_id;
+                }
 
                 std::string output = wasm_node->execute(exec_payload.dump());
 
@@ -885,6 +1056,7 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                 }
 
                 active_io_tasks_.fetch_sub(1);
+                active_wasm_vms_.fetch_sub(1);
 
                 {
                     std::lock_guard<std::mutex> lock(active_mutex_);
@@ -894,6 +1066,7 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
             });
         } catch (const std::exception& e) {
             active_io_tasks_.fetch_sub(1);
+            active_wasm_vms_.fetch_sub(1);
             std::printf("[VFS-COMPILE] Agent#%d dispatch failed: %s\n",
                         task->agent_id, e.what());
             if (response_cb_) {
@@ -1060,14 +1233,21 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
         } else {
             if (node->node_type() == VfsNodeType::WASM) {
                 active_io_tasks_.fetch_add(1);
+                active_wasm_vms_.fetch_add(1);
+                {
+                    std::lock_guard<std::mutex> lock(queue_mutex_);
+                    if (swapped_out_agents_.find(task->agent_id) == swapped_out_agents_.end()) {
+                        swapped_out_agents_[task->agent_id] = false;
+                    }
+                }
                 try {
-                    io_pool_.submit([this, task, node, payload, vfs_path]() {
-                        std::printf("[VFS-WASM] Executing %s for Agent#%d\n",
+                    wasm_pool_->submit([this, task, node, payload, vfs_path]() {
+                        std::printf("[WasmPool] Executing %s for Agent#%d\n",
                                     vfs_path.c_str(), task->agent_id);
 
                         std::string output = node->execute(payload);
 
-                        std::printf("[VFS-WASM] %s output: \"%s\"\n",
+                        std::printf("[WasmPool] %s output: \"%s\"\n",
                                     vfs_path.c_str(), output.c_str());
 
                         if (response_cb_) {
@@ -1079,9 +1259,11 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                         }
 
                         active_io_tasks_.fetch_sub(1);
+                        active_wasm_vms_.fetch_sub(1);
                     });
                 } catch (...) {
                     active_io_tasks_.fetch_sub(1);
+                    active_wasm_vms_.fetch_sub(1);
                 }
                 return;
             }
