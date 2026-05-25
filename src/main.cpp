@@ -3,6 +3,7 @@
 #include "aios/cache_manager.h"
 #include "aios/env_loader.h"
 #include "aios/instruction_decoder.h"
+#include "aios/kernel_logger.h"
 #include "aios/llm_adapter.h"
 #include "aios/memory_manager.h"
 #include "aios/sandbox_driver.h"
@@ -12,6 +13,7 @@
 #include "aios/vfs_manager.h"
 #include "aios/vfs_node.h"
 #include "aios/wasm_node.h"
+#include "aios/process_manager.h"
 
 #include <atomic>
 #include <chrono>
@@ -37,6 +39,26 @@ public:
 
 private:
     std::shared_ptr<TaskScheduler> scheduler_;
+};
+
+class ProcAgentsNode : public VfsNode {
+public:
+    ProcAgentsNode(const std::string& path)
+        : VfsNode(VfsNodeType::FILE, path) {}
+
+    std::string read() const override {
+        return ProcessManager::instance().generate_proc_agents();
+    }
+};
+
+class KmsgNode : public VfsNode {
+public:
+    KmsgNode(const std::string& path)
+        : VfsNode(VfsNodeType::FILE, path) {}
+
+    std::string read() const override {
+        return KernelLogger::instance().dump_logs();
+    }
 };
 
 }
@@ -115,6 +137,12 @@ int main(int argc, char* argv[]) {
     auto agent_top = std::make_shared<aios::ProcTopNode>("/proc/agent_top", scheduler);
     vfs.mount("/proc", "agent_top", agent_top);
 
+    auto proc_agents = std::make_shared<aios::ProcAgentsNode>("/proc/agents");
+    vfs.mount("/proc", "agents", proc_agents);
+
+    auto proc_kmsg = std::make_shared<aios::KmsgNode>("/proc/kmsg");
+    vfs.mount("/proc", "kmsg", proc_kmsg);
+
     auto dev_mem = std::make_shared<aios::DirectoryNode>("/dev/mem");
     vfs.mount("/dev", "mem", dev_mem);
 
@@ -147,6 +175,9 @@ int main(int argc, char* argv[]) {
         [scheduler](int agent_id) {
             scheduler->cancel_agent(agent_id);
         },
+        [scheduler](int agent_id) {
+            scheduler->ping_heartbeat(agent_id);
+        },
         "0.0.0.0", 8080
     );
 
@@ -155,6 +186,7 @@ int main(int argc, char* argv[]) {
     });
 
     scheduler->start();
+
     server.start();
 
     std::printf("[Main] AIOS Core is running (Checkpointing & Hibernation)\n");
@@ -164,10 +196,13 @@ int main(int argc, char* argv[]) {
     std::printf("[Main] Interrupt: CANCEL_TASK + is_cancelled token\n");
     std::printf("[Main] Watchdog: Sandbox timeout=10s | LLM timeout=120s\n");
     std::printf("[Main] Security: Ring 0/3 Privilege + SecurityGuard Code Scanner\n");
-    std::printf("[Main] VFS: /bin/sandbox /bin/wasm_sandbox /proc/version /dev/mem /tmp/pipes /var/snapshots\n");
+    std::printf("[Main] VFS: /bin/sandbox /bin/wasm_sandbox /proc/version /proc/agent_top /proc/agents /proc/kmsg /dev/mem /tmp/pipes /var/snapshots\n");
     std::printf("[Main] TLB: Semantic Cache (threshold=0.90, max=1000)\n");
     std::printf("[Main] IPC: PipeNode (blocking read + notify write)\n");
     std::printf("[Main] Checkpoint: SNAPSHOT / RESTORE (process hibernation)\n");
+    std::printf("[Main] Reaper: Zombie detection (30s idle -> SIGKILL)\n");
+    std::printf("[Main] Auto-restore: Scan /tmp/aios_tasks/ on boot\n");
+    std::printf("[Main] Module Store: COMPILE_ONLY / EXECUTE_MODULE (LRU cache=%zu)\n", (size_t)16);
     std::printf("[Main] Decoder: %s | UDS: %s\n",
                 decoder_ok ? "VIA DAEMON (UDS)" : "DISABLED",
                 decoder_sock.c_str());

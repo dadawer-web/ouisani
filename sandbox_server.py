@@ -5,6 +5,8 @@ import multiprocessing
 import sys
 import io
 import contextlib
+import resource
+import os
 
 app = FastAPI(title="eruitah-sandbox API")
 
@@ -16,11 +18,23 @@ class ExecuteRequest(BaseModel):
 
 
 def _run_code(code: str, result_dict: dict):
+    MB = 1024 * 1024
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (256 * MB, 256 * MB))
+        resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (10 * MB, 10 * MB))
+        resource.setrlimit(resource.RLIMIT_NPROC, (0, 0))
+    except Exception as e:
+        result_dict["stderr"] = f"[Kernel Fault] Failed to set sandbox limits: {e}"
+        return
+
     stdout_buffer = io.StringIO()
     stderr_buffer = io.StringIO()
     try:
         with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
             exec(code, {})
+    except MemoryError:
+        stderr_buffer.write("\n[Segfault] 内存溢出！沙箱已被操作系统强杀。\n")
     except Exception as e:
         stderr_buffer.write(str(e))
     result_dict["stdout"] = stdout_buffer.getvalue()

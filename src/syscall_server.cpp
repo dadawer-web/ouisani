@@ -1,6 +1,7 @@
 #include "aios/syscall_server.h"
 #include "aios/agent_registry.h"
 #include "aios/instruction_decoder.h"
+#include "aios/process_manager.h"
 #include "aios/thread_pool.h"
 #include "aios/vfs_manager.h"
 #include "aios/wasm_node.h"
@@ -32,10 +33,12 @@ static void notify_eventfd(int efd) {
 
 SyscallServer::SyscallServer(SubmitTaskFn submit_fn,
                              CancelTaskFn cancel_fn,
+                             PingHeartbeatFn ping_fn,
                              const std::string& host,
                              uint16_t port)
     : submit_fn_(std::move(submit_fn))
     , cancel_fn_(std::move(cancel_fn))
+    , ping_fn_(std::move(ping_fn))
     , host_(host)
     , port_(port)
     , decode_pool_(std::make_unique<ThreadPool>(2))
@@ -329,6 +332,15 @@ void SyscallServer::parse_and_dispatch(int fd, const std::string& line) {
     auto& registry = AgentRegistry::instance();
     registry.ensure_registered(caller_id);
 
+    auto& proc_mgr = ProcessManager::instance();
+    proc_mgr.register_process(caller_id,
+        registry.get_level(caller_id) == PrivilegeLevel::RING_0 ? 0 : 3);
+    proc_mgr.record_syscall(caller_id);
+
+    if (ping_fn_ && caller_id > 0) {
+        ping_fn_(caller_id);
+    }
+
     std::shared_ptr<AgentTask> task;
 
     if (syscall_name == "WRITE_MEMORY") {
@@ -392,12 +404,34 @@ void SyscallServer::parse_and_dispatch(int fd, const std::string& line) {
         std::string vfs_path = req.value("path", "");
         std::string payload = req.value("payload", "");
 
+        if (action == "READ" || action == "WRITE" || action == "TREE") {
+            if (vfs_path.find("/dev/mem/") == 0) {
+                int target_id = -1;
+                try {
+                    target_id = std::stoi(vfs_path.substr(9));
+                } catch(...) {}
+
+                auto caller_level = registry.get_level(caller_id);
+
+                if (target_id != -1 && target_id != caller_id
+                    && caller_level != PrivilegeLevel::RING_0) {
+                    std::printf("[Kernel Security] 拦截! Agent %d 试图越权访问 Agent %d 的内存空间 (%s)!\n",
+                                caller_id, target_id, vfs_path.c_str());
+                    nlohmann::json err;
+                    err["status"] = "error";
+                    err["message"] = "[Segfault] Permission denied: Cross-agent VFS access forbidden by Kernel";
+                    enqueue_response(fd, err.dump() + "\n");
+                    return;
+                }
+            }
+        }
+
         if (action.empty()) {
             enqueue_response(fd, "{\"status\":\"error\",\"message\":\"VFS_CALL requires 'action'\"}\n");
             return;
         }
 
-        if (action != "COMPILE_AND_EXECUTE" && vfs_path.empty()) {
+        if (action != "COMPILE_AND_EXECUTE" && action != "PIPE_EXECUTE" && vfs_path.empty()) {
             enqueue_response(fd, "{\"status\":\"error\",\"message\":\"VFS_CALL requires 'path' for this action\"}\n");
             return;
         }
@@ -422,12 +456,38 @@ void SyscallServer::parse_and_dispatch(int fd, const std::string& line) {
             return;
         }
 
-        task = std::make_shared<AgentTask>(
-            agent_id, 0, TaskStatus::READY,
-            payload, TaskType::VFS_CALL, "", payload, fd
-        );
-        task->tool_name = action;
-        task->tool_code = vfs_path;
+        if (action == "COMPILE_ONLY") {
+            if (vfs_path.empty()) {
+                nlohmann::json err;
+                err["status"] = "error";
+                err["message"] = "COMPILE_ONLY requires 'path' (target .wasm save path)";
+                enqueue_response(fd, err.dump() + "\n");
+                return;
+            }
+            task = std::make_shared<AgentTask>(
+                agent_id, 0, TaskStatus::READY,
+                payload, TaskType::VFS_CALL, "COMPILE_ONLY", vfs_path, fd
+            );
+        } else if (action == "EXECUTE_MODULE") {
+            if (vfs_path.empty()) {
+                nlohmann::json err;
+                err["status"] = "error";
+                err["message"] = "EXECUTE_MODULE requires 'path' (.wasm file to execute)";
+                enqueue_response(fd, err.dump() + "\n");
+                return;
+            }
+            task = std::make_shared<AgentTask>(
+                agent_id, 0, TaskStatus::READY,
+                payload, TaskType::VFS_CALL, "EXECUTE_MODULE", vfs_path, fd
+            );
+        } else {
+            task = std::make_shared<AgentTask>(
+                agent_id, 0, TaskStatus::READY,
+                payload, TaskType::VFS_CALL, "", payload, fd
+            );
+            task->tool_name = action;
+            task->tool_code = vfs_path;
+        }
     } else if (syscall_name == "EXECUTE_TOOL" || syscall_name == "EXECUTE_TASK") {
         int priority = req.value("priority", 1);
         std::string tool_name = req.value("tool_name", "");

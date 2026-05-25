@@ -18,6 +18,10 @@ public:
 
     std::string execute(const std::string& payload) override;
 
+    std::string execute_with_fds(const std::string& payload,
+                                 int override_stdin_fd = -1,
+                                 int override_stdout_fd = -1);
+
     const std::string& wasm_file_path() const { return wasm_file_path_; }
 
     void set_wasm_file_path(const std::string& p) { wasm_file_path_ = p; }

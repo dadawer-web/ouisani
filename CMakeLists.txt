@@ -29,6 +29,7 @@ add_executable(aios_core
     src/instruction_decoder.cpp
     src/wasm_node.cpp
     src/compiler_bridge.cpp
+    src/kernel_logger.cpp
 )
 
 target_include_directories(aios_core PRIVATE

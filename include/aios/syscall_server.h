@@ -26,9 +26,11 @@ class SyscallServer {
 public:
     using SubmitTaskFn = std::function<void(std::shared_ptr<AgentTask>)>;
     using CancelTaskFn = std::function<void(int agent_id)>;
+    using PingHeartbeatFn = std::function<void(int agent_id)>;
 
     SyscallServer(SubmitTaskFn submit_fn,
                   CancelTaskFn cancel_fn,
+                  PingHeartbeatFn ping_fn,
                   const std::string& host = "0.0.0.0",
                   uint16_t port = 8080);
     ~SyscallServer();
@@ -57,6 +59,7 @@ private:
 
     SubmitTaskFn submit_fn_;
     CancelTaskFn cancel_fn_;
+    PingHeartbeatFn ping_fn_;
     std::string host_;
     uint16_t port_;
 

@@ -1,8 +1,10 @@
 #include "aios/wasm_node.h"
+#include "aios/kernel_logger.h"
 #include "aios/llm_adapter.h"
 
 #include <wasmedge/wasmedge.h>
 
+#include <csetjmp>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -13,10 +15,20 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <unordered_map>
 #include <vector>
 
 namespace aios {
+
+static thread_local std::jmp_buf g_wasm_timeout_jmp;
+static thread_local bool g_wasm_timeout_armed = false;
+
+static void wasm_timeout_handler(int) {
+    if (g_wasm_timeout_armed) {
+        std::longjmp(g_wasm_timeout_jmp, 1);
+    }
+}
 
 std::shared_ptr<LlmAdapter> WasmNode::g_llm = nullptr;
 
@@ -373,6 +385,12 @@ WasmNode::WasmNode(const std::string& path, const std::string& wasm_file_path)
 }
 
 std::string WasmNode::execute(const std::string& payload) {
+    return execute_with_fds(payload, -1, -1);
+}
+
+std::string WasmNode::execute_with_fds(const std::string& payload,
+                                        int override_stdin_fd,
+                                        int override_stdout_fd) {
     std::lock_guard<std::mutex> lock(exec_mutex_);
 
     std::string wasm_file = wasm_file_path_;
@@ -408,7 +426,18 @@ std::string WasmNode::execute(const std::string& payload) {
     FILE* tmp_in = nullptr;
     int saved_stdin = -1;
 
-    if (!stdin_data.empty()) {
+    if (override_stdin_fd != -1) {
+        saved_stdin = dup(STDIN_FILENO);
+        if (saved_stdin < 0) {
+            nlohmann::json result_json;
+            result_json["file"] = wasm_file;
+            result_json["status"] = "error";
+            result_json["reason"] = "dup(STDIN) failed for override fd";
+            return result_json.dump();
+        }
+        dup2(override_stdin_fd, STDIN_FILENO);
+        std::fprintf(stderr, "[WasmNode] STDIN override: fd=%d\n", override_stdin_fd);
+    } else if (!stdin_data.empty()) {
         tmp_in = tmpfile();
         if (!tmp_in) {
             nlohmann::json result_json;
@@ -445,8 +474,39 @@ std::string WasmNode::execute(const std::string& payload) {
         }
     };
 
+    int saved_stdout = -1;
+    int saved_stderr_for_pipe = -1;
+    if (override_stdout_fd != -1) {
+        saved_stdout = dup(STDOUT_FILENO);
+        if (saved_stdout < 0) {
+            restore_stdin();
+            nlohmann::json result_json;
+            result_json["file"] = wasm_file;
+            result_json["status"] = "error";
+            result_json["reason"] = "dup(STDOUT) failed for override fd";
+            return result_json.dump();
+        }
+        saved_stderr_for_pipe = dup(STDERR_FILENO);
+        dup2(saved_stdout, STDERR_FILENO);
+        dup2(override_stdout_fd, STDOUT_FILENO);
+        std::fprintf(stderr, "[WasmNode] STDOUT override: fd=%d (stderr preserved)\n", override_stdout_fd);
+    }
+
+    auto restore_stdout = [&]() {
+        if (saved_stdout >= 0) {
+            dup2(saved_stdout, STDOUT_FILENO);
+            close(saved_stdout);
+            saved_stdout = -1;
+        }
+        if (saved_stderr_for_pipe >= 0) {
+            dup2(saved_stderr_for_pipe, STDERR_FILENO);
+            close(saved_stderr_for_pipe);
+            saved_stderr_for_pipe = -1;
+        }
+    };
+
     WasmEdge_Result exec_res = {.Code = WasmEdge_ErrCode_RuntimeError};
-    int32_t wasm_return_val = 0;
+    volatile int32_t wasm_return_val = 0;
 
     WasmEdge_ConfigureContext* conf = WasmEdge_ConfigureCreate();
     WasmEdge_ConfigureAddHostRegistration(conf, WasmEdge_HostRegistration_Wasi);
@@ -461,6 +521,7 @@ std::string WasmNode::execute(const std::string& payload) {
     WasmEdge_ConfigureDelete(conf);
 
     if (!vm) {
+        restore_stdout();
         restore_stdin();
         nlohmann::json result_json;
         result_json["file"] = wasm_file;
@@ -471,7 +532,7 @@ std::string WasmNode::execute(const std::string& payload) {
 
     WasmEdge_StatisticsContext* stat = WasmEdge_VMGetStatisticsContext(vm);
     if (stat) {
-        WasmEdge_StatisticsSetCostLimit(stat, 100000000);
+        WasmEdge_StatisticsSetCostLimit(stat, 50000000);
     }
 
     WasmEdge_String mod_name = WasmEdge_StringCreateByCString("aios");
@@ -601,6 +662,7 @@ std::string WasmNode::execute(const std::string& payload) {
                          WasmEdge_ResultGetMessage(load_res));
             WasmEdge_VMDelete(vm);
             WasmEdge_ModuleInstanceDelete(host_mod);
+            restore_stdout();
             restore_stdin();
             nlohmann::json result_json;
             result_json["file"] = wasm_file;
@@ -615,6 +677,7 @@ std::string WasmNode::execute(const std::string& payload) {
                          WasmEdge_ResultGetMessage(validate_res));
             WasmEdge_VMDelete(vm);
             WasmEdge_ModuleInstanceDelete(host_mod);
+            restore_stdout();
             restore_stdin();
             nlohmann::json result_json;
             result_json["file"] = wasm_file;
@@ -629,6 +692,7 @@ std::string WasmNode::execute(const std::string& payload) {
                          WasmEdge_ResultGetMessage(instantiate_res));
             WasmEdge_VMDelete(vm);
             WasmEdge_ModuleInstanceDelete(host_mod);
+            restore_stdout();
             restore_stdin();
             nlohmann::json result_json;
             result_json["file"] = wasm_file;
@@ -703,16 +767,29 @@ std::string WasmNode::execute(const std::string& payload) {
         if (!vfunc_type) {
             WasmEdge_String alt = WasmEdge_StringWrap("run", 3);
             vfunc_type = WasmEdge_VMGetFunctionType(vm, alt);
+            if (vfunc_type) func_name_str = "run";
         }
         if (!vfunc_type) {
             WasmEdge_String alt = WasmEdge_StringWrap("_start", 6);
             vfunc_type = WasmEdge_VMGetFunctionType(vm, alt);
+            if (vfunc_type) func_name_str = "_start";
         }
         if (!vfunc_type) {
-            std::fprintf(stderr, "[WasmNode] No '%s' or 'run' or '_start' export found\n",
+            WasmEdge_String alt = WasmEdge_StringWrap("main", 4);
+            vfunc_type = WasmEdge_VMGetFunctionType(vm, alt);
+            if (vfunc_type) func_name_str = "main";
+        }
+        if (!vfunc_type) {
+            WasmEdge_String alt = WasmEdge_StringWrap("__original_main", 15);
+            vfunc_type = WasmEdge_VMGetFunctionType(vm, alt);
+            if (vfunc_type) func_name_str = "__original_main";
+        }
+        if (!vfunc_type) {
+            std::fprintf(stderr, "[WasmNode] No '%s' or 'run' or '_start' or 'main' export found\n",
                          func_name_str.c_str());
             WasmEdge_VMDelete(vm);
             WasmEdge_ModuleInstanceDelete(host_mod);
+            restore_stdout();
             restore_stdin();
             nlohmann::json result_json;
             result_json["file"] = wasm_file;
@@ -720,6 +797,9 @@ std::string WasmNode::execute(const std::string& payload) {
             result_json["reason"] = "No exportable function found";
             return result_json.dump();
         }
+
+        func_name = WasmEdge_StringWrap(
+            func_name_str.c_str(), static_cast<uint32_t>(func_name_str.size()));
 
         uint32_t param_count = WasmEdge_FunctionTypeGetParametersLength(vfunc_type);
         uint32_t return_count = WasmEdge_FunctionTypeGetReturnsLength(vfunc_type);
@@ -734,26 +814,57 @@ std::string WasmNode::execute(const std::string& payload) {
 
         std::vector<WasmEdge_Value> returns(return_count > 0 ? return_count : 1);
 
-        if (param_count == 0) {
-            exec_res = WasmEdge_VMExecute(vm, func_name, nullptr, 0,
-                                           returns.data(), returns.size());
+        struct sigaction sa, old_sa;
+        sa.sa_handler = wasm_timeout_handler;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;
+        sigaction(SIGALRM, &sa, &old_sa);
+
+        g_wasm_timeout_armed = true;
+        unsigned int prev_alarm = alarm(15);
+
+        if (setjmp(g_wasm_timeout_jmp) == 0) {
+            if (param_count == 0) {
+                exec_res = WasmEdge_VMExecute(vm, func_name, nullptr, 0,
+                                               returns.data(), returns.size());
+            } else {
+                exec_res = WasmEdge_VMExecute(vm, func_name,
+                                               actual_params.data(), actual_params.size(),
+                                               returns.data(), returns.size());
+            }
         } else {
-            exec_res = WasmEdge_VMExecute(vm, func_name,
-                                           actual_params.data(), actual_params.size(),
-                                           returns.data(), returns.size());
+            std::fprintf(stderr, "[WasmNode] ⏰ TIMEOUT! WASM execution exceeded 15s, forcibly terminated!\n");
+            exec_res = {.Code = WasmEdge_ErrCode_RuntimeError};
         }
+
+        alarm(0);
+        g_wasm_timeout_armed = false;
+        sigaction(SIGALRM, &old_sa, nullptr);
+        if (prev_alarm > 0) alarm(prev_alarm);
 
         if (WasmEdge_ResultOK(exec_res) && return_count > 0) {
             wasm_return_val = WasmEdge_ValueGetI32(returns[0]);
         }
 
         if (!WasmEdge_ResultOK(exec_res)) {
-            std::fprintf(stderr, "[WasmNode] Execution failed: %s\n",
-                         WasmEdge_ResultGetMessage(exec_res));
+            const char* trap_msg = WasmEdge_ResultGetMessage(exec_res);
+            std::string trap_detail(trap_msg ? trap_msg : "unknown trap");
+            std::fprintf(stderr, "\033[31m[Ring 0 | Trap] 捕获到沙盒硬件异常: %s\033[0m\n",
+                         trap_detail.c_str());
+            KernelLogger::instance().log("[Ring 0 | Trap] 捕获到沙盒硬件异常: " + trap_detail);
         }
     }
 
+    restore_stdout();
     restore_stdin();
+
+    WasmEdge_StatisticsContext* final_stat = WasmEdge_VMGetStatisticsContext(vm);
+    uint64_t gas_used = 0;
+    uint64_t instr_count = 0;
+    if (final_stat) {
+        instr_count = WasmEdge_StatisticsGetInstrCount(final_stat);
+        gas_used = WasmEdge_StatisticsGetTotalCost(final_stat);
+    }
 
     WasmEdge_VMDelete(vm);
     WasmEdge_ModuleInstanceDelete(host_mod);
@@ -761,6 +872,9 @@ std::string WasmNode::execute(const std::string& payload) {
     nlohmann::json result_json;
     result_json["file"] = wasm_file;
     result_json["func"] = func_name_str;
+    result_json["gas_used"] = gas_used;
+    result_json["instr_count"] = instr_count;
+    result_json["gas_limit"] = 50000000;
 
     if (WasmEdge_ResultOK(exec_res)) {
         result_json["status"] = "ok";
@@ -771,9 +885,13 @@ std::string WasmNode::execute(const std::string& payload) {
         std::fprintf(stderr, "[WasmNode] OK | func=%s | return=%d\n",
                      func_name_str.c_str(), wasm_return_val);
     } else {
-        result_json["status"] = "error";
-        result_json["reason"] = "Execution trapped or Gas Limit Exceeded (OOM)";
-        std::fprintf(stderr, "[WasmNode] ERROR | func=%s\n", func_name_str.c_str());
+        const char* trap_msg = WasmEdge_ResultGetMessage(exec_res);
+        std::string trap_detail(trap_msg ? trap_msg : "unknown trap");
+        result_json["status"] = "trap";
+        result_json["reason"] = trap_detail;
+        result_json["trap"] = trap_detail;
+        std::fprintf(stderr, "[WasmNode] TRAP | func=%s | detail=%s\n",
+                     func_name_str.c_str(), trap_detail.c_str());
     }
 
     return result_json.dump();

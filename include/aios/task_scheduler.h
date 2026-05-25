@@ -21,6 +21,8 @@
 
 namespace aios {
 
+class WasmNode;
+
 constexpr int PRIORITY_QUEUE_COUNT = 3;
 
 using ResponseCallback = std::function<void(int fd, const std::string& response)>;
@@ -50,6 +52,7 @@ public:
     size_t pending_count() const;
     size_t active_io_count() const;
     std::string GetSystemStat() const;
+    void ping_heartbeat(int agent_id);
 
 private:
     void dispatch_loop();
@@ -61,6 +64,7 @@ private:
     void dispatch_process_ctrl(std::shared_ptr<AgentTask> task);
     void try_compress(int agent_id);
     void kswapd_loop();
+    void reaper_loop();
     std::vector<ChatMessage> build_messages(int agent_id, const std::string& current_payload);
 
     std::string make_response(bool ok, const std::string& message,
@@ -90,10 +94,22 @@ private:
     std::atomic<int> active_wasm_vms_{0};
     static constexpr int MAX_WASM_VMS = 2;
     std::thread kswapd_thread_;
+    std::thread reaper_thread_;
     std::map<int, bool> swapped_out_agents_;
+
+    std::mutex heartbeat_mutex_;
+    std::unordered_map<int, std::chrono::time_point<std::chrono::steady_clock>> agent_heartbeats_;
+
+    std::mutex agent_thread_mutex_;
+    std::unordered_map<int, std::thread::id> agent_thread_ids_;
 
     std::atomic<uint64_t> total_tasks_executed_{0};
     std::atomic<uint64_t> total_page_faults_{0};
+
+    std::mutex module_cache_mutex_;
+    std::unordered_map<std::string, std::shared_ptr<WasmNode>> module_lru_;
+    std::list<std::string> module_lru_list_;
+    static constexpr size_t MAX_MODULE_CACHE = 16;
 };
 
 } // namespace aios
