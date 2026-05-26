@@ -27,6 +27,13 @@ constexpr int PRIORITY_QUEUE_COUNT = 3;
 
 using ResponseCallback = std::function<void(int fd, const std::string& response)>;
 
+struct LlmTaskCompare {
+    bool operator()(const std::shared_ptr<AgentTask>& a,
+                    const std::shared_ptr<AgentTask>& b) const {
+        return a->priority < b->priority;
+    }
+};
+
 class TaskScheduler {
 public:
     TaskScheduler(size_t dispatch_threads,
@@ -42,6 +49,7 @@ public:
     TaskScheduler& operator=(TaskScheduler&&) = delete;
 
     void submit(std::shared_ptr<AgentTask> task);
+    void submit_llm(std::shared_ptr<AgentTask> task);
     void cancel_agent(int agent_id);
     void start();
     void shutdown();
@@ -56,6 +64,7 @@ public:
 
 private:
     void dispatch_loop();
+    void llm_worker_loop();
     void handle_write_memory(std::shared_ptr<AgentTask> task);
     void handle_read_memory(std::shared_ptr<AgentTask> task);
     void dispatch_llm_task(std::shared_ptr<AgentTask> task);
@@ -71,6 +80,15 @@ private:
                               const std::string& data = "");
 
     std::queue<std::shared_ptr<AgentTask>> queues_[PRIORITY_QUEUE_COUNT];
+
+    std::priority_queue<
+        std::shared_ptr<AgentTask>,
+        std::vector<std::shared_ptr<AgentTask>>,
+        LlmTaskCompare
+    > llm_queue_;
+    mutable std::mutex llm_mutex_;
+    std::condition_variable llm_cv_;
+    std::thread llm_worker_thread_;
 
     mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;

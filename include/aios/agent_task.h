@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -16,6 +17,7 @@ enum class TaskStatus {
 
 enum class TaskType {
     LLM_CHAT,
+    LLM_INFERENCE,
     TOOL_CALL,
     WRITE_MEMORY,
     READ_MEMORY,
@@ -41,6 +43,9 @@ struct AgentTask {
 
     std::shared_ptr<std::atomic<bool>> is_cancelled;
 
+    using ResponseCallback = std::function<void(int fd, const std::string& response)>;
+    ResponseCallback response_callback_;
+
     AgentTask(int id, int prio, TaskStatus s, std::string payload,
               TaskType t = TaskType::LLM_CHAT,
               std::string tname = "",
@@ -56,6 +61,10 @@ struct AgentTask {
         , client_fd(fd)
         , is_cancelled(std::make_shared<std::atomic<bool>>(false))
     {}
+
+    void set_response_callback(ResponseCallback cb) {
+        response_callback_ = std::move(cb);
+    }
 
     bool cancelled() const {
         return is_cancelled && is_cancelled->load(std::memory_order_relaxed);

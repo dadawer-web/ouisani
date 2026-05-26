@@ -14,6 +14,7 @@
 #include "aios/vfs_node.h"
 #include "aios/wasm_node.h"
 #include "aios/process_manager.h"
+#include "aios/semantic_node.h"
 
 #include <atomic>
 #include <chrono>
@@ -146,6 +147,18 @@ int main(int argc, char* argv[]) {
     auto dev_mem = std::make_shared<aios::DirectoryNode>("/dev/mem");
     vfs.mount("/dev", "mem", dev_mem);
 
+    auto semantic_dev = std::make_shared<aios::SemanticNode>(
+        "/dev/semantic",
+        [scheduler](std::shared_ptr<aios::AgentTask> task) {
+            scheduler->submit_llm(std::move(task));
+        },
+        [scheduler](std::shared_ptr<aios::AgentTask> task) {
+            scheduler->submit(std::move(task));
+        },
+        memory_mgr
+    );
+    vfs.mount("/dev", "semantic", semantic_dev);
+
     auto tmp = std::make_shared<aios::DirectoryNode>("/tmp");
     vfs.mount("/", "tmp", tmp);
     auto pipes = std::make_shared<aios::DirectoryNode>("/tmp/pipes");
@@ -181,6 +194,10 @@ int main(int argc, char* argv[]) {
         "0.0.0.0", 8080
     );
 
+    server.set_submit_llm_fn([scheduler](std::shared_ptr<aios::AgentTask> task) {
+        scheduler->submit_llm(std::move(task));
+    });
+
     scheduler->set_response_callback([&server](int fd, const std::string& resp) {
         server.enqueue_response(fd, resp);
     });
@@ -196,13 +213,14 @@ int main(int argc, char* argv[]) {
     std::printf("[Main] Interrupt: CANCEL_TASK + is_cancelled token\n");
     std::printf("[Main] Watchdog: Sandbox timeout=10s | LLM timeout=120s\n");
     std::printf("[Main] Security: Ring 0/3 Privilege + SecurityGuard Code Scanner\n");
-    std::printf("[Main] VFS: /bin/sandbox /bin/wasm_sandbox /proc/version /proc/agent_top /proc/agents /proc/kmsg /dev/mem /tmp/pipes /var/snapshots\n");
+    std::printf("[Main] VFS: /bin/sandbox /bin/wasm_sandbox /proc/version /proc/agent_top /proc/agents /proc/kmsg /dev/mem /dev/semantic /tmp/pipes /var/snapshots\n");
     std::printf("[Main] TLB: Semantic Cache (threshold=0.90, max=1000)\n");
     std::printf("[Main] IPC: PipeNode (blocking read + notify write)\n");
     std::printf("[Main] Checkpoint: SNAPSHOT / RESTORE (process hibernation)\n");
     std::printf("[Main] Reaper: Zombie detection (30s idle -> SIGKILL)\n");
     std::printf("[Main] Auto-restore: Scan /tmp/aios_tasks/ on boot\n");
     std::printf("[Main] Module Store: COMPILE_ONLY / EXECUTE_MODULE (LRU cache=%zu)\n", (size_t)16);
+    std::printf("[Main] LLM Scheduler: Priority-driven LLM_INFERENCE queue (dedicated worker thread)\n");
     std::printf("[Main] Decoder: %s | UDS: %s\n",
                 decoder_ok ? "VIA DAEMON (UDS)" : "DISABLED",
                 decoder_sock.c_str());

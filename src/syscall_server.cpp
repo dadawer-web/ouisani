@@ -48,6 +48,10 @@ SyscallServer::~SyscallServer() {
     shutdown();
 }
 
+void SyscallServer::set_submit_llm_fn(SubmitLlmFn fn) {
+    submit_llm_fn_ = std::move(fn);
+}
+
 void SyscallServer::start() {
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true)) {
@@ -488,6 +492,28 @@ void SyscallServer::parse_and_dispatch(int fd, const std::string& line) {
             task->tool_name = action;
             task->tool_code = vfs_path;
         }
+    } else if (syscall_name == "LLM_INFERENCE") {
+        int priority = req.value("priority", 0);
+        std::string payload = req.value("payload", req.value("data", ""));
+
+        auto task = std::make_shared<AgentTask>(
+            caller_id, priority, TaskStatus::READY,
+            payload, TaskType::LLM_INFERENCE, "", "", fd
+        );
+
+        task->set_response_callback([this](int cb_fd, const std::string& res) {
+            enqueue_response(cb_fd, res);
+        });
+
+        std::printf("[Reactor] LLM_INFERENCE | agent=%d | priority=%d | payload=%zu bytes\n",
+                    caller_id, priority, payload.size());
+
+        if (submit_llm_fn_) {
+            submit_llm_fn_(std::move(task));
+        } else if (submit_fn_) {
+            submit_fn_(std::move(task));
+        }
+        return;
     } else if (syscall_name == "EXECUTE_TOOL" || syscall_name == "EXECUTE_TASK") {
         int priority = req.value("priority", 1);
         std::string tool_name = req.value("tool_name", "");

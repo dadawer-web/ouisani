@@ -855,6 +855,7 @@ std::string WasmNode::execute_with_fds(const std::string& payload,
         }
     }
 
+    fflush(stdout);
     restore_stdout();
     restore_stdin();
 

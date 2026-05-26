@@ -3,6 +3,7 @@
 #include "aios/device_driver.h"
 #include "aios/memory_manager.h"
 
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <memory>
@@ -155,6 +156,18 @@ public:
             result = "[VFS] Agent#" + std::to_string(agent_id_) + " has no memory pages\n";
         }
         return result;
+    }
+
+    bool write(const std::string& data) override {
+        if (!mmgr_) return false;
+        MemoryPage page;
+        page.agent_id = agent_id_;
+        page.role = "user";
+        page.content = data;
+        page.timestamp = static_cast<size_t>(
+            std::chrono::system_clock::now().time_since_epoch().count());
+        mmgr_->write_page(page);
+        return true;
     }
 
     int agent_id() const { return agent_id_; }

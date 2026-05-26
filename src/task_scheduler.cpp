@@ -3,6 +3,7 @@
 #include "aios/cache_manager.h"
 #include "aios/compiler_bridge.h"
 #include "aios/kernel_logger.h"
+#include "aios/semantic_node.h"
 #include "aios/process_manager.h"
 #include "aios/security_guard.h"
 #include "aios/vfs_manager.h"
@@ -24,12 +25,25 @@ static std::string filter_wasmedge_stats(const std::string& raw) {
     std::string result;
     std::istringstream iss(raw);
     std::string line;
+    bool in_stats = false;
     while (std::getline(iss, line)) {
+        if (line.find("===================  Statistics") != std::string::npos) {
+            std::string before = line.substr(0, line.find("[2026"));
+            if (!before.empty()) result += before + "\n";
+            in_stats = true;
+            continue;
+        }
+        if (in_stats) {
+            if (line.find("======   End") != std::string::npos ||
+                line.find("=====   End") != std::string::npos) {
+                in_stats = false;
+            }
+            continue;
+        }
         if (line.find("[info]") != std::string::npos) continue;
-        if (line.find("Statistics") != std::string::npos) continue;
         if (line.find("Gas costs") != std::string::npos) continue;
         if (line.find("wasm instructions count") != std::string::npos) continue;
-        if (line.find("End   ===") != std::string::npos) continue;
+        if (line.empty()) continue;
         result += line + "\n";
     }
     while (!result.empty() && result.back() == '\n') result.pop_back();
@@ -72,6 +86,16 @@ void TaskScheduler::submit(std::shared_ptr<AgentTask> task) {
         queues_[qidx].push(std::move(task));
     }
     queue_cv_.notify_one();
+}
+
+void TaskScheduler::submit_llm(std::shared_ptr<AgentTask> task) {
+    if (!task) return;
+    {
+        std::lock_guard<std::mutex> lock(llm_mutex_);
+        task->status = TaskStatus::READY;
+        llm_queue_.push(std::move(task));
+    }
+    llm_cv_.notify_one();
 }
 
 void TaskScheduler::cancel_agent(int agent_id) {
@@ -129,6 +153,7 @@ void TaskScheduler::start() {
 
     kswapd_thread_ = std::thread(&TaskScheduler::kswapd_loop, this);
     reaper_thread_ = std::thread(&TaskScheduler::reaper_loop, this);
+    llm_worker_thread_ = std::thread(&TaskScheduler::llm_worker_loop, this);
 
     {
         const char* snapshot_dir = "/tmp/aios_tasks";
@@ -207,6 +232,11 @@ void TaskScheduler::shutdown() {
     }
     queue_cv_.notify_all();
 
+    {
+        std::lock_guard<std::mutex> lock(llm_mutex_);
+    }
+    llm_cv_.notify_all();
+
     io_pool_.shutdown();
     wasm_pool_->shutdown();
     dispatch_pool_.shutdown();
@@ -217,6 +247,10 @@ void TaskScheduler::shutdown() {
 
     if (reaper_thread_.joinable()) {
         reaper_thread_.join();
+    }
+
+    if (llm_worker_thread_.joinable()) {
+        llm_worker_thread_.join();
     }
 
     while (true) {
@@ -257,17 +291,23 @@ size_t TaskScheduler::active_io_count() const {
 
 std::string TaskScheduler::GetSystemStat() const {
     size_t q0 = 0, q1 = 0, q2 = 0;
+    size_t llm_q = 0;
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         q0 = queues_[0].size();
         q1 = queues_[1].size();
         q2 = queues_[2].size();
     }
+    {
+        std::lock_guard<std::mutex> lock(llm_mutex_);
+        llm_q = llm_queue_.size();
+    }
 
     nlohmann::json j;
     j["q0_len"] = q0;
     j["q1_len"] = q1;
     j["q2_len"] = q2;
+    j["llm_queue_len"] = llm_q;
     j["active_vms"] = active_wasm_vms_.load();
     j["max_vms"] = MAX_WASM_VMS;
     j["page_faults"] = total_page_faults_.load();
@@ -481,6 +521,91 @@ void TaskScheduler::reaper_loop() {
     KernelLogger::instance().log("[Ring 0 | Reaper] 死神守护线程退出");
 }
 
+void TaskScheduler::llm_worker_loop() {
+    KernelLogger::instance().log("[Ring 0 | LLM Scheduler] 优先级驱动 LLM 调度器工作线程启动");
+
+    while (running_.load()) {
+        std::shared_ptr<AgentTask> task;
+
+        {
+            std::unique_lock<std::mutex> lock(llm_mutex_);
+            llm_cv_.wait(lock, [this] {
+                return !llm_queue_.empty() || !running_.load();
+            });
+
+            if (!running_.load() && llm_queue_.empty()) {
+                break;
+            }
+
+            if (llm_queue_.empty()) {
+                continue;
+            }
+
+            task = llm_queue_.top();
+            llm_queue_.pop();
+        }
+
+        if (!task) continue;
+
+        if (task->cancelled()) {
+            std::printf("[LLM Scheduler] Agent=%d LLM_INFERENCE task discarded (cancelled)\n",
+                        task->agent_id);
+            continue;
+        }
+
+        task->status = TaskStatus::RUNNING;
+        total_tasks_executed_.fetch_add(1);
+
+        std::printf("[LLM Scheduler] Processing LLM_INFERENCE | agent=%d | priority=%d | payload=\"%s\"\n",
+                    task->agent_id, task->priority,
+                    task->task_payload.size() > 80
+                        ? (task->task_payload.substr(0, 80) + "...").c_str()
+                        : task->task_payload.c_str());
+
+        std::string result;
+        try {
+            if (llm_ && llm_->has_api_key()) {
+                auto messages = build_messages(task->agent_id, task->task_payload);
+                result = llm_->generate("", messages);
+            } else {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                result = "[LLM Kernel Response] Processed: " + task->task_payload;
+            }
+        } catch (const std::exception& e) {
+            std::printf("[LLM Scheduler] Agent=%d LLM inference exception: %s\n",
+                        task->agent_id, e.what());
+            result = "[LLM Kernel Error] " + std::string(e.what());
+        }
+
+        std::printf("[LLM Scheduler] Agent=%d LLM_INFERENCE complete | result=%zu bytes\n",
+                    task->agent_id, result.size());
+
+        if (task->response_callback_) {
+            nlohmann::json resp_data;
+            resp_data["response"] = result;
+            task->response_callback_(task->client_fd,
+                make_response(true,
+                    "LLM_INFERENCE completed for agent " + std::to_string(task->agent_id),
+                    resp_data.dump()));
+        } else if (response_cb_) {
+            nlohmann::json resp_data;
+            resp_data["response"] = result;
+            response_cb_(task->client_fd,
+                make_response(true,
+                    "LLM_INFERENCE completed for agent " + std::to_string(task->agent_id),
+                    resp_data.dump()));
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(active_mutex_);
+            auto& vec = active_tasks_[task->agent_id];
+            vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+        }
+    }
+
+    KernelLogger::instance().log("[Ring 0 | LLM Scheduler] 优先级驱动 LLM 调度器工作线程退出");
+}
+
 void TaskScheduler::dispatch_loop() {
     while (running_.load()) {
         std::shared_ptr<AgentTask> task;
@@ -540,6 +665,9 @@ void TaskScheduler::dispatch_loop() {
                 handle_read_memory(std::move(task));
                 break;
             case TaskType::LLM_CHAT:
+                dispatch_llm_task(std::move(task));
+                break;
+            case TaskType::LLM_INFERENCE:
                 dispatch_llm_task(std::move(task));
                 break;
             case TaskType::TOOL_CALL:
@@ -715,7 +843,15 @@ void TaskScheduler::dispatch_llm_task(std::shared_ptr<AgentTask> task) {
                     }
                 }
 
-                if (response_cb_) {
+                if (task->response_callback_) {
+                    nlohmann::json resp_data;
+                    resp_data["response"] = cached_response;
+                    resp_data["cache_hit"] = true;
+                    task->response_callback_(task->client_fd,
+                        make_response(true,
+                            "LLM task completed (cache hit) for agent " + std::to_string(task->agent_id),
+                            resp_data.dump()));
+                } else if (response_cb_) {
                     nlohmann::json resp_data;
                     resp_data["response"] = cached_response;
                     resp_data["cache_hit"] = true;
@@ -1122,14 +1258,18 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                     std::printf("[VFS-COMPILE] Agent#%d | Compile FAILED: %s\n",
                                 task->agent_id, compile_res.error_msg.c_str());
 
-                    if (response_cb_) {
+                    {
                         nlohmann::json resp_data;
                         resp_data["stage"] = "compile";
                         resp_data["success"] = false;
                         resp_data["error"] = compile_res.error_msg;
                         resp_data["exit_code"] = compile_res.exit_code;
-                        response_cb_(task->client_fd,
-                            make_response(false, "Compilation failed", resp_data.dump()));
+                        auto resp_str = make_response(false, "Compilation failed", resp_data.dump());
+                        if (task->response_callback_) {
+                            task->response_callback_(task->client_fd, resp_str);
+                        } else if (response_cb_) {
+                            response_cb_(task->client_fd, resp_str);
+                        }
                     }
                     active_io_tasks_.fetch_sub(1);
                     active_wasm_vms_.fetch_sub(1);
@@ -1179,20 +1319,50 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                     exec_payload["restore_agent_id"] = restore_agent_id;
                 }
 
-                std::string output = wasm_node->execute(exec_payload.dump());
+                FILE* tmp_stdout = tmpfile();
+                int stdout_fd = tmp_stdout ? fileno(tmp_stdout) : -1;
+                std::printf("[VFS-COMPILE] Agent#%d | tmp_stdout=%p fd=%d\n",
+                            task->agent_id, (void*)tmp_stdout, stdout_fd);
+
+                std::string output = wasm_node->execute_with_fds(
+                    exec_payload.dump(), -1, stdout_fd);
+
+                std::string captured_stdout;
+                if (tmp_stdout) {
+                    fflush(tmp_stdout);
+                    fflush(stdout);
+                    fseek(tmp_stdout, 0, SEEK_END);
+                    long fsize = ftell(tmp_stdout);
+                    if (fsize > 0) {
+                        fseek(tmp_stdout, 0, SEEK_SET);
+                        captured_stdout.resize(fsize);
+                        auto rd = fread(&captured_stdout[0], 1, fsize, tmp_stdout);
+                        (void)rd;
+                    }
+                    fclose(tmp_stdout);
+                }
+
+                captured_stdout = filter_wasmedge_stats(captured_stdout);
 
                 std::printf("[VFS-COMPILE] Agent#%d | Execute result: %s\n",
                             task->agent_id, output.c_str());
 
-                if (response_cb_) {
+                {
                     nlohmann::json resp_data;
                     resp_data["stage"] = "complete";
                     resp_data["compile"] = true;
                     resp_data["wasm_path"] = compile_res.wasm_path;
                     resp_data["mount"] = mount_path;
                     resp_data["output"] = output;
-                    response_cb_(task->client_fd,
-                        make_response(true, "Compile & Execute completed", resp_data.dump()));
+                    if (!captured_stdout.empty()) {
+                        resp_data["stdout"] = captured_stdout;
+                    }
+                    auto resp_str = make_response(true, "Compile & Execute completed", resp_data.dump());
+                    if (task->response_callback_) {
+                        task->response_callback_(task->client_fd, resp_str);
+                    } else if (response_cb_) {
+                        response_cb_(task->client_fd, resp_str);
+                    }
                 }
 
                 active_io_tasks_.fetch_sub(1);
@@ -1214,9 +1384,11 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
             active_wasm_vms_.fetch_sub(1);
             std::printf("[VFS-COMPILE] Agent#%d dispatch failed: %s\n",
                         task->agent_id, e.what());
-            if (response_cb_) {
-                response_cb_(task->client_fd,
-                    make_response(false, "COMPILE_AND_EXECUTE dispatch failed: " + std::string(e.what())));
+            auto err_resp = make_response(false, "COMPILE_AND_EXECUTE dispatch failed: " + std::string(e.what()));
+            if (task->response_callback_) {
+                task->response_callback_(task->client_fd, err_resp);
+            } else if (response_cb_) {
+                response_cb_(task->client_fd, err_resp);
             }
         }
         return;
@@ -1740,7 +1912,27 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
 
         bool ok = node->write(payload);
         std::printf("[VFS] WRITE %s -> %s\n", vfs_path.c_str(), ok ? "ok" : "failed");
-        if (response_cb_) {
+
+        auto semantic = std::dynamic_pointer_cast<SemanticNode>(node);
+        if (semantic) {
+            std::string semantic_result = semantic->last_result();
+            if (response_cb_) {
+                auto parsed = nlohmann::json::parse(semantic_result, nullptr, false);
+                if (!parsed.is_discarded()) {
+                    response_cb_(task->client_fd,
+                        make_response(ok, ok ? "Semantic VFS operation completed" : "Semantic VFS operation failed",
+                                      semantic_result));
+                } else {
+                    nlohmann::json resp_data;
+                    resp_data["path"] = vfs_path;
+                    resp_data["written"] = ok;
+                    resp_data["semantic_result"] = semantic_result;
+                    response_cb_(task->client_fd,
+                        make_response(ok, ok ? "Semantic VFS operation completed" : "Semantic VFS operation failed",
+                                      resp_data.dump()));
+                }
+            }
+        } else if (response_cb_) {
             nlohmann::json resp_data;
             resp_data["path"] = vfs_path;
             resp_data["written"] = ok;

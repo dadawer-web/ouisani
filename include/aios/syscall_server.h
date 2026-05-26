@@ -27,12 +27,15 @@ public:
     using SubmitTaskFn = std::function<void(std::shared_ptr<AgentTask>)>;
     using CancelTaskFn = std::function<void(int agent_id)>;
     using PingHeartbeatFn = std::function<void(int agent_id)>;
+    using SubmitLlmFn = std::function<void(std::shared_ptr<AgentTask>)>;
 
     SyscallServer(SubmitTaskFn submit_fn,
                   CancelTaskFn cancel_fn,
                   PingHeartbeatFn ping_fn,
                   const std::string& host = "0.0.0.0",
                   uint16_t port = 8080);
+
+    void set_submit_llm_fn(SubmitLlmFn fn);
     ~SyscallServer();
 
     SyscallServer(const SyscallServer&) = delete;
@@ -58,6 +61,7 @@ private:
     void dispatch_flat(int fd, const FlatCommand& cmd, const std::string& original_text);
 
     SubmitTaskFn submit_fn_;
+    SubmitLlmFn submit_llm_fn_;
     CancelTaskFn cancel_fn_;
     PingHeartbeatFn ping_fn_;
     std::string host_;

@@ -30,6 +30,7 @@ add_executable(aios_core
     src/wasm_node.cpp
     src/compiler_bridge.cpp
     src/kernel_logger.cpp
+    src/semantic_node.cpp
 )
 
 target_include_directories(aios_core PRIVATE
