@@ -5,8 +5,10 @@
 #include "aios/instruction_decoder.h"
 #include "aios/kernel_logger.h"
 #include "aios/llm_adapter.h"
+#include "aios/mcp_server.h"
 #include "aios/memory_manager.h"
 #include "aios/sandbox_driver.h"
+#include "aios/scheduler_strategy.h"
 #include "aios/security_guard.h"
 #include "aios/syscall_server.h"
 #include "aios/task_scheduler.h"
@@ -15,6 +17,8 @@
 #include "aios/wasm_node.h"
 #include "aios/process_manager.h"
 #include "aios/semantic_node.h"
+#include "aios/vector_node.h"
+#include "aios/event_bus.h"
 
 #include <atomic>
 #include <chrono>
@@ -59,6 +63,16 @@ public:
 
     std::string read() const override {
         return KernelLogger::instance().dump_logs();
+    }
+};
+
+class EventsNode : public VfsNode {
+public:
+    EventsNode(const std::string& path)
+        : VfsNode(VfsNodeType::FILE, path) {}
+
+    std::string read() const override {
+        return EventBus::instance().dump_events();
     }
 };
 
@@ -144,6 +158,9 @@ int main(int argc, char* argv[]) {
     auto proc_kmsg = std::make_shared<aios::KmsgNode>("/proc/kmsg");
     vfs.mount("/proc", "kmsg", proc_kmsg);
 
+    auto proc_events = std::make_shared<aios::EventsNode>("/proc/events");
+    vfs.mount("/proc", "events", proc_events);
+
     auto dev_mem = std::make_shared<aios::DirectoryNode>("/dev/mem");
     vfs.mount("/dev", "mem", dev_mem);
 
@@ -158,6 +175,9 @@ int main(int argc, char* argv[]) {
         memory_mgr
     );
     vfs.mount("/dev", "semantic", semantic_dev);
+
+    auto vec_mem_101 = std::make_shared<aios::VectorNode>("/dev/vec_mem_101", llm);
+    vfs.mount("/dev", "vec_mem_101", vec_mem_101);
 
     auto tmp = std::make_shared<aios::DirectoryNode>("/tmp");
     vfs.mount("/", "tmp", tmp);
@@ -202,9 +222,24 @@ int main(int argc, char* argv[]) {
         server.enqueue_response(fd, resp);
     });
 
+    scheduler->set_strategy(std::make_shared<aios::PrioritySchedulerStrategy>());
+
     scheduler->start();
 
     server.start();
+
+    aios::McpServer mcp_server(
+        8081,
+        [scheduler](std::shared_ptr<aios::AgentTask> task) {
+            scheduler->submit(std::move(task));
+        },
+        [scheduler](std::shared_ptr<aios::AgentTask> task) {
+            scheduler->submit_llm(std::move(task));
+        }
+    );
+    std::thread mcp_thread([&mcp_server]() {
+        mcp_server.start();
+    });
 
     std::printf("[Main] AIOS Core is running (Checkpointing & Hibernation)\n");
     std::printf("[Main] I/O: epoll LT + eventfd (Reactor)\n");
@@ -221,6 +256,7 @@ int main(int argc, char* argv[]) {
     std::printf("[Main] Auto-restore: Scan /tmp/aios_tasks/ on boot\n");
     std::printf("[Main] Module Store: COMPILE_ONLY / EXECUTE_MODULE (LRU cache=%zu)\n", (size_t)16);
     std::printf("[Main] LLM Scheduler: Priority-driven LLM_INFERENCE queue (dedicated worker thread)\n");
+    std::printf("[Main] MCP Server: 127.0.0.1:8081 (JSON-RPC 2.0 / Model Context Protocol)\n");
     std::printf("[Main] Decoder: %s | UDS: %s\n",
                 decoder_ok ? "VIA DAEMON (UDS)" : "DISABLED",
                 decoder_sock.c_str());
@@ -231,6 +267,10 @@ int main(int argc, char* argv[]) {
     }
 
     std::printf("\n[Main] Signal received, shutting down...\n");
+    mcp_server.shutdown();
+    if (mcp_thread.joinable()) {
+        mcp_thread.join();
+    }
     server.shutdown();
     scheduler->shutdown();
     std::printf("[Main] AIOS Core exited cleanly.\n");

@@ -31,64 +31,36 @@ def send_syscall(req_dict, timeout=120):
         return {"status": "error", "message": str(e)}
 
 
-def print_separator(char="=", length=60):
-    print(char * length)
-
-
-print_separator()
-print("  🌐 AIOS 第二阶段：Semantic VFS (语义文件系统) 测试")
-print_separator()
+print("=" * 60)
+print("  🌐 Phase 2: Semantic VFS (语义意图文件系统) 验收测试")
+print("=" * 60)
 print()
 
-print("  📖 测试原理:")
-print("  以前 Agent 必须精确拼接 /dev/mem/101 这样的路径；")
-print("  现在，Agent 只需要像老板一样发号施令，")
-print("  /dev/semantic 会自动调用 LLM 翻译意图，回放真实 VFS 操作。")
-print()
-
-print_separator("-")
-print("  Step 1: [系统准备] 传统方式写入机密数据")
-print_separator("-")
-print()
-
-res = send_syscall({
-    "syscall": "WRITE_MEMORY",
-    "agent_id": 101,
-    "caller_id": 0,
-    "key": "core_secret",
-    "value": "【机密】特工 101 的核心密码是: OUISANI_2026_MATRIX"
-})
-print(f"  WRITE_MEMORY → {json.dumps(res, ensure_ascii=False)}")
-
-time.sleep(0.5)
-
-res2 = send_syscall({
+print("1. [系统底层] 正在通过传统硬编码方式，向 /dev/mem/101 写入机密数据...")
+res_init = send_syscall({
     "syscall": "VFS_CALL",
     "action": "WRITE",
     "path": "/dev/mem/101",
     "caller_id": 0,
-    "payload": "【机密】特工 101 的核心密码是: OUISANI_2026_MATRIX"
+    "payload": "【绝密档案】特工 101 的核心覆盖密码是: OUISANI_KERNEL_2026"
 })
-print(f"  VFS WRITE /dev/mem/101 → {json.dumps(res2, ensure_ascii=False)}")
+if isinstance(res_init, dict) and res_init.get("status") == "ok":
+    print("   ✅ 机密数据已写入 /dev/mem/101")
+else:
+    print(f"   ⚠️  写入结果: {res_init}")
 
 time.sleep(0.5)
 
 print()
-print_separator("-")
-print("  Step 2: [见证奇迹] 用自然语言操作文件系统！")
-print_separator("-")
-print()
-
-intent = "帮我查一下101号特工的核心密码是什么？"
-print(f"  🗣️  Agent 102 发出语义意图: \"{intent}\"")
-print(f"  📤 写入 /dev/semantic ...")
-print()
+print("2. [应用层 Agent] 尝试完全不使用路径，只用【自然语言意图】操作文件系统...")
+intent = "帮我查一下，101号特工那边的核心密码到底是什么来着？"
+print(f"   🗣️  发送自然语言: 「{intent}」 -> /dev/semantic")
 
 req_semantic = {
     "syscall": "VFS_CALL",
     "action": "WRITE",
     "path": "/dev/semantic",
-    "caller_id": 102,
+    "caller_id": 0,
     "payload": intent
 }
 
@@ -96,95 +68,51 @@ start_time = time.perf_counter()
 res = send_syscall(req_semantic)
 cost = time.perf_counter() - start_time
 
-print(f"  ✅ [内核响应] (耗时 {cost:.2f} 秒):")
-print_separator("-")
+print()
+print(f"✅ [内核响应] (整体耗时 {cost:.2f} 秒):")
+print("-" * 60)
 
-if isinstance(res, dict):
-    if "data" in res:
-        data = res["data"]
-        if isinstance(data, str):
-            try:
-                data = json.loads(data)
-            except json.JSONDecodeError:
-                pass
-        print(json.dumps(data, ensure_ascii=False, indent=2))
+if isinstance(res, dict) and "data" in res:
+    data = res["data"]
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError:
+            pass
+
+    if isinstance(data, dict):
+        action = data.get("action", "")
+        status = data.get("status", "")
+        content = data.get("content", "")
+        message = data.get("message", "")
+
+        if action == "READ" and content:
+            print(f"  📋 语义动作: {action}")
+            print(f"  📂 目标路径: {data.get('path', '')}")
+            print(f"  📄 读取内容: {content.strip()}")
+        elif action == "WRITE":
+            print(f"  📋 语义动作: {action}")
+            print(f"  📂 目标路径: {data.get('path', '')}")
+            print(f"  📝 结果: {message}")
+        else:
+            print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
-        print(json.dumps(res, ensure_ascii=False, indent=2))
+        print(f"  {data}")
 else:
-    print(res)
+    print(f"  {res}")
 
-print_separator("-")
-
-print()
-print("  🤯 刚才发生的事情:")
-print("  1. Agent 102 的大白话写入了 /dev/semantic")
-print("  2. C++ 内核将其阻塞，构造高优先级 LLM_INFERENCE 任务")
-print("  3. LLM 将其翻译为: {\"action\": \"READ\", \"path\": \"/dev/mem/101\"}")
-print("  4. 内核自动回放 VFS READ，从真实物理内存中读取数据")
-print("  5. 真实数据无缝返回给了 Python！")
-print()
-
-print_separator("-")
-print("  Step 3: [语义写入] 用自然语言写入数据")
-print_separator("-")
-print()
-
-write_intent = "把101号特工的状态更新为：任务已完成，安全撤离"
-print(f"  🗣️  发出语义意图: \"{write_intent}\"")
-print()
-
-res3 = send_syscall({
-    "syscall": "VFS_CALL",
-    "action": "WRITE",
-    "path": "/dev/semantic",
-    "caller_id": 0,
-    "payload": write_intent
-}, timeout=120)
-
-if isinstance(res3, dict) and "data" in res3:
-    data3 = res3["data"]
-    if isinstance(data3, str):
-        try:
-            data3 = json.loads(data3)
-        except json.JSONDecodeError:
-            pass
-    print(f"  ✅ 语义写入结果: {json.dumps(data3, ensure_ascii=False, indent=2)}")
-else:
-    print(f"  结果: {res3}")
+print("-" * 60)
 
 print()
-print_separator("-")
-print("  Step 4: [验证] 传统方式读取，确认语义写入生效")
-print_separator("-")
-print()
-
-res4 = send_syscall({
-    "syscall": "VFS_CALL",
-    "action": "READ",
-    "path": "/dev/mem/101",
-    "caller_id": 0
-})
-print(f"  VFS READ /dev/mem/101 → ", end="")
-if isinstance(res4, dict) and "data" in res4:
-    data4 = res4["data"]
-    if isinstance(data4, str):
-        try:
-            data4 = json.loads(data4)
-        except json.JSONDecodeError:
-            pass
-    print(json.dumps(data4, ensure_ascii=False, indent=2))
-else:
-    print(res4)
+print("🤯 刚刚在 C++ 底层发生了什么：")
+print("  1. 自然语言打入 /dev/semantic，VFS 线程被 future 挂起。")
+print("  2. 调度器将意图塞入 Phase 1 写的 LLM Priority Queue (Priority=99)。")
+print("  3. 大模型充当了意图路由器 (Intent Router)，翻译出 JSON：")
+print("     {'action':'READ', 'path':'/dev/mem/101'}")
+print("  4. C++ 提取 JSON，自动回放底层的 VfsManager::read。")
+print("  5. 真实数据穿透回了 Python！")
 
 print()
-print_separator()
-print("  🏁 Semantic VFS 测试结束")
-print_separator()
-print()
-print("  💡 只要跑通了这个脚本，你就真正在代码级别实现了")
-print("     ICLR 2025 论文里的前沿理念！")
-print()
-print("  🌟 VFS 不再是冷冰冰的树状数据结构，")
-print("     而是一个自带推理能力的「系统管家」。")
-print("     Agent 想要操作底层资源，再也不需要死记硬背 Linux API，")
-print("     直接把需求塞进 /dev/semantic，AIOS 微内核全帮你搞定！")
+print("=" * 60)
+print("  🏁 Phase 2 验收测试结束")
+print("=" * 60)

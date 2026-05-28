@@ -22,7 +22,8 @@ enum class VfsNodeType {
     EXECUTABLE,
     DEVICE,
     PIPE,
-    WASM
+    WASM,
+    VECTOR
 };
 
 inline const char* node_type_str(VfsNodeType t) {
@@ -33,6 +34,7 @@ inline const char* node_type_str(VfsNodeType t) {
         case VfsNodeType::DEVICE:     return "DEV";
         case VfsNodeType::PIPE:       return "PIPE";
         case VfsNodeType::WASM:       return "WASM";
+        case VfsNodeType::VECTOR:     return "VEC";
     }
     return "UNKNOWN";
 }

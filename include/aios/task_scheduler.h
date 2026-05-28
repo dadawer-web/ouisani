@@ -4,6 +4,7 @@
 #include "aios/device_driver.h"
 #include "aios/llm_adapter.h"
 #include "aios/memory_manager.h"
+#include "aios/scheduler_strategy.h"
 #include "aios/thread_pool.h"
 
 #include <atomic>
@@ -27,13 +28,6 @@ constexpr int PRIORITY_QUEUE_COUNT = 3;
 
 using ResponseCallback = std::function<void(int fd, const std::string& response)>;
 
-struct LlmTaskCompare {
-    bool operator()(const std::shared_ptr<AgentTask>& a,
-                    const std::shared_ptr<AgentTask>& b) const {
-        return a->priority < b->priority;
-    }
-};
-
 class TaskScheduler {
 public:
     TaskScheduler(size_t dispatch_threads,
@@ -56,6 +50,7 @@ public:
 
     void register_driver(const std::string& name, std::shared_ptr<DeviceDriver> driver);
     void set_response_callback(ResponseCallback cb);
+    void set_strategy(std::shared_ptr<ISchedulerStrategy> strategy);
 
     size_t pending_count() const;
     size_t active_io_count() const;
@@ -81,11 +76,7 @@ private:
 
     std::queue<std::shared_ptr<AgentTask>> queues_[PRIORITY_QUEUE_COUNT];
 
-    std::priority_queue<
-        std::shared_ptr<AgentTask>,
-        std::vector<std::shared_ptr<AgentTask>>,
-        LlmTaskCompare
-    > llm_queue_;
+    std::shared_ptr<ISchedulerStrategy> strategy_;
     mutable std::mutex llm_mutex_;
     std::condition_variable llm_cv_;
     std::thread llm_worker_thread_;

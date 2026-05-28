@@ -3,6 +3,8 @@
 #include "aios/agent_task.h"
 #include "aios/instruction_decoder.h"
 
+#include <nlohmann/json.hpp>
+
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -16,10 +18,17 @@
 namespace aios {
 
 class ThreadPool;
+class SyscallServer;
 
 struct PendingResponse {
     int fd;
     std::string data;
+};
+
+class ISyscallHandler {
+public:
+    virtual ~ISyscallHandler() = default;
+    virtual void handle(int fd, int caller_id, const nlohmann::json& req, SyscallServer* server) = 0;
 };
 
 class SyscallServer {
@@ -36,6 +45,7 @@ public:
                   uint16_t port = 8080);
 
     void set_submit_llm_fn(SubmitLlmFn fn);
+    void register_handler(const std::string& name, std::shared_ptr<ISyscallHandler> handler);
     ~SyscallServer();
 
     SyscallServer(const SyscallServer&) = delete;
@@ -46,6 +56,11 @@ public:
     void enqueue_response(int fd, const std::string& response);
 
     uint16_t port() const { return port_; }
+
+    SubmitTaskFn submit_fn() const { return submit_fn_; }
+    SubmitLlmFn submit_llm_fn() const { return submit_llm_fn_; }
+    CancelTaskFn cancel_fn() const { return cancel_fn_; }
+    PingHeartbeatFn ping_fn() const { return ping_fn_; }
 
 private:
     void io_loop();
@@ -66,6 +81,8 @@ private:
     PingHeartbeatFn ping_fn_;
     std::string host_;
     uint16_t port_;
+
+    std::unordered_map<std::string, std::shared_ptr<ISyscallHandler>> handlers_;
 
     int listen_fd_{-1};
     int epoll_fd_{-1};

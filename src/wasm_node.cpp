@@ -1,4 +1,5 @@
 #include "aios/wasm_node.h"
+#include "aios/event_bus.h"
 #include "aios/kernel_logger.h"
 #include "aios/llm_adapter.h"
 
@@ -392,6 +393,9 @@ std::string WasmNode::execute_with_fds(const std::string& payload,
                                         int override_stdin_fd,
                                         int override_stdout_fd) {
     std::lock_guard<std::mutex> lock(exec_mutex_);
+
+    EventBus::instance().publish(EventType::WASM_EXEC_START, "WasmNode",
+        "Executing " + wasm_file_path_);
 
     std::string wasm_file = wasm_file_path_;
     std::string func_name_str = "_start";
@@ -852,6 +856,8 @@ std::string WasmNode::execute_with_fds(const std::string& payload,
             std::fprintf(stderr, "\033[31m[Ring 0 | Trap] 捕获到沙盒硬件异常: %s\033[0m\n",
                          trap_detail.c_str());
             KernelLogger::instance().log("[Ring 0 | Trap] 捕获到沙盒硬件异常: " + trap_detail);
+            EventBus::instance().publish(EventType::WASM_TRAP, "WasmNode",
+                "Trap in " + wasm_file + ": " + trap_detail);
         }
     }
 
@@ -893,6 +899,8 @@ std::string WasmNode::execute_with_fds(const std::string& payload,
         result_json["trap"] = trap_detail;
         std::fprintf(stderr, "[WasmNode] TRAP | func=%s | detail=%s\n",
                      func_name_str.c_str(), trap_detail.c_str());
+        EventBus::instance().publish(EventType::WASM_TRAP, "WasmNode",
+            "Trap result in " + wasm_file + " func=" + func_name_str + ": " + trap_detail);
     }
 
     return result_json.dump();

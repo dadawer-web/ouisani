@@ -1,8 +1,10 @@
 #include "aios/syscall_server.h"
 #include "aios/agent_registry.h"
+#include "aios/event_bus.h"
 #include "aios/instruction_decoder.h"
 #include "aios/process_manager.h"
 #include "aios/thread_pool.h"
+#include "aios/vector_node.h"
 #include "aios/vfs_manager.h"
 #include "aios/wasm_node.h"
 
@@ -31,6 +33,170 @@ static void notify_eventfd(int efd) {
     (void)ret;
 }
 
+class VfsSyscallHandler : public ISyscallHandler {
+public:
+    void handle(int fd, int caller_id, const nlohmann::json& req, SyscallServer* server) override {
+        auto& registry = AgentRegistry::instance();
+        std::string action = req.value("action", "");
+        std::string vfs_path = req.value("path", "");
+        std::string payload = req.value("payload", "");
+        int agent_id = req.value("agent_id", caller_id);
+
+        if (action == "READ" || action == "WRITE" || action == "TREE") {
+            if (vfs_path.find("/dev/mem/") == 0) {
+                int target_id = -1;
+                try {
+                    target_id = std::stoi(vfs_path.substr(9));
+                } catch(...) {}
+
+                auto caller_level = registry.get_level(caller_id);
+
+                if (target_id != -1 && target_id != caller_id
+                    && caller_level != PrivilegeLevel::RING_0) {
+                    std::printf("[Kernel Security] 拦截! Agent %d 试图越权访问 Agent %d 的内存空间 (%s)!\n",
+                                caller_id, target_id, vfs_path.c_str());
+                    nlohmann::json err;
+                    err["status"] = "error";
+                    err["message"] = "[Segfault] Permission denied: Cross-agent VFS access forbidden by Kernel";
+                    server->enqueue_response(fd, err.dump() + "\n");
+                    return;
+                }
+            }
+        }
+
+        if (action.empty()) {
+            server->enqueue_response(fd, "{\"status\":\"error\",\"message\":\"VFS_CALL requires 'action'\"}\n");
+            return;
+        }
+
+        if (action != "COMPILE_AND_EXECUTE" && action != "PIPE_EXECUTE" && vfs_path.empty()) {
+            server->enqueue_response(fd, "{\"status\":\"error\",\"message\":\"VFS_CALL requires 'path' for this action\"}\n");
+            return;
+        }
+
+        if (action == "LIST") {
+            auto& vfs = VfsManager::instance();
+            std::string listing = vfs.list_dir(vfs_path);
+            nlohmann::json resp;
+            resp["status"] = "ok";
+            resp["data"] = listing;
+            server->enqueue_response(fd, resp.dump() + "\n");
+            return;
+        }
+
+        if (action == "TREE") {
+            auto& vfs = VfsManager::instance();
+            std::string tree_str = vfs.tree(vfs_path);
+            nlohmann::json resp;
+            resp["status"] = "ok";
+            resp["data"] = tree_str;
+            server->enqueue_response(fd, resp.dump() + "\n");
+            return;
+        }
+
+        if (action == "SEARCH") {
+            auto& vfs = VfsManager::instance();
+            auto node = vfs.resolve_path(vfs_path);
+            if (!node) {
+                nlohmann::json err;
+                err["status"] = "error";
+                err["message"] = "VFS path not found: " + vfs_path;
+                server->enqueue_response(fd, err.dump() + "\n");
+                return;
+            }
+            auto vec_node = std::dynamic_pointer_cast<aios::VectorNode>(node);
+            if (!vec_node) {
+                nlohmann::json err;
+                err["status"] = "error";
+                err["message"] = "VFS node is not a VectorNode: " + vfs_path;
+                server->enqueue_response(fd, err.dump() + "\n");
+                return;
+            }
+            int top_k = req.value("top_k", 3);
+            std::string result = vec_node->search(payload, top_k);
+            nlohmann::json resp;
+            resp["status"] = "ok";
+            resp["results"] = nlohmann::json::parse(result, nullptr, false);
+            server->enqueue_response(fd, resp.dump() + "\n");
+            return;
+        }
+
+        if (action == "READ" && vfs_path == "/proc/events") {
+            std::string events = aios::EventBus::instance().dump_events();
+            nlohmann::json resp;
+            resp["status"] = "ok";
+            resp["events"] = nlohmann::json::parse(events, nullptr, false);
+            server->enqueue_response(fd, resp.dump() + "\n");
+            return;
+        }
+
+        std::shared_ptr<AgentTask> task;
+
+        if (action == "COMPILE_ONLY") {
+            if (vfs_path.empty()) {
+                nlohmann::json err;
+                err["status"] = "error";
+                err["message"] = "COMPILE_ONLY requires 'path' (target .wasm save path)";
+                server->enqueue_response(fd, err.dump() + "\n");
+                return;
+            }
+            task = std::make_shared<AgentTask>(
+                agent_id, 0, TaskStatus::READY,
+                payload, TaskType::VFS_CALL, "COMPILE_ONLY", vfs_path, fd
+            );
+        } else if (action == "EXECUTE_MODULE") {
+            if (vfs_path.empty()) {
+                nlohmann::json err;
+                err["status"] = "error";
+                err["message"] = "EXECUTE_MODULE requires 'path' (.wasm file to execute)";
+                server->enqueue_response(fd, err.dump() + "\n");
+                return;
+            }
+            task = std::make_shared<AgentTask>(
+                agent_id, 0, TaskStatus::READY,
+                payload, TaskType::VFS_CALL, "EXECUTE_MODULE", vfs_path, fd
+            );
+        } else {
+            task = std::make_shared<AgentTask>(
+                agent_id, 0, TaskStatus::READY,
+                payload, TaskType::VFS_CALL, "", payload, fd
+            );
+            task->tool_name = action;
+            task->tool_code = vfs_path;
+        }
+
+        if (task && server->submit_fn()) {
+            server->submit_fn()(std::move(task));
+        }
+    }
+};
+
+class LlmSyscallHandler : public ISyscallHandler {
+public:
+    void handle(int fd, int caller_id, const nlohmann::json& req, SyscallServer* server) override {
+        int priority = req.value("priority", 0);
+        std::string payload = req.value("payload", req.value("data", ""));
+
+        auto task = std::make_shared<AgentTask>(
+            caller_id, priority, TaskStatus::READY,
+            payload, TaskType::LLM_INFERENCE, "", "", fd
+        );
+
+        task->set_response_callback([server](int cb_fd, const std::string& res) {
+            server->enqueue_response(cb_fd, res);
+        });
+
+        std::printf("[Reactor] LLM_INFERENCE | agent=%d | priority=%d | payload=%zu bytes\n",
+                    caller_id, priority, payload.size());
+
+        if (server->submit_llm_fn()) {
+            server->submit_llm_fn()(std::move(task));
+        } else if (server->submit_fn()) {
+            server->submit_fn()(std::move(task));
+        }
+    }
+};
+
 SyscallServer::SyscallServer(SubmitTaskFn submit_fn,
                              CancelTaskFn cancel_fn,
                              PingHeartbeatFn ping_fn,
@@ -42,7 +208,10 @@ SyscallServer::SyscallServer(SubmitTaskFn submit_fn,
     , host_(host)
     , port_(port)
     , decode_pool_(std::make_unique<ThreadPool>(2))
-{}
+{
+    register_handler("VFS_CALL", std::make_shared<VfsSyscallHandler>());
+    register_handler("LLM_INFERENCE", std::make_shared<LlmSyscallHandler>());
+}
 
 SyscallServer::~SyscallServer() {
     shutdown();
@@ -50,6 +219,11 @@ SyscallServer::~SyscallServer() {
 
 void SyscallServer::set_submit_llm_fn(SubmitLlmFn fn) {
     submit_llm_fn_ = std::move(fn);
+}
+
+void SyscallServer::register_handler(const std::string& name, std::shared_ptr<ISyscallHandler> handler) {
+    handlers_[name] = std::move(handler);
+    std::printf("[Reactor] Registered syscall handler: %s\n", name.c_str());
 }
 
 void SyscallServer::start() {
@@ -345,6 +519,12 @@ void SyscallServer::parse_and_dispatch(int fd, const std::string& line) {
         ping_fn_(caller_id);
     }
 
+    auto it = handlers_.find(syscall_name);
+    if (it != handlers_.end()) {
+        it->second->handle(fd, caller_id, req, this);
+        return;
+    }
+
     std::shared_ptr<AgentTask> task;
 
     if (syscall_name == "WRITE_MEMORY") {
@@ -403,117 +583,6 @@ void SyscallServer::parse_and_dispatch(int fd, const std::string& line) {
             action, TaskType::PROCESS_CTRL, action, "", fd
         );
         task->tool_name = action;
-    } else if (syscall_name == "VFS_CALL") {
-        std::string action = req.value("action", "");
-        std::string vfs_path = req.value("path", "");
-        std::string payload = req.value("payload", "");
-
-        if (action == "READ" || action == "WRITE" || action == "TREE") {
-            if (vfs_path.find("/dev/mem/") == 0) {
-                int target_id = -1;
-                try {
-                    target_id = std::stoi(vfs_path.substr(9));
-                } catch(...) {}
-
-                auto caller_level = registry.get_level(caller_id);
-
-                if (target_id != -1 && target_id != caller_id
-                    && caller_level != PrivilegeLevel::RING_0) {
-                    std::printf("[Kernel Security] 拦截! Agent %d 试图越权访问 Agent %d 的内存空间 (%s)!\n",
-                                caller_id, target_id, vfs_path.c_str());
-                    nlohmann::json err;
-                    err["status"] = "error";
-                    err["message"] = "[Segfault] Permission denied: Cross-agent VFS access forbidden by Kernel";
-                    enqueue_response(fd, err.dump() + "\n");
-                    return;
-                }
-            }
-        }
-
-        if (action.empty()) {
-            enqueue_response(fd, "{\"status\":\"error\",\"message\":\"VFS_CALL requires 'action'\"}\n");
-            return;
-        }
-
-        if (action != "COMPILE_AND_EXECUTE" && action != "PIPE_EXECUTE" && vfs_path.empty()) {
-            enqueue_response(fd, "{\"status\":\"error\",\"message\":\"VFS_CALL requires 'path' for this action\"}\n");
-            return;
-        }
-
-        if (action == "LIST") {
-            auto& vfs = VfsManager::instance();
-            std::string listing = vfs.list_dir(vfs_path);
-            nlohmann::json resp;
-            resp["status"] = "ok";
-            resp["data"] = listing;
-            enqueue_response(fd, resp.dump() + "\n");
-            return;
-        }
-
-        if (action == "TREE") {
-            auto& vfs = VfsManager::instance();
-            std::string tree_str = vfs.tree(vfs_path);
-            nlohmann::json resp;
-            resp["status"] = "ok";
-            resp["data"] = tree_str;
-            enqueue_response(fd, resp.dump() + "\n");
-            return;
-        }
-
-        if (action == "COMPILE_ONLY") {
-            if (vfs_path.empty()) {
-                nlohmann::json err;
-                err["status"] = "error";
-                err["message"] = "COMPILE_ONLY requires 'path' (target .wasm save path)";
-                enqueue_response(fd, err.dump() + "\n");
-                return;
-            }
-            task = std::make_shared<AgentTask>(
-                agent_id, 0, TaskStatus::READY,
-                payload, TaskType::VFS_CALL, "COMPILE_ONLY", vfs_path, fd
-            );
-        } else if (action == "EXECUTE_MODULE") {
-            if (vfs_path.empty()) {
-                nlohmann::json err;
-                err["status"] = "error";
-                err["message"] = "EXECUTE_MODULE requires 'path' (.wasm file to execute)";
-                enqueue_response(fd, err.dump() + "\n");
-                return;
-            }
-            task = std::make_shared<AgentTask>(
-                agent_id, 0, TaskStatus::READY,
-                payload, TaskType::VFS_CALL, "EXECUTE_MODULE", vfs_path, fd
-            );
-        } else {
-            task = std::make_shared<AgentTask>(
-                agent_id, 0, TaskStatus::READY,
-                payload, TaskType::VFS_CALL, "", payload, fd
-            );
-            task->tool_name = action;
-            task->tool_code = vfs_path;
-        }
-    } else if (syscall_name == "LLM_INFERENCE") {
-        int priority = req.value("priority", 0);
-        std::string payload = req.value("payload", req.value("data", ""));
-
-        auto task = std::make_shared<AgentTask>(
-            caller_id, priority, TaskStatus::READY,
-            payload, TaskType::LLM_INFERENCE, "", "", fd
-        );
-
-        task->set_response_callback([this](int cb_fd, const std::string& res) {
-            enqueue_response(cb_fd, res);
-        });
-
-        std::printf("[Reactor] LLM_INFERENCE | agent=%d | priority=%d | payload=%zu bytes\n",
-                    caller_id, priority, payload.size());
-
-        if (submit_llm_fn_) {
-            submit_llm_fn_(std::move(task));
-        } else if (submit_fn_) {
-            submit_fn_(std::move(task));
-        }
-        return;
     } else if (syscall_name == "EXECUTE_TOOL" || syscall_name == "EXECUTE_TASK") {
         int priority = req.value("priority", 1);
         std::string tool_name = req.value("tool_name", "");

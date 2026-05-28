@@ -2,6 +2,7 @@
 #include "aios/agent_registry.h"
 #include "aios/cache_manager.h"
 #include "aios/compiler_bridge.h"
+#include "aios/event_bus.h"
 #include "aios/kernel_logger.h"
 #include "aios/semantic_node.h"
 #include "aios/process_manager.h"
@@ -54,7 +55,8 @@ TaskScheduler::TaskScheduler(size_t dispatch_threads,
                              size_t io_threads,
                              std::shared_ptr<LlmAdapter> llm,
                              std::shared_ptr<MemoryManager> memory_mgr)
-    : dispatch_pool_(dispatch_threads > 0 ? dispatch_threads : 2)
+    : strategy_(std::make_shared<PrioritySchedulerStrategy>())
+    , dispatch_pool_(dispatch_threads > 0 ? dispatch_threads : 2)
     , io_pool_(io_threads > 0 ? io_threads : 4)
     , wasm_pool_(std::make_unique<ThreadPool>(2))
     , llm_(std::move(llm))
@@ -90,10 +92,12 @@ void TaskScheduler::submit(std::shared_ptr<AgentTask> task) {
 
 void TaskScheduler::submit_llm(std::shared_ptr<AgentTask> task) {
     if (!task) return;
+    EventBus::instance().publish(EventType::LLM_REQ_START, "Scheduler",
+        "Agent " + std::to_string(task->agent_id) + " LLM task queued (priority=" + std::to_string(task->priority) + ")");
     {
         std::lock_guard<std::mutex> lock(llm_mutex_);
         task->status = TaskStatus::READY;
-        llm_queue_.push(std::move(task));
+        strategy_->push(std::move(task));
     }
     llm_cv_.notify_one();
 }
@@ -276,6 +280,11 @@ void TaskScheduler::set_response_callback(ResponseCallback cb) {
     response_cb_ = std::move(cb);
 }
 
+void TaskScheduler::set_strategy(std::shared_ptr<ISchedulerStrategy> strategy) {
+    std::lock_guard<std::mutex> lock(llm_mutex_);
+    strategy_ = std::move(strategy);
+}
+
 size_t TaskScheduler::pending_count() const {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     size_t total = 0;
@@ -300,7 +309,7 @@ std::string TaskScheduler::GetSystemStat() const {
     }
     {
         std::lock_guard<std::mutex> lock(llm_mutex_);
-        llm_q = llm_queue_.size();
+        llm_q = strategy_->size();
     }
 
     nlohmann::json j;
@@ -530,19 +539,18 @@ void TaskScheduler::llm_worker_loop() {
         {
             std::unique_lock<std::mutex> lock(llm_mutex_);
             llm_cv_.wait(lock, [this] {
-                return !llm_queue_.empty() || !running_.load();
+                return !strategy_->is_empty() || !running_.load();
             });
 
-            if (!running_.load() && llm_queue_.empty()) {
+            if (!running_.load() && strategy_->is_empty()) {
                 break;
             }
 
-            if (llm_queue_.empty()) {
+            if (strategy_->is_empty()) {
                 continue;
             }
 
-            task = llm_queue_.top();
-            llm_queue_.pop();
+            task = strategy_->pop();
         }
 
         if (!task) continue;
@@ -579,6 +587,9 @@ void TaskScheduler::llm_worker_loop() {
 
         std::printf("[LLM Scheduler] Agent=%d LLM_INFERENCE complete | result=%zu bytes\n",
                     task->agent_id, result.size());
+
+        EventBus::instance().publish(EventType::LLM_REQ_END, "Scheduler",
+            "Agent " + std::to_string(task->agent_id) + " LLM task finished (result=" + std::to_string(result.size()) + " bytes)");
 
         if (task->response_callback_) {
             nlohmann::json resp_data;
@@ -1880,13 +1891,17 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
 
         std::string content = node->read();
         std::printf("[VFS] READ %s -> %zu bytes\n", vfs_path.c_str(), content.size());
-        if (response_cb_) {
+        {
             nlohmann::json resp_data;
             resp_data["path"] = vfs_path;
             resp_data["content"] = content;
             resp_data["type"] = node_type_str(node->node_type());
-            response_cb_(task->client_fd,
-                make_response(true, "VFS READ completed", resp_data.dump()));
+            auto resp_str = make_response(true, "VFS READ completed", resp_data.dump());
+            if (task->response_callback_) {
+                task->response_callback_(task->client_fd, resp_str);
+            } else if (response_cb_) {
+                response_cb_(task->client_fd, resp_str);
+            }
         }
     } else if (action == "WRITE") {
         if (node->node_type() == VfsNodeType::PIPE) {
@@ -1916,21 +1931,13 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
         auto semantic = std::dynamic_pointer_cast<SemanticNode>(node);
         if (semantic) {
             std::string semantic_result = semantic->last_result();
-            if (response_cb_) {
-                auto parsed = nlohmann::json::parse(semantic_result, nullptr, false);
-                if (!parsed.is_discarded()) {
-                    response_cb_(task->client_fd,
-                        make_response(ok, ok ? "Semantic VFS operation completed" : "Semantic VFS operation failed",
-                                      semantic_result));
-                } else {
-                    nlohmann::json resp_data;
-                    resp_data["path"] = vfs_path;
-                    resp_data["written"] = ok;
-                    resp_data["semantic_result"] = semantic_result;
-                    response_cb_(task->client_fd,
-                        make_response(ok, ok ? "Semantic VFS operation completed" : "Semantic VFS operation failed",
-                                      resp_data.dump()));
-                }
+            auto resp_str = make_response(ok,
+                ok ? "Semantic VFS operation completed" : "Semantic VFS operation failed",
+                semantic_result);
+            if (task->response_callback_) {
+                task->response_callback_(task->client_fd, resp_str);
+            } else if (response_cb_) {
+                response_cb_(task->client_fd, resp_str);
             }
         } else if (response_cb_) {
             nlohmann::json resp_data;
