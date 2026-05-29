@@ -27,6 +27,7 @@ void EventBus::publish(EventType type, const std::string& source, const std::str
         case EventType::WASM_EXEC_START: color = "\033[33m"; break;
         case EventType::WASM_TRAP:       color = "\033[31m"; break;
         case EventType::AGENT_SPAWN:     color = "\033[35m"; break;
+        case EventType::AGENT_EXIT:      color = "\033[31m"; break;
         case EventType::VFS_WRITE:       color = "\033[34m"; break;
     }
     const char* reset = "\033[0m";

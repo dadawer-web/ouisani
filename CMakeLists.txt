@@ -34,6 +34,12 @@ add_executable(aios_core
     src/mcp_server.cpp
     src/vector_node.cpp
     src/event_bus.cpp
+    src/llm_router.cpp
+    src/http_node.cpp
+    src/token_mmu.cpp
+    src/process_manager.cpp
+    src/module_manager.cpp
+    src/openai_server.cpp
 )
 
 target_include_directories(aios_core PRIVATE

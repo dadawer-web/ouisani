@@ -8,6 +8,7 @@ namespace aios {
 
 enum class EventType {
     AGENT_SPAWN,
+    AGENT_EXIT,
     LLM_REQ_START,
     LLM_REQ_END,
     WASM_EXEC_START,
@@ -18,6 +19,7 @@ enum class EventType {
 inline const char* event_type_str(EventType t) {
     switch (t) {
         case EventType::AGENT_SPAWN:    return "AGENT_SPAWN";
+        case EventType::AGENT_EXIT:     return "AGENT_EXIT";
         case EventType::LLM_REQ_START:  return "LLM_REQ_START";
         case EventType::LLM_REQ_END:    return "LLM_REQ_END";
         case EventType::WASM_EXEC_START:return "WASM_EXEC_START";

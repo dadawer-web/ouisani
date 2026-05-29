@@ -5,6 +5,9 @@
 #include "aios/instruction_decoder.h"
 #include "aios/kernel_logger.h"
 #include "aios/llm_adapter.h"
+#include "aios/llm_provider.h"
+#include "aios/llm_router.h"
+#include "aios/http_node.h"
 #include "aios/mcp_server.h"
 #include "aios/memory_manager.h"
 #include "aios/sandbox_driver.h"
@@ -16,6 +19,8 @@
 #include "aios/vfs_node.h"
 #include "aios/wasm_node.h"
 #include "aios/process_manager.h"
+#include "aios/module_manager.h"
+#include "aios/openai_server.h"
 #include "aios/semantic_node.h"
 #include "aios/vector_node.h"
 #include "aios/event_bus.h"
@@ -179,6 +184,12 @@ int main(int argc, char* argv[]) {
     auto vec_mem_101 = std::make_shared<aios::VectorNode>("/dev/vec_mem_101", llm);
     vfs.mount("/dev", "vec_mem_101", vec_mem_101);
 
+    auto dev_net = std::make_shared<aios::DirectoryNode>("/dev/net");
+    vfs.mount("/dev", "net", dev_net);
+
+    auto http_node = std::make_shared<aios::HttpNode>("/dev/net/http");
+    vfs.mount("/dev/net", "http", http_node);
+
     auto tmp = std::make_shared<aios::DirectoryNode>("/tmp");
     vfs.mount("/", "tmp", tmp);
     auto pipes = std::make_shared<aios::DirectoryNode>("/tmp/pipes");
@@ -224,7 +235,13 @@ int main(int argc, char* argv[]) {
 
     scheduler->set_strategy(std::make_shared<aios::PrioritySchedulerStrategy>());
 
+    auto& router = aios::LlmRouter::instance();
+    router.register_provider(std::make_shared<aios::LocalOllamaProvider>());
+    router.register_provider(std::make_shared<aios::CloudGptProvider>(llm));
+
     scheduler->start();
+
+    aios::ModuleManager::instance().init("./usr_lib_wasm");
 
     server.start();
 
@@ -239,6 +256,11 @@ int main(int argc, char* argv[]) {
     );
     std::thread mcp_thread([&mcp_server]() {
         mcp_server.start();
+    });
+
+    aios::OpenAiServer openai_server(8082);
+    std::thread openai_thread([&openai_server]() {
+        openai_server.start();
     });
 
     std::printf("[Main] AIOS Core is running (Checkpointing & Hibernation)\n");
@@ -257,6 +279,7 @@ int main(int argc, char* argv[]) {
     std::printf("[Main] Module Store: COMPILE_ONLY / EXECUTE_MODULE (LRU cache=%zu)\n", (size_t)16);
     std::printf("[Main] LLM Scheduler: Priority-driven LLM_INFERENCE queue (dedicated worker thread)\n");
     std::printf("[Main] MCP Server: 127.0.0.1:8081 (JSON-RPC 2.0 / Model Context Protocol)\n");
+    std::printf("[Main] OpenAI API: 127.0.0.1:8082 (/v1/chat/completions compatible gateway)\n");
     std::printf("[Main] Decoder: %s | UDS: %s\n",
                 decoder_ok ? "VIA DAEMON (UDS)" : "DISABLED",
                 decoder_sock.c_str());
@@ -267,6 +290,10 @@ int main(int argc, char* argv[]) {
     }
 
     std::printf("\n[Main] Signal received, shutting down...\n");
+    openai_server.shutdown();
+    if (openai_thread.joinable()) {
+        openai_thread.join();
+    }
     mcp_server.shutdown();
     if (mcp_thread.joinable()) {
         mcp_thread.join();

@@ -1,12 +1,59 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <future>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 
 namespace aios {
+
+enum class AgentState {
+    RUNNING,
+    BLOCKED,
+    ZOMBIE,
+    TERMINATED
+};
+
+inline const char* agent_state_str(AgentState s) {
+    switch (s) {
+        case AgentState::RUNNING:     return "RUNNING";
+        case AgentState::BLOCKED:     return "BLOCKED";
+        case AgentState::ZOMBIE:      return "ZOMBIE";
+        case AgentState::TERMINATED:  return "TERMINATED";
+    }
+    return "UNKNOWN";
+}
+
+struct ProcessControlBlock {
+    int agent_id;
+    int parent_id;
+    AgentState state;
+    std::string exit_result;
+    std::string role;
+    std::promise<std::string> exit_promise;
+    std::shared_future<std::string> exit_future;
+
+    int ring_level = 3;
+    size_t memory_used = 0;
+    int syscall_count = 0;
+    std::chrono::system_clock::time_point created_at;
+    std::chrono::system_clock::time_point last_active_time;
+
+    ProcessControlBlock()
+        : agent_id(0), parent_id(0), state(AgentState::RUNNING)
+        , exit_future(exit_promise.get_future().share())
+        , created_at(std::chrono::system_clock::now())
+        , last_active_time(std::chrono::system_clock::now()) {}
+
+    ProcessControlBlock(int aid, int pid, const std::string& r)
+        : agent_id(aid), parent_id(pid), state(AgentState::RUNNING), role(r)
+        , exit_future(exit_promise.get_future().share())
+        , created_at(std::chrono::system_clock::now())
+        , last_active_time(std::chrono::system_clock::now()) {}
+};
 
 enum class ProcessState {
     RUNNING,
@@ -26,94 +73,37 @@ struct AgentProcess {
 
 class ProcessManager {
 public:
-    static ProcessManager& instance() {
-        static ProcessManager inst;
-        return inst;
-    }
+    static ProcessManager& instance();
 
-    void register_process(int pid, int ring_level = 3) {
-        std::lock_guard<std::mutex> lock(mu_);
-        if (ptable_.find(pid) == ptable_.end()) {
-            auto now = std::chrono::system_clock::now();
-            ptable_[pid] = {pid, ProcessState::SLEEPING, ring_level, 0, 0, now, now};
-        }
-    }
+    int spawn(int parent_id, const std::string& role);
+    std::string wait(int child_id);
+    void exit(int agent_id, const std::string& result);
 
-    void record_syscall(int pid) {
-        std::lock_guard<std::mutex> lock(mu_);
-        auto it = ptable_.find(pid);
-        if (it != ptable_.end()) {
-            it->second.syscall_count++;
-            it->second.state = ProcessState::RUNNING;
-            it->second.last_active_time = std::chrono::system_clock::now();
-        }
-    }
+    void register_process(int pid, int ring_level = 3);
+    void record_syscall(int pid);
+    void touch_active_time(int pid);
+    void set_sleeping(int pid);
+    void set_zombie(int pid);
+    void add_memory(int pid, size_t bytes);
 
-    void touch_active_time(int pid) {
-        std::lock_guard<std::mutex> lock(mu_);
-        auto it = ptable_.find(pid);
-        if (it != ptable_.end()) {
-            it->second.last_active_time = std::chrono::system_clock::now();
-        }
-    }
+    std::string generate_proc_agents();
+    std::unordered_map<int, AgentProcess> get_ptable();
 
-    void set_sleeping(int pid) {
-        std::lock_guard<std::mutex> lock(mu_);
-        auto it = ptable_.find(pid);
-        if (it != ptable_.end()) {
-            it->second.state = ProcessState::SLEEPING;
-        }
-    }
+    std::shared_ptr<ProcessControlBlock> get_pcb(int agent_id);
 
-    void set_zombie(int pid) {
-        std::lock_guard<std::mutex> lock(mu_);
-        auto it = ptable_.find(pid);
-        if (it != ptable_.end()) {
-            it->second.state = ProcessState::ZOMBIE;
-        }
-    }
-
-    void add_memory(int pid, size_t bytes) {
-        std::lock_guard<std::mutex> lock(mu_);
-        auto it = ptable_.find(pid);
-        if (it != ptable_.end()) {
-            it->second.memory_used += bytes;
-        }
-    }
-
-    std::string generate_proc_agents() {
-        std::lock_guard<std::mutex> lock(mu_);
-        std::string out = "PID\tRING\tSTATE\tSYSCALLS\tMEM(KB)\tUPTIME(s)\tIDLE(s)\n";
-        auto now = std::chrono::system_clock::now();
-        for (const auto& [pid, pcb] : ptable_) {
-            auto uptime = std::chrono::duration_cast<std::chrono::seconds>(now - pcb.created_at).count();
-            auto idle = std::chrono::duration_cast<std::chrono::seconds>(now - pcb.last_active_time).count();
-            const char* state_str = "S";
-            if (pcb.state == ProcessState::RUNNING) state_str = "R";
-            else if (pcb.state == ProcessState::ZOMBIE) state_str = "Z";
-            out += std::to_string(pid) + "\t" +
-                   std::to_string(pcb.ring_level) + "\t" +
-                   state_str + "\t" +
-                   std::to_string(pcb.syscall_count) + "\t" +
-                   std::to_string(pcb.memory_used / 1024) + "\t" +
-                   std::to_string(uptime) + "\t" +
-                   std::to_string(idle) + "\n";
-        }
-        return out;
-    }
-
-    std::unordered_map<int, AgentProcess> get_ptable() {
-        std::lock_guard<std::mutex> lock(mu_);
-        return ptable_;
-    }
-
-private:
-    ProcessManager() = default;
     ProcessManager(const ProcessManager&) = delete;
     ProcessManager& operator=(const ProcessManager&) = delete;
 
-    std::unordered_map<int, AgentProcess> ptable_;
+private:
+    ProcessManager() = default;
+
+    void sync_legacy(int agent_id);
+
+    std::unordered_map<int, std::shared_ptr<ProcessControlBlock>> process_table_;
+    std::atomic<int> next_pid_{1000};
     std::mutex mu_;
+
+    std::unordered_map<int, AgentProcess> ptable_;
 };
 
 } // namespace aios

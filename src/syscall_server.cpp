@@ -2,6 +2,7 @@
 #include "aios/agent_registry.h"
 #include "aios/event_bus.h"
 #include "aios/instruction_decoder.h"
+#include "aios/module_manager.h"
 #include "aios/process_manager.h"
 #include "aios/thread_pool.h"
 #include "aios/vector_node.h"
@@ -570,6 +571,56 @@ void SyscallServer::parse_and_dispatch(int fd, const std::string& line) {
         nlohmann::json resp;
         resp["status"] = "ok";
         resp["message"] = "CANCEL_TASK sent for agent " + std::to_string(target_agent);
+        enqueue_response(fd, resp.dump() + "\n");
+    } else if (syscall_name == "AGENT_SPAWN") {
+        std::string role = req.value("role", req.value("payload", ""));
+        int child_id = ProcessManager::instance().spawn(caller_id, role);
+        nlohmann::json resp;
+        resp["status"] = "ok";
+        resp["child_id"] = child_id;
+        resp["parent_id"] = caller_id;
+        resp["role"] = role;
+        enqueue_response(fd, resp.dump() + "\n");
+    } else if (syscall_name == "AGENT_WAIT") {
+        int child_id = req.value("child_id", req.value("agent_id", -1));
+        if (child_id < 0) {
+            nlohmann::json err;
+            err["status"] = "error";
+            err["message"] = "AGENT_WAIT requires 'child_id'";
+            enqueue_response(fd, err.dump() + "\n");
+            return;
+        }
+        std::string result = ProcessManager::instance().wait(child_id);
+        nlohmann::json resp;
+        resp["status"] = "ok";
+        resp["child_id"] = child_id;
+        resp["data"] = result;
+        enqueue_response(fd, resp.dump() + "\n");
+    } else if (syscall_name == "AGENT_EXIT") {
+        std::string exit_result = req.value("payload", req.value("result", ""));
+        ProcessManager::instance().exit(caller_id, exit_result);
+        nlohmann::json resp;
+        resp["status"] = "ok";
+        resp["agent_id"] = caller_id;
+        enqueue_response(fd, resp.dump() + "\n");
+    } else if (syscall_name == "TOOL_DISCOVER") {
+        std::string tools_json = ModuleManager::instance().discover_tools();
+        nlohmann::json resp;
+        resp["status"] = "ok";
+        resp["data"] = nlohmann::json::parse(tools_json, nullptr, false);
+        enqueue_response(fd, resp.dump() + "\n");
+    } else if (syscall_name == "TOOL_CALL") {
+        std::string tool_name = req.value("tool_name", req.value("name", ""));
+        std::string args = req.value("args", req.value("payload", ""));
+        if (tool_name.empty()) {
+            nlohmann::json err;
+            err["status"] = "error";
+            err["message"] = "TOOL_CALL requires 'tool_name'";
+            enqueue_response(fd, err.dump() + "\n");
+            return;
+        }
+        std::string result = ModuleManager::instance().call_tool(tool_name, args);
+        nlohmann::json resp = nlohmann::json::parse(result, nullptr, false);
         enqueue_response(fd, resp.dump() + "\n");
     } else if (syscall_name == "PROCESS_CTRL") {
         std::string action = req.value("action", "");

@@ -4,9 +4,11 @@
 #include "aios/compiler_bridge.h"
 #include "aios/event_bus.h"
 #include "aios/kernel_logger.h"
+#include "aios/llm_router.h"
 #include "aios/semantic_node.h"
 #include "aios/process_manager.h"
 #include "aios/security_guard.h"
+#include "aios/token_mmu.h"
 #include "aios/vfs_manager.h"
 #include "aios/vfs_node.h"
 #include "aios/wasm_node.h"
@@ -572,13 +574,28 @@ void TaskScheduler::llm_worker_loop() {
 
         std::string result;
         try {
-            if (llm_ && llm_->has_api_key()) {
-                auto messages = build_messages(task->agent_id, task->task_payload);
+            TokenMmu::instance().add_context(task->agent_id, task->task_payload);
+
+            std::string safe_prompt = TokenMmu::instance().get_active_context(task->agent_id);
+
+            std::string recovered = TokenMmu::instance().page_fault_recovery(task->agent_id, task->task_payload);
+            if (!recovered.empty()) {
+                safe_prompt = recovered + safe_prompt;
+                std::printf("[TokenMMU] Agent %d | Page Fault Recovery injected into prompt | + %zu bytes\n",
+                            task->agent_id, recovered.size());
+            }
+
+            if (LlmRouter::instance().has_providers()) {
+                result = LlmRouter::instance().route_and_execute(safe_prompt);
+            } else if (llm_ && llm_->has_api_key()) {
+                auto messages = build_messages(task->agent_id, safe_prompt);
                 result = llm_->generate("", messages);
             } else {
                 std::this_thread::sleep_for(std::chrono::seconds(2));
-                result = "[LLM Kernel Response] Processed: " + task->task_payload;
+                result = "[LLM Kernel Response] Processed: " + safe_prompt;
             }
+
+            TokenMmu::instance().add_context(task->agent_id, result);
         } catch (const std::exception& e) {
             std::printf("[LLM Scheduler] Agent=%d LLM inference exception: %s\n",
                         task->agent_id, e.what());
