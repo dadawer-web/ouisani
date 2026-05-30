@@ -17,6 +17,8 @@ public:
 
     std::string call_tool(const std::string& tool_name, const std::string& json_args);
 
+    std::string reload(const std::string& tool_name = "");
+
     ModuleManager(const ModuleManager&) = delete;
     ModuleManager& operator=(const ModuleManager&) = delete;
 

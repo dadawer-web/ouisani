@@ -12,7 +12,8 @@ enum class TaskStatus {
     RUNNING,
     WAITING,
     SUSPENDED,
-    CANCELLED
+    CANCELLED,
+    OOM_KILLED
 };
 
 enum class TaskType {
@@ -41,6 +42,9 @@ struct AgentTask {
     std::string content;
     std::string keyword;
 
+    int gas_limit;
+    int gas_used;
+
     std::shared_ptr<std::atomic<bool>> is_cancelled;
 
     using ResponseCallback = std::function<void(int fd, const std::string& response)>;
@@ -59,6 +63,8 @@ struct AgentTask {
         , tool_name(std::move(tname))
         , tool_code(std::move(tcode))
         , client_fd(fd)
+        , gas_limit(10000)
+        , gas_used(0)
         , is_cancelled(std::make_shared<std::atomic<bool>>(false))
     {}
 

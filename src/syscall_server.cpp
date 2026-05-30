@@ -97,7 +97,7 @@ public:
 
         if (action == "SEARCH") {
             auto& vfs = VfsManager::instance();
-            auto node = vfs.resolve_path(vfs_path);
+            auto node = vfs.resolve_path(vfs_path, caller_id);
             if (!node) {
                 nlohmann::json err;
                 err["status"] = "error";
@@ -366,7 +366,33 @@ void SyscallServer::io_loop() {
             }
 
             if (evts & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
-                close_client(fd);
+                if (remote_fwd_.count(fd)) {
+                    close_remote(fd);
+                } else {
+                    close_client(fd);
+                }
+                continue;
+            }
+
+            if (remote_fwd_.count(fd)) {
+                if (evts & EPOLLOUT) {
+                    auto& fwd = remote_fwd_[fd];
+                    if (!fwd.connected) {
+                        fwd.connected = true;
+                        std::printf("[RemoteFwd] fd=%d connected to %s:%u\n",
+                                    fd, remote_host_.c_str(), remote_port_);
+                        mod_fd(fd, EPOLLIN | EPOLLRDHUP);
+                        if (!fwd.write_buf.empty()) {
+                            ssize_t n = ::write(fd, fwd.write_buf.data(), fwd.write_buf.size());
+                            if (n > 0) {
+                                fwd.write_buf.erase(0, static_cast<size_t>(n));
+                            }
+                        }
+                    }
+                }
+                if (evts & EPOLLIN) {
+                    handle_remote_response(fd);
+                }
                 continue;
             }
 
@@ -380,6 +406,7 @@ void SyscallServer::io_loop() {
         }
 
         drain_response_queue();
+        check_remote_timeouts();
     }
 
     running_.store(false);
@@ -511,6 +538,12 @@ void SyscallServer::parse_and_dispatch(int fd, const std::string& line) {
     auto& registry = AgentRegistry::instance();
     registry.ensure_registered(caller_id);
 
+    if (caller_id >= 2000) {
+        std::printf("[Reactor] Remote agent detected: caller_id=%d >= 2000 → forwarding\n", caller_id);
+        forward_to_remote(fd, caller_id, line);
+        return;
+    }
+
     auto& proc_mgr = ProcessManager::instance();
     proc_mgr.register_process(caller_id,
         registry.get_level(caller_id) == PrivilegeLevel::RING_0 ? 0 : 3);
@@ -621,6 +654,11 @@ void SyscallServer::parse_and_dispatch(int fd, const std::string& line) {
         }
         std::string result = ModuleManager::instance().call_tool(tool_name, args);
         nlohmann::json resp = nlohmann::json::parse(result, nullptr, false);
+        enqueue_response(fd, resp.dump() + "\n");
+    } else if (syscall_name == "TOOL_INSTALL") {
+        std::string tool_name = req.value("tool_name", req.value("payload", ""));
+        std::string reload_result = ModuleManager::instance().reload(tool_name);
+        nlohmann::json resp = nlohmann::json::parse(reload_result, nullptr, false);
         enqueue_response(fd, resp.dump() + "\n");
     } else if (syscall_name == "PROCESS_CTRL") {
         std::string action = req.value("action", "");
@@ -922,6 +960,168 @@ void SyscallServer::dispatch_flat(int fd, const FlatCommand& cmd, const std::str
     if (task) {
         submit_fn_(task);
     }
+}
+
+void SyscallServer::forward_to_remote(int original_fd, int caller_id, const std::string& payload) {
+    std::printf("[RemoteFwd] Agent %d >= 2000, forwarding to remote %s:%u\n",
+                caller_id, remote_host_.c_str(), remote_port_);
+
+    int remote_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    if (remote_fd < 0) {
+        std::printf("[RemoteFwd] socket() failed: %s\n", std::strerror(errno));
+        enqueue_response(original_fd,
+            "{\"status\":\"error\",\"message\":\"Remote forward: socket creation failed\"}\n");
+        return;
+    }
+
+    int nodelay = 1;
+    setsockopt(remote_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+
+    struct timeval tv{};
+    tv.tv_sec = REMOTE_TIMEOUT_SEC;
+    tv.tv_usec = 0;
+    setsockopt(remote_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    setsockopt(remote_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    sockaddr_in remote_addr{};
+    remote_addr.sin_family = AF_INET;
+    remote_addr.sin_port = htons(remote_port_);
+    inet_pton(AF_INET, remote_host_.c_str(), &remote_addr.sin_addr);
+
+    int ret = connect(remote_fd, reinterpret_cast<sockaddr*>(&remote_addr), sizeof(remote_addr));
+    if (ret < 0 && errno != EINPROGRESS) {
+        std::printf("[RemoteFwd] connect() failed: %s\n", std::strerror(errno));
+        close(remote_fd);
+        enqueue_response(original_fd,
+            "{\"status\":\"error\",\"message\":\"Remote forward: connect failed to " +
+            remote_host_ + ":" + std::to_string(remote_port_) + "\"}\n");
+        return;
+    }
+
+    RemoteForward fwd;
+    fwd.original_fd = original_fd;
+    fwd.caller_id = caller_id;
+    fwd.connect_time = std::chrono::steady_clock::now();
+    fwd.connected = (ret == 0);
+    fwd.write_buf = payload + "\n";
+    remote_fwd_[remote_fd] = std::move(fwd);
+
+    epoll_event ev{};
+    if (ret == 0) {
+        ev.events = EPOLLIN | EPOLLRDHUP;
+        ssize_t n = ::write(remote_fd, remote_fwd_[remote_fd].write_buf.data(),
+                            remote_fwd_[remote_fd].write_buf.size());
+        if (n > 0) {
+            remote_fwd_[remote_fd].write_buf.erase(0, static_cast<size_t>(n));
+        }
+    } else {
+        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+    }
+    ev.data.fd = remote_fd;
+
+    if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, remote_fd, &ev) < 0) {
+        std::printf("[RemoteFwd] epoll_ctl(ADD remote_fd=%d) failed: %s\n",
+                    remote_fd, std::strerror(errno));
+        close(remote_fd);
+        remote_fwd_.erase(remote_fd);
+        enqueue_response(original_fd,
+            "{\"status\":\"error\",\"message\":\"Remote forward: epoll register failed\"}\n");
+        return;
+    }
+
+    std::printf("[RemoteFwd] Registered remote_fd=%d in epoll | caller=%d | target=%s:%u\n",
+                remote_fd, caller_id, remote_host_.c_str(), remote_port_);
+}
+
+void SyscallServer::handle_remote_response(int remote_fd) {
+    auto it = remote_fwd_.find(remote_fd);
+    if (it == remote_fwd_.end()) {
+        close_remote(remote_fd);
+        return;
+    }
+
+    char buf[8192];
+    std::string response;
+    while (true) {
+        ssize_t n = ::read(remote_fd, buf, sizeof(buf));
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+            close_remote(remote_fd);
+            return;
+        }
+        if (n == 0) {
+            int original_fd = it->second.original_fd;
+            int caller_id = it->second.caller_id;
+
+            if (response.empty()) {
+                response = "{\"status\":\"error\",\"message\":\"Remote node closed connection with empty response\"}";
+            }
+
+            std::printf("[RemoteFwd] Remote fd=%d closed | caller=%d | response=%zu bytes\n",
+                        remote_fd, caller_id, response.size());
+
+            close_remote(remote_fd);
+
+            if (!response.empty() && response.back() != '\n') {
+                response += '\n';
+            }
+            enqueue_response(original_fd, response);
+            return;
+        }
+        response.append(buf, static_cast<size_t>(n));
+    }
+
+    if (!response.empty()) {
+        size_t newline = response.find('\n');
+        if (newline != std::string::npos) {
+            std::string complete = response.substr(0, newline + 1);
+            int original_fd = it->second.original_fd;
+            int caller_id = it->second.caller_id;
+
+            std::printf("[RemoteFwd] Complete response from remote | caller=%d | %zu bytes\n",
+                        caller_id, complete.size());
+
+            close_remote(remote_fd);
+            enqueue_response(original_fd, complete);
+        }
+    }
+}
+
+void SyscallServer::check_remote_timeouts() {
+    auto now = std::chrono::steady_clock::now();
+    std::vector<int> timed_out;
+
+    for (auto& [remote_fd, fwd] : remote_fwd_) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            now - fwd.connect_time).count();
+        if (elapsed > REMOTE_TIMEOUT_SEC) {
+            std::printf("[RemoteFwd] TIMEOUT | remote_fd=%d | caller=%d | elapsed=%lds > %ds\n",
+                        remote_fd, fwd.caller_id, elapsed, REMOTE_TIMEOUT_SEC);
+            timed_out.push_back(remote_fd);
+        }
+    }
+
+    for (int fd : timed_out) {
+        auto it = remote_fwd_.find(fd);
+        if (it != remote_fwd_.end()) {
+            enqueue_response(it->second.original_fd,
+                "{\"status\":\"error\",\"message\":\"Remote forward timed out (" +
+                std::to_string(REMOTE_TIMEOUT_SEC) + "s)\"}\n");
+        }
+        close_remote(fd);
+    }
+}
+
+void SyscallServer::close_remote(int remote_fd) {
+    auto it = remote_fwd_.find(remote_fd);
+    if (it != remote_fwd_.end()) {
+        std::printf("[RemoteFwd] Closing remote_fd=%d | caller=%d\n",
+                    remote_fd, it->second.caller_id);
+        remote_fwd_.erase(it);
+    }
+
+    epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, remote_fd, nullptr);
+    close(remote_fd);
 }
 
 } // namespace aios

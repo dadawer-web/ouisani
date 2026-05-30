@@ -17,10 +17,13 @@ struct MemoryEntry {
 
 class VectorNode : public VfsNode {
 public:
-    explicit VectorNode(const std::string& path, std::shared_ptr<LlmAdapter> llm = nullptr);
+    explicit VectorNode(const std::string& path, std::shared_ptr<LlmAdapter> llm = nullptr,
+                        int owner_uid = 0, int permissions = 0644);
 
     bool write(const std::string& data) override;
+    bool write_as(const std::string& data, int caller_uid);
     std::string read() const override;
+    std::string read_as(int caller_uid) const;
 
     std::string search(const std::string& query, int top_k = 3);
 

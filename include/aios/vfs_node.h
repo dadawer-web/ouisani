@@ -23,7 +23,8 @@ enum class VfsNodeType {
     DEVICE,
     PIPE,
     WASM,
-    VECTOR
+    VECTOR,
+    CAMERA
 };
 
 inline const char* node_type_str(VfsNodeType t) {
@@ -35,14 +36,15 @@ inline const char* node_type_str(VfsNodeType t) {
         case VfsNodeType::PIPE:       return "PIPE";
         case VfsNodeType::WASM:       return "WASM";
         case VfsNodeType::VECTOR:     return "VEC";
+        case VfsNodeType::CAMERA:     return "CAM";
     }
     return "UNKNOWN";
 }
 
 class VfsNode {
 public:
-    VfsNode(VfsNodeType type, const std::string& path)
-        : node_type_(type), path_(path) {}
+    VfsNode(VfsNodeType type, const std::string& path, int owner_uid = 0, int permissions = 0644)
+        : node_type_(type), path_(path), owner_uid_(owner_uid), permissions_(permissions) {}
     virtual ~VfsNode() = default;
 
     virtual std::string read() const { return ""; }
@@ -52,9 +54,35 @@ public:
     VfsNodeType node_type() const { return node_type_; }
     const std::string& path() const { return path_; }
 
+    int owner_uid() const { return owner_uid_; }
+    void set_owner_uid(int uid) { owner_uid_ = uid; }
+
+    int permissions() const { return permissions_; }
+    void set_permissions(int perm) { permissions_ = perm; }
+
+    bool check_read(int caller_uid) const {
+        if (caller_uid == 0) return true;
+        if (caller_uid == owner_uid_) return (permissions_ & 0400) != 0;
+        return (permissions_ & 0004) != 0;
+    }
+
+    bool check_write(int caller_uid) const {
+        if (caller_uid == 0) return true;
+        if (caller_uid == owner_uid_) return (permissions_ & 0200) != 0;
+        return (permissions_ & 0002) != 0;
+    }
+
+    bool check_execute(int caller_uid) const {
+        if (caller_uid == 0) return true;
+        if (caller_uid == owner_uid_) return (permissions_ & 0100) != 0;
+        return (permissions_ & 0001) != 0;
+    }
+
 protected:
     VfsNodeType node_type_;
     std::string path_;
+    int owner_uid_;
+    int permissions_;
 };
 
 class FileNode : public VfsNode {

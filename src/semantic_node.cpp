@@ -41,7 +41,7 @@ std::string SemanticNode::last_result() const {
 
 std::shared_ptr<VfsNode> SemanticNode::resolve_or_create(const std::string& target_path) {
     auto& vfs = VfsManager::instance();
-    auto node = vfs.resolve_path(target_path);
+    auto node = vfs.resolve_path(target_path, 0);
     if (node) return node;
     return vfs.resolve_or_create_mem(target_path, memory_mgr_);
 }

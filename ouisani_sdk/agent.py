@@ -164,6 +164,27 @@ class _ToolsMixin:
         )
         return resp.get("stdout", resp.get("message", str(resp)))
 
+    def install_tool(self, tool_name: str) -> dict[str, Any]:
+        """Hot-load a newly installed WASM tool into the kernel.
+
+        After using ``aios_apt.py install <tool>`` to place a ``.wasm``
+        file in ``./usr_lib_wasm/``, call this method to tell the
+        kernel to rescan the directory and register the new tool
+        without restarting.
+
+        Args:
+            tool_name: Name of the tool to hot-load (e.g. ``"math_tool"``).
+
+        Returns:
+            Kernel response with the updated tool list.
+        """
+        resp = self._kernel.syscall(
+            "TOOL_INSTALL",
+            payload=tool_name,
+            caller_id=self._agent_id,
+        )
+        return resp
+
 
 class Agent:
     """High-level Agent abstraction for the AIOS kernel.

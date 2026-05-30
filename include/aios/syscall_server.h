@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -75,6 +76,11 @@ private:
     FlatCommand keyword_route(const std::string& input);
     void dispatch_flat(int fd, const FlatCommand& cmd, const std::string& original_text);
 
+    void forward_to_remote(int original_fd, int caller_id, const std::string& payload);
+    void handle_remote_response(int remote_fd);
+    void check_remote_timeouts();
+    void close_remote(int remote_fd);
+
     SubmitTaskFn submit_fn_;
     SubmitLlmFn submit_llm_fn_;
     CancelTaskFn cancel_fn_;
@@ -98,6 +104,19 @@ private:
         std::string write_buf;
     };
     std::unordered_map<int, ClientConn> clients_;
+
+    struct RemoteForward {
+        int original_fd;
+        int caller_id;
+        std::chrono::steady_clock::time_point connect_time;
+        std::string write_buf;
+        bool connected;
+    };
+    std::unordered_map<int, RemoteForward> remote_fwd_;
+
+    std::string remote_host_ = "127.0.0.1";
+    uint16_t remote_port_ = 9080;
+    static constexpr int REMOTE_TIMEOUT_SEC = 30;
 
     std::mutex response_mutex_;
     std::queue<PendingResponse> response_queue_;

@@ -19,6 +19,7 @@
 #include "aios/vfs_node.h"
 #include "aios/wasm_node.h"
 #include "aios/process_manager.h"
+#include "aios/camera_node.h"
 #include "aios/module_manager.h"
 #include "aios/openai_server.h"
 #include "aios/semantic_node.h"
@@ -181,7 +182,7 @@ int main(int argc, char* argv[]) {
     );
     vfs.mount("/dev", "semantic", semantic_dev);
 
-    auto vec_mem_101 = std::make_shared<aios::VectorNode>("/dev/vec_mem_101", llm);
+    auto vec_mem_101 = std::make_shared<aios::VectorNode>("/dev/vec_mem_101", llm, 101, 0600);
     vfs.mount("/dev", "vec_mem_101", vec_mem_101);
 
     auto dev_net = std::make_shared<aios::DirectoryNode>("/dev/net");
@@ -189,6 +190,9 @@ int main(int argc, char* argv[]) {
 
     auto http_node = std::make_shared<aios::HttpNode>("/dev/net/http");
     vfs.mount("/dev/net", "http", http_node);
+
+    auto camera0 = std::make_shared<aios::CameraNode>("/dev/camera0");
+    vfs.mount("/dev", "camera0", camera0);
 
     auto tmp = std::make_shared<aios::DirectoryNode>("/tmp");
     vfs.mount("/", "tmp", tmp);

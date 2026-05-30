@@ -31,11 +31,11 @@ void TokenMmu::kswapd(int agent_id) {
         swap_count++;
 
         std::string vec_path = "/dev/vec_mem_" + std::to_string(agent_id);
-        auto node = VfsManager::instance().resolve_path(vec_path);
+        auto node = VfsManager::instance().resolve_path(vec_path, 0);
         if (node) {
             auto vec_node = std::dynamic_pointer_cast<VectorNode>(node);
             if (vec_node) {
-                vec_node->write(popped);
+                vec_node->write_as(popped, 0);
             }
         }
 
@@ -90,7 +90,7 @@ std::string TokenMmu::get_active_context(int agent_id) const {
 
 std::string TokenMmu::page_fault_recovery(int agent_id, const std::string& query, int top_k) const {
     std::string vec_path = "/dev/vec_mem_" + std::to_string(agent_id);
-    auto node = VfsManager::instance().resolve_path(vec_path);
+    auto node = VfsManager::instance().resolve_path(vec_path, 0);
     if (!node) return "";
 
     auto vec_node = std::dynamic_pointer_cast<VectorNode>(node);

@@ -11,6 +11,7 @@
 #include "aios/token_mmu.h"
 #include "aios/vfs_manager.h"
 #include "aios/vfs_node.h"
+#include "aios/vector_node.h"
 #include "aios/wasm_node.h"
 
 #include <chrono>
@@ -566,8 +567,41 @@ void TaskScheduler::llm_worker_loop() {
         task->status = TaskStatus::RUNNING;
         total_tasks_executed_.fetch_add(1);
 
-        std::printf("[LLM Scheduler] Processing LLM_INFERENCE | agent=%d | priority=%d | payload=\"%s\"\n",
+        if (task->gas_limit > 0 && task->gas_used >= task->gas_limit) {
+            std::printf("[LLM Scheduler] ⛽ GAS EXHAUSTED | Agent=%d | gas_used=%d >= gas_limit=%d → OOM_KILLED\n",
+                        task->agent_id, task->gas_used, task->gas_limit);
+            task->status = TaskStatus::OOM_KILLED;
+            task->cancel();
+            KernelLogger::instance().log(
+                "[SIGKILL] Agent " + std::to_string(task->agent_id) +
+                " OOM_KILLED: gas exhausted (used=" + std::to_string(task->gas_used) +
+                ", limit=" + std::to_string(task->gas_limit) + ")");
+            EventBus::instance().publish(EventType::LLM_REQ_END, "Scheduler",
+                "Agent " + std::to_string(task->agent_id) + " OOM_KILLED (gas exhausted)");
+            if (task->response_callback_) {
+                nlohmann::json err;
+                err["status"] = "error";
+                err["message"] = "OOM_KILLED: gas limit exhausted (" +
+                                 std::to_string(task->gas_used) + "/" +
+                                 std::to_string(task->gas_limit) + ")";
+                task->response_callback_(task->client_fd, err.dump() + "\n");
+            } else if (response_cb_) {
+                nlohmann::json err;
+                err["status"] = "error";
+                err["message"] = "OOM_KILLED: gas limit exhausted";
+                response_cb_(task->client_fd, err.dump() + "\n");
+            }
+            {
+                std::lock_guard<std::mutex> lock(active_mutex_);
+                auto& vec = active_tasks_[task->agent_id];
+                vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+            }
+            continue;
+        }
+
+        std::printf("[LLM Scheduler] Processing LLM_INFERENCE | agent=%d | priority=%d | gas=%d/%d | payload=\"%s\"\n",
                     task->agent_id, task->priority,
+                    task->gas_used, task->gas_limit,
                     task->task_payload.size() > 80
                         ? (task->task_payload.substr(0, 80) + "...").c_str()
                         : task->task_payload.c_str());
@@ -596,6 +630,45 @@ void TaskScheduler::llm_worker_loop() {
             }
 
             TokenMmu::instance().add_context(task->agent_id, result);
+
+            int prompt_tokens = static_cast<int>(task->task_payload.size()) / 4;
+            int completion_tokens = static_cast<int>(result.size()) / 4;
+            int total_cost = prompt_tokens + completion_tokens;
+            task->gas_used += total_cost;
+
+            std::printf("[LLM Scheduler] ⛽ Gas deduction | Agent=%d | prompt=%d + completion=%d = %d tokens | gas: %d/%d\n",
+                        task->agent_id, prompt_tokens, completion_tokens, total_cost,
+                        task->gas_used, task->gas_limit);
+
+            if (task->gas_limit > 0 && task->gas_used >= task->gas_limit) {
+                std::printf("[LLM Scheduler] ⛽ GAS EXHAUSTED after LLM call | Agent=%d | gas_used=%d >= gas_limit=%d\n",
+                            task->agent_id, task->gas_used, task->gas_limit);
+                task->status = TaskStatus::OOM_KILLED;
+                task->cancel();
+                KernelLogger::instance().log(
+                    "[SIGKILL] Agent " + std::to_string(task->agent_id) +
+                    " OOM_KILLED after LLM: gas exhausted (used=" + std::to_string(task->gas_used) +
+                    ", limit=" + std::to_string(task->gas_limit) + ")");
+                EventBus::instance().publish(EventType::LLM_REQ_END, "Scheduler",
+                    "Agent " + std::to_string(task->agent_id) + " OOM_KILLED (gas exhausted after LLM)");
+                if (task->response_callback_) {
+                    nlohmann::json err;
+                    err["status"] = "error";
+                    err["message"] = "OOM_KILLED: gas limit exhausted after LLM call";
+                    task->response_callback_(task->client_fd, err.dump() + "\n");
+                } else if (response_cb_) {
+                    nlohmann::json err;
+                    err["status"] = "error";
+                    err["message"] = "OOM_KILLED: gas limit exhausted after LLM call";
+                    response_cb_(task->client_fd, err.dump() + "\n");
+                }
+                {
+                    std::lock_guard<std::mutex> lock(active_mutex_);
+                    auto& vec = active_tasks_[task->agent_id];
+                    vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+                }
+                continue;
+            }
         } catch (const std::exception& e) {
             std::printf("[LLM Scheduler] Agent=%d LLM inference exception: %s\n",
                         task->agent_id, e.what());
@@ -1315,7 +1388,7 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
 
                 std::string mount_path = "/bin/wasm_agent_" + std::to_string(task->agent_id);
                 auto& vfs = VfsManager::instance();
-                auto existing = vfs.resolve_path(mount_path);
+                auto existing = vfs.resolve_path(mount_path, 0);
 
                 std::shared_ptr<WasmNode> wasm_node;
                 if (existing && existing->node_type() == VfsNodeType::WASM) {
@@ -1803,7 +1876,7 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
         return;
     }
 
-    auto node = vfs.resolve_path(vfs_path);
+    auto node = vfs.resolve_path(vfs_path, task->agent_id);
 
     if (!node) {
         node = vfs.resolve_or_create_mem(vfs_path, memory_mgr_);
@@ -1906,7 +1979,20 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
             }
         }
 
-        std::string content = node->read();
+        std::string content;
+        if (node->node_type() == VfsNodeType::VECTOR) {
+            auto vec_node = std::dynamic_pointer_cast<VectorNode>(node);
+            if (vec_node) {
+                content = vec_node->read_as(task->agent_id);
+            } else {
+                content = node->read();
+            }
+        } else if (!node->check_read(task->agent_id)) {
+            content = "[PermissionDenied] uid " + std::to_string(task->agent_id) +
+                      " cannot read " + vfs_path;
+        } else {
+            content = node->read();
+        }
         std::printf("[VFS] READ %s -> %zu bytes\n", vfs_path.c_str(), content.size());
         {
             nlohmann::json resp_data;
@@ -1942,7 +2028,21 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
             }
         }
 
-        bool ok = node->write(payload);
+        bool ok = false;
+        if (node->node_type() == VfsNodeType::VECTOR) {
+            auto vec_node = std::dynamic_pointer_cast<VectorNode>(node);
+            if (vec_node) {
+                ok = vec_node->write_as(payload, task->agent_id);
+            } else {
+                ok = node->write(payload);
+            }
+        } else if (!node->check_write(task->agent_id)) {
+            std::printf("[VFS] WRITE DENIED %s | uid=%d no write permission\n",
+                        vfs_path.c_str(), task->agent_id);
+            ok = false;
+        } else {
+            ok = node->write(payload);
+        }
         std::printf("[VFS] WRITE %s -> %s\n", vfs_path.c_str(), ok ? "ok" : "failed");
 
         auto semantic = std::dynamic_pointer_cast<SemanticNode>(node);

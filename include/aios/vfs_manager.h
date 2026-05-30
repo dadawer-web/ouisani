@@ -50,8 +50,8 @@ public:
     }
 
     bool mount(const std::string& dir_path, const std::string& name,
-               std::shared_ptr<VfsNode> node) {
-        auto parent = resolve_path(dir_path);
+               std::shared_ptr<VfsNode> node, int caller_uid = 0) {
+        auto parent = resolve_path(dir_path, caller_uid);
         if (!parent) {
             std::printf("[VFS] Mount failed: parent path '%s' not found\n", dir_path.c_str());
             return false;
@@ -60,11 +60,16 @@ public:
             std::printf("[VFS] Mount failed: '%s' is not a directory\n", dir_path.c_str());
             return false;
         }
+        if (!parent->check_write(caller_uid)) {
+            std::printf("[VFS] Mount DENIED: uid=%d no write permission on '%s'\n",
+                        caller_uid, dir_path.c_str());
+            return false;
+        }
         auto dir = std::static_pointer_cast<DirectoryNode>(parent);
         return dir->add_child(name, std::move(node));
     }
 
-    std::shared_ptr<VfsNode> resolve_path(const std::string& path) {
+    std::shared_ptr<VfsNode> resolve_path(const std::string& path, int caller_uid = 0) {
         std::shared_lock<std::shared_mutex> lock(global_mutex_);
         if (!initialized_) return nullptr;
         if (path == "/") return root_;
@@ -75,6 +80,11 @@ public:
         std::shared_ptr<VfsNode> current = root_;
         for (const auto& part : parts) {
             if (current->node_type() != VfsNodeType::DIRECTORY) return nullptr;
+            if (!current->check_execute(caller_uid)) {
+                std::printf("[VFS] Permission DENIED: uid=%d cannot traverse '%s'\n",
+                            caller_uid, current->path().c_str());
+                return nullptr;
+            }
             auto dir = std::static_pointer_cast<DirectoryNode>(current);
             current = dir->get_child(part);
             if (!current) return nullptr;

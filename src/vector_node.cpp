@@ -12,8 +12,9 @@
 
 namespace aios {
 
-VectorNode::VectorNode(const std::string& path, std::shared_ptr<LlmAdapter> llm)
-    : VfsNode(VfsNodeType::VECTOR, path), llm_(std::move(llm)) {}
+VectorNode::VectorNode(const std::string& path, std::shared_ptr<LlmAdapter> llm,
+                       int owner_uid, int permissions)
+    : VfsNode(VfsNodeType::VECTOR, path, owner_uid, permissions), llm_(std::move(llm)) {}
 
 std::vector<float> VectorNode::mock_embedding(const std::string& text) const {
     std::vector<float> emb(MOCK_DIM, 0.0f);
@@ -71,15 +72,25 @@ std::vector<float> VectorNode::generate_embedding(const std::string& text) const
 }
 
 bool VectorNode::write(const std::string& data) {
+    return write_as(data, 0);
+}
+
+bool VectorNode::write_as(const std::string& data, int caller_uid) {
     if (data.empty()) return false;
+
+    if (!check_write(caller_uid)) {
+        std::printf("[VectorNode] WRITE DENIED %s | uid=%d is not owner (owner=%d, perm=%04o)\n",
+                    path_.c_str(), caller_uid, owner_uid_, permissions_);
+        return false;
+    }
 
     auto embedding = generate_embedding(data);
 
     std::lock_guard<std::mutex> lock(mutex_);
     memories_.push_back({data, std::move(embedding)});
 
-    std::printf("[VectorNode] WRITE %s | memories=%zu | text=\"%s\"\n",
-                path_.c_str(), memories_.size(),
+    std::printf("[VectorNode] WRITE %s | uid=%d | memories=%zu | text=\"%s\"\n",
+                path_.c_str(), caller_uid, memories_.size(),
                 data.size() > 60 ? (data.substr(0, 60) + "...").c_str() : data.c_str());
 
     EventBus::instance().publish(EventType::VFS_WRITE, "VectorNode",
@@ -89,6 +100,17 @@ bool VectorNode::write(const std::string& data) {
 }
 
 std::string VectorNode::read() const {
+    return read_as(0);
+}
+
+std::string VectorNode::read_as(int caller_uid) const {
+    if (!check_read(caller_uid)) {
+        std::printf("[VectorNode] READ DENIED %s | uid=%d is not owner (owner=%d, perm=%04o)\n",
+                    path_.c_str(), caller_uid, owner_uid_, permissions_);
+        return "[PermissionDenied] uid " + std::to_string(caller_uid) +
+               " cannot read " + path_;
+    }
+
     std::lock_guard<std::mutex> lock(mutex_);
     nlohmann::json arr = nlohmann::json::array();
     for (const auto& m : memories_) {

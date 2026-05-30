@@ -97,6 +97,74 @@ std::string ModuleManager::discover_tools() {
     return result;
 }
 
+std::string ModuleManager::reload(const std::string& tool_name) {
+    std::lock_guard<std::mutex> lock(mu_);
+
+    if (!initialized_) {
+        const_cast<ModuleManager*>(this)->init();
+    }
+
+    int new_count = 0;
+    int updated_count = 0;
+
+    try {
+        if (!std::filesystem::exists(lib_dir_)) {
+            std::filesystem::create_directories(lib_dir_);
+        }
+
+        for (const auto& entry : std::filesystem::directory_iterator(lib_dir_)) {
+            if (!entry.is_regular_file()) continue;
+            std::string filename = entry.path().filename().string();
+
+            if (filename.size() > 5 && filename.substr(filename.size() - 5) == ".wasm") {
+                std::string name = filename.substr(0, filename.size() - 5);
+
+                if (!tool_name.empty() && name != tool_name) continue;
+
+                std::string abs_path = std::filesystem::canonical(entry.path()).string();
+
+                if (!is_path_safe(entry.path())) {
+                    std::printf("[ModuleManager] SECURITY: Path traversal blocked for %s\n",
+                                abs_path.c_str());
+                    continue;
+                }
+
+                auto it = available_tools_.find(name);
+                if (it == available_tools_.end()) {
+                    available_tools_[name] = abs_path;
+                    new_count++;
+                    std::printf("[ModuleManager] 🔧 Hot-loaded new tool: %s -> %s\n",
+                                name.c_str(), abs_path.c_str());
+                } else if (it->second != abs_path) {
+                    it->second = abs_path;
+                    updated_count++;
+                    std::printf("[ModuleManager] 🔄 Updated tool: %s -> %s\n",
+                                name.c_str(), abs_path.c_str());
+                }
+            }
+        }
+    } catch (const std::filesystem::filesystem_error& e) {
+        std::printf("[ModuleManager] Filesystem error during reload: %s\n", e.what());
+    }
+
+    nlohmann::json result;
+    result["status"] = "ok";
+    result["new_tools"] = new_count;
+    result["updated_tools"] = updated_count;
+    result["total_tools"] = available_tools_.size();
+
+    nlohmann::json tools_arr = nlohmann::json::array();
+    for (const auto& [name, path] : available_tools_) {
+        tools_arr.push_back({{"name", name}, {"path", path}});
+    }
+    result["tools"] = tools_arr;
+
+    std::printf("[ModuleManager] reload() | new=%d | updated=%d | total=%zu\n",
+                new_count, updated_count, available_tools_.size());
+
+    return result.dump();
+}
+
 std::string ModuleManager::call_tool(const std::string& tool_name, const std::string& json_args) {
     std::string wasm_path;
     {

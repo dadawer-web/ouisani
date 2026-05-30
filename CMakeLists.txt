@@ -40,6 +40,7 @@ add_executable(aios_core
     src/process_manager.cpp
     src/module_manager.cpp
     src/openai_server.cpp
+    src/camera_node.cpp
 )
 
 target_include_directories(aios_core PRIVATE
