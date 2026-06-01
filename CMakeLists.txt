@@ -33,14 +33,25 @@ add_executable(aios_core
     src/semantic_node.cpp
     src/mcp_server.cpp
     src/vector_node.cpp
+    src/graph_node.cpp
+    src/audio_node.cpp
+    src/security_guard.cpp
+    src/bpf_manager.cpp
     src/event_bus.cpp
     src/llm_router.cpp
     src/http_node.cpp
     src/token_mmu.cpp
     src/process_manager.cpp
+    src/cgroup_manager.cpp
+    src/token_zram.cpp
+    src/crash_analyzer.cpp
+    src/trace_manager.cpp
+    src/kexec_manager.cpp
     src/module_manager.cpp
     src/openai_server.cpp
     src/camera_node.cpp
+    src/webhook_node.cpp
+    src/display_node.cpp
 )
 
 target_include_directories(aios_core PRIVATE

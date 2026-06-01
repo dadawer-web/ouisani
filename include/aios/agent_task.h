@@ -13,7 +13,8 @@ enum class TaskStatus {
     WAITING,
     SUSPENDED,
     CANCELLED,
-    OOM_KILLED
+    OOM_KILLED,
+    CRASHED
 };
 
 enum class TaskType {
@@ -44,6 +45,11 @@ struct AgentTask {
 
     int gas_limit;
     int gas_used;
+
+    std::string stdin_path;
+    std::string stdout_path;
+
+    std::string root_dir;
 
     std::shared_ptr<std::atomic<bool>> is_cancelled;
 

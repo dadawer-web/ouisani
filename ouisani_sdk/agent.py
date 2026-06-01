@@ -121,6 +121,70 @@ class _SemanticMixin:
         )
 
 
+class _GraphMixin:
+    """Knowledge graph sub-module (GraphFS)."""
+
+    def __init__(self, kernel: Kernel, agent_id: int) -> None:
+        self._kernel = kernel
+        self._agent_id = agent_id
+        self._path = "/dev/graph0"
+
+    def ingest(self, text: str) -> dict[str, Any]:
+        """Write text into the graph, auto-extracting knowledge triples.
+
+        The kernel calls LLM to extract [Subject|Relation|Object] triples
+        from the text and inserts them into the GraphNode.
+
+        Args:
+            text: Text containing knowledge to extract.
+
+        Returns:
+            Kernel response.
+        """
+        return self._kernel.syscall(
+            "VFS_CALL",
+            action="WRITE",
+            path=self._path,
+            payload=text,
+            caller_id=self._agent_id,
+        )
+
+    def query(self, entity: str, depth: int = 2) -> dict[str, Any]:
+        """Query the knowledge graph for a subgraph around an entity.
+
+        Performs BFS from the given entity and returns all entities
+        and edges within the specified depth.
+
+        Args:
+            entity: Starting entity name.
+            depth: BFS traversal depth (default 2).
+
+        Returns:
+            Kernel response with subgraph data.
+        """
+        return self._kernel.syscall(
+            "VFS_CALL",
+            action="GRAPH_QUERY",
+            path=self._path,
+            payload=entity,
+            caller_id=self._agent_id,
+            depth=depth,
+        )
+
+    def debug(self) -> dict[str, Any]:
+        """Export the full knowledge graph as JSON for visualization.
+
+        Returns:
+            Kernel response with all entities and edges.
+        """
+        return self._kernel.syscall(
+            "VFS_CALL",
+            action="DEBUG_GRAPH",
+            path=self._path,
+            caller_id=self._agent_id,
+        )
+
+
 class _ToolsMixin:
     """Dynamic tool linking sub-module (OS-level dlopen)."""
 
@@ -186,6 +250,64 @@ class _ToolsMixin:
         return resp
 
 
+class _DisplayMixin:
+    """UI display sub-module (framebuffer render via /dev/fb0)."""
+
+    def __init__(self, kernel: Kernel, agent_id: int) -> None:
+        self._kernel = kernel
+        self._agent_id = agent_id
+
+    def render(self, ui_json: dict[str, Any]) -> dict[str, Any]:
+        """Render a UI frame to the display bus (``write()`` on ``/dev/fb0``).
+
+        The JSON payload is written into the kernel's DisplayNode ring
+        buffer.  Any connected SSE client (``GET /ui/stream``) will
+        receive the frame as a ``data: ...`` event in real time.
+
+        Args:
+            ui_json: Arbitrary JSON-serialisable dict representing a
+                UI frame (e.g. dashboard widgets, text cards, progress
+                bars, etc.).
+
+        Returns:
+            Kernel response.
+        """
+        return self._kernel.syscall(
+            "VFS_CALL",
+            action="WRITE",
+            path="/dev/fb0",
+            payload=json.dumps(ui_json),
+            caller_id=self._agent_id,
+        )
+
+
+class _InterruptMixin:
+    """External interrupt (IRQ) sub-module (webhook-driven events)."""
+
+    def __init__(self, kernel: Kernel, agent_id: int) -> None:
+        self._kernel = kernel
+        self._agent_id = agent_id
+
+    def wait_for_webhook(self) -> str:
+        """Block until an external webhook IRQ arrives (Unix ``read()`` on IRQ device).
+
+        Reads from ``/dev/irq/webhook0`` in the kernel VFS.  The call
+        blocks the current thread until an external HTTP POST to
+        ``/webhook/trigger`` injects a payload into the WebhookNode's
+        event queue, which wakes up this reader via ``condition_variable``.
+
+        Returns:
+            The payload string that was injected by the webhook.
+        """
+        resp = self._kernel.syscall(
+            "VFS_CALL",
+            action="READ",
+            path="/dev/irq/webhook0",
+            caller_id=self._agent_id,
+        )
+        return resp.get("data", resp.get("message", str(resp)))
+
+
 class Agent:
     """High-level Agent abstraction for the AIOS kernel.
 
@@ -225,7 +347,10 @@ class Agent:
         self.sandbox = _SandboxMixin(kernel, agent_id)
         self.memory = _MemoryMixin(kernel, agent_id)
         self.semantic = _SemanticMixin(kernel, agent_id)
+        self.graph = _GraphMixin(kernel, agent_id)
         self.tools = _ToolsMixin(kernel, agent_id)
+        self.irq = _InterruptMixin(kernel, agent_id)
+        self.ui = _DisplayMixin(kernel, agent_id)
 
     def think(self, prompt: str, priority: int = 0) -> dict[str, Any]:
         """Invoke LLM inference through the kernel scheduler.
@@ -247,16 +372,33 @@ class Agent:
             caller_id=self.agent_id,
         )
 
-    def spawn(self, role: str, initial_prompt: str = "") -> Agent:
+    def spawn(
+        self,
+        role: str,
+        initial_prompt: str = "",
+        stdin: str = "",
+        stdout: str = "",
+    ) -> Agent:
         """Fork a child agent process (Unix ``fork()`` semantics).
 
         Creates a new Agent with a kernel-allocated PID, establishing a
         parent-child process tree relationship.
 
+        The ``stdin`` and ``stdout`` parameters configure the child's
+        I/O redirection, analogous to Unix ``dup2``.  When set, the
+        child's LLM inference results will automatically read input
+        from ``stdin`` and/or write output to ``stdout`` via the VFS.
+
         Args:
             role: Role description for the child agent (e.g. ``"researcher"``).
             initial_prompt: If non-empty, automatically fire a non-blocking
                 ``think()`` call to the child so it starts working immediately.
+            stdin: VFS path to read input from (e.g. ``"/tmp/pipes/agent_101_to_102"``).
+                When the child calls ``think()``, the kernel reads data from
+                this VFS path and prepends it to the LLM prompt.
+            stdout: VFS path to write output to (e.g. ``"/tmp/pipes/agent_102_to_101"``).
+                When the child's LLM inference completes, the kernel writes
+                the result to this VFS path in addition to returning it.
 
         Returns:
             The newly spawned child ``Agent`` object.
@@ -265,6 +407,8 @@ class Agent:
             "AGENT_SPAWN",
             payload=role,
             caller_id=self.agent_id,
+            stdin=stdin,
+            stdout=stdout,
         )
         child_id = resp.get("child_id", -1)
         child = Agent(self.kernel, child_id)
@@ -310,6 +454,44 @@ class Agent:
             "AGENT_EXIT",
             payload=result,
             caller_id=self.agent_id,
+        )
+
+    def migrate(
+        self,
+        target_host: str = "127.0.0.1",
+        target_port: int = 9090,
+    ) -> dict[str, Any]:
+        """Live-migrate this agent to a remote AIOS node.
+
+        Suspends the agent on the local kernel, serializes its PCB and
+        memory pages into a snapshot, then ships the snapshot to the
+        target node where the agent is resurrected.
+
+        The default ``target_port`` (9090) corresponds to the **syscall**
+        port of the destination node.  The actual cluster RPC port is
+        derived as ``target_port + 3`` (i.e. 8083 for port 8080, 9093
+        for port 9090), matching the kernel's ``syscall_port + 3``
+        convention for the HTTP webhook server.
+
+        Args:
+            target_host: IP address of the destination AIOS node.
+            target_port: Syscall port of the destination node
+                (default 9090).  The cluster RPC port is automatically
+                computed as ``target_port + 3``.
+
+        Returns:
+            Response dict from the remote node, including
+            ``migrated_from`` and ``migrated_to`` fields.
+
+        Raises:
+            RuntimeError: If the local AGENT_EXPORT step fails.
+            ConnectionError: If the remote node is unreachable.
+        """
+        cluster_port = target_port + 3
+        return self.kernel.migrate_agent(
+            agent_id=self.agent_id,
+            target_ip=target_host,
+            target_port=cluster_port,
         )
 
     def __repr__(self) -> str:

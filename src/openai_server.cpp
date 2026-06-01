@@ -244,11 +244,20 @@ std::string OpenAiServer::handle_chat_completion(const std::string& body) {
     }
 
     std::string user_content;
+    std::string system_content;
+    std::string all_content;
     if (req.contains("messages") && req["messages"].is_array()) {
         for (auto it = req["messages"].rbegin(); it != req["messages"].rend(); ++it) {
-            if (it->value("role", "") == "user") {
-                user_content = it->value("content", "");
-                break;
+            std::string role = it->value("role", "");
+            std::string content = it->value("content", "");
+            if (role == "user" && user_content.empty()) {
+                user_content = content;
+            }
+            if (role == "system" && system_content.empty()) {
+                system_content = content;
+            }
+            if (!content.empty()) {
+                all_content += content + "\n";
             }
         }
     }
@@ -274,7 +283,7 @@ std::string OpenAiServer::handle_chat_completion(const std::string& body) {
     std::string kernel_result;
     try {
         if (LlmRouter::instance().has_providers()) {
-            kernel_result = LlmRouter::instance().route_and_execute(user_content);
+            kernel_result = LlmRouter::instance().route_and_execute(all_content, system_content, user_content);
         } else {
             kernel_result = "[AIOS Kernel] No LLM providers registered. Echo: " + user_content;
         }

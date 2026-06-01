@@ -1,14 +1,30 @@
 #pragma once
 
+#include <stdexcept>
 #include <future>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace aios {
 
+class AudioNode;
+
 struct ChatMessage {
     std::string role;
     std::string content;
+};
+
+class SemanticPageFaultException : public std::runtime_error {
+public:
+    explicit SemanticPageFaultException(const std::string& keywords)
+        : std::runtime_error("Semantic Page Fault: " + keywords)
+        , keywords_(keywords) {}
+
+    const std::string& keywords() const noexcept { return keywords_; }
+
+private:
+    std::string keywords_;
 };
 
 class LlmAdapter {
@@ -37,6 +53,9 @@ public:
     std::vector<float> get_embedding(const std::string& text);
 
     std::future<std::vector<float>> get_embedding_async(const std::string& text);
+
+    void stream_tts(const std::string& text, std::shared_ptr<AudioNode> pcm_dev,
+                    std::shared_ptr<AudioNode> viseme_dev);
 
     bool is_available() const;
 

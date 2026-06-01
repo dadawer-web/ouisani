@@ -1,9 +1,11 @@
 #include "aios/agent_task.h"
 #include "aios/agent_registry.h"
+#include "aios/bpf_manager.h"
 #include "aios/cache_manager.h"
 #include "aios/env_loader.h"
 #include "aios/instruction_decoder.h"
 #include "aios/kernel_logger.h"
+#include "aios/kexec_manager.h"
 #include "aios/llm_adapter.h"
 #include "aios/llm_provider.h"
 #include "aios/llm_router.h"
@@ -20,16 +22,24 @@
 #include "aios/wasm_node.h"
 #include "aios/process_manager.h"
 #include "aios/camera_node.h"
+#include "aios/webhook_node.h"
+#include "aios/display_node.h"
 #include "aios/module_manager.h"
 #include "aios/openai_server.h"
 #include "aios/semantic_node.h"
 #include "aios/vector_node.h"
+#include "aios/graph_node.h"
+#include "aios/audio_node.h"
+#include "aios/security_guard.h"
 #include "aios/event_bus.h"
+#include "aios/host_source_node.h"
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <fcntl.h>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <signal.h>
 #include <string>
@@ -91,7 +101,16 @@ static void signal_handler(int) {
 }
 
 int main(int argc, char* argv[]) {
-    std::printf("=== AIOS Core v1.8.0 - Checkpointing & Hibernation ===\n\n");
+    bool is_kexec_boot = aios::KexecManager::has_kexec_state(argc, argv);
+    std::string kexec_state_path = aios::KexecManager::get_kexec_state_path(argc, argv);
+
+    if (is_kexec_boot) {
+        std::printf("=== AIOS Core v1.9.0 - KEXEC HOT-SWAP BOOT ===\n\n");
+        std::printf("[Main] ⚡ KEXEC DETECTED — This is a hot-swapped kernel!\n");
+        std::printf("[Main] ⚡ State file: %s\n", kexec_state_path.c_str());
+    } else {
+        std::printf("=== AIOS Core v1.9.0 - Checkpointing & Hibernation ===\n\n");
+    }
 
     static int lock_fd = ::open("/tmp/aios_core.lock", O_CREAT | O_RDWR, 0666);
     if (lock_fd >= 0) {
@@ -144,6 +163,8 @@ int main(int argc, char* argv[]) {
 
     auto scheduler = std::make_shared<aios::TaskScheduler>(4, 8, llm, memory_mgr);
 
+    aios::SecurityGuard::instance().set_llm(llm);
+
     auto sandbox = std::make_shared<aios::SandboxDriver>("http://127.0.0.1:5000", 10);
     scheduler->register_driver("python_sandbox", sandbox);
 
@@ -185,6 +206,20 @@ int main(int argc, char* argv[]) {
     auto vec_mem_101 = std::make_shared<aios::VectorNode>("/dev/vec_mem_101", llm, 101, 0600);
     vfs.mount("/dev", "vec_mem_101", vec_mem_101);
 
+    auto graph0 = std::make_shared<aios::GraphNode>("/dev/graph0", llm, 0, 0666);
+    vfs.mount("/dev", "graph0", graph0);
+
+    auto dev_audio = std::make_shared<aios::DirectoryNode>("/dev/audio");
+    vfs.mount("/dev", "audio", dev_audio);
+
+    auto audio_pcm = std::make_shared<aios::AudioNode>(
+        "/dev/audio/pcm", aios::AudioNode::StreamType::PCM, 0, 0, 0666);
+    vfs.mount("/dev/audio", "pcm", audio_pcm);
+
+    auto audio_visemes = std::make_shared<aios::AudioNode>(
+        "/dev/audio/visemes", aios::AudioNode::StreamType::VISEME, 0, 0, 0666);
+    vfs.mount("/dev/audio", "visemes", audio_visemes);
+
     auto dev_net = std::make_shared<aios::DirectoryNode>("/dev/net");
     vfs.mount("/dev", "net", dev_net);
 
@@ -193,6 +228,14 @@ int main(int argc, char* argv[]) {
 
     auto camera0 = std::make_shared<aios::CameraNode>("/dev/camera0");
     vfs.mount("/dev", "camera0", camera0);
+
+    auto irq_dir = std::make_shared<aios::DirectoryNode>("/dev/irq");
+    vfs.mount("/dev", "irq", irq_dir);
+    auto webhook0 = std::make_shared<aios::WebhookNode>("/dev/irq/webhook0");
+    vfs.mount("/dev/irq", "webhook0", webhook0);
+
+    auto fb0 = std::make_shared<aios::DisplayNode>("/dev/fb0");
+    vfs.mount("/dev", "fb0", fb0);
 
     auto tmp = std::make_shared<aios::DirectoryNode>("/tmp");
     vfs.mount("/", "tmp", tmp);
@@ -206,6 +249,24 @@ int main(int argc, char* argv[]) {
     vfs.mount("/", "var", var_dir);
     auto snapshots_dir = std::make_shared<aios::DirectoryNode>("/var/snapshots");
     vfs.mount("/var", "snapshots", snapshots_dir);
+
+    {
+        std::string project_root = std::filesystem::current_path();
+        std::string src_host = project_root;
+
+        auto usr_dir = std::make_shared<aios::DirectoryNode>("/usr");
+        vfs.mount("/", "usr", usr_dir);
+
+        auto src_dir = std::make_shared<aios::DirectoryNode>("/usr/src");
+        vfs.mount("/usr", "src", src_dir);
+
+        auto aios_src = std::make_shared<aios::HostSourceDirNode>(
+            "/usr/src/aios", src_host, 0, 0555);
+        vfs.mount("/usr/src", "aios", aios_src);
+
+        std::printf("[Main] Host source mounted: /usr/src/aios → %s\n", src_host.c_str());
+        std::printf("[Main] ⚠️  Write access to /usr/src/aios restricted to Ring 0 only\n");
+    }
 
     auto& cache_mgr = aios::CacheManager::instance();
     cache_mgr.set_threshold(0.90f);
@@ -245,6 +306,26 @@ int main(int argc, char* argv[]) {
 
     scheduler->start();
 
+    {
+        std::string default_bpf_path = "./system_bpf/os_default_guard.wasm";
+        std::ifstream bpf_test(default_bpf_path, std::ios::binary);
+        if (bpf_test.is_open()) {
+            bpf_test.close();
+            bool loaded = aios::BpfManager::instance().load_bpf_program(
+                "pre_llm_inference", default_bpf_path, "bpf_filter");
+            if (loaded) {
+                std::printf("[Main] BPF: Default OS guard loaded at pre_llm_inference\n");
+            } else {
+                std::printf("[Main] BPF: Default OS guard load FAILED\n");
+            }
+        } else {
+            std::printf("[Main] BPF: No default guard WASM found at %s\n", default_bpf_path.c_str());
+        }
+    }
+
+    aios::ProcessManager::instance().set_scheduler(scheduler.get());
+    aios::ProcessManager::instance().set_memory_manager(memory_mgr);
+
     aios::ModuleManager::instance().init("./usr_lib_wasm");
 
     server.start();
@@ -262,6 +343,8 @@ int main(int argc, char* argv[]) {
         mcp_server.start();
     });
 
+    server.set_mcp_server(&mcp_server);
+
     aios::OpenAiServer openai_server(8082);
     std::thread openai_thread([&openai_server]() {
         openai_server.start();
@@ -274,11 +357,12 @@ int main(int argc, char* argv[]) {
     std::printf("[Main] Interrupt: CANCEL_TASK + is_cancelled token\n");
     std::printf("[Main] Watchdog: Sandbox timeout=10s | LLM timeout=120s\n");
     std::printf("[Main] Security: Ring 0/3 Privilege + SecurityGuard Code Scanner\n");
+    std::printf("[Main] BPF: OS Default Guard (pre_llm_inference) — malicious intent circuit break\n");
     std::printf("[Main] VFS: /bin/sandbox /bin/wasm_sandbox /proc/version /proc/agent_top /proc/agents /proc/kmsg /dev/mem /dev/semantic /tmp/pipes /var/snapshots\n");
     std::printf("[Main] TLB: Semantic Cache (threshold=0.90, max=1000)\n");
     std::printf("[Main] IPC: PipeNode (blocking read + notify write)\n");
     std::printf("[Main] Checkpoint: SNAPSHOT / RESTORE (process hibernation)\n");
-    std::printf("[Main] Reaper: Zombie detection (30s idle -> SIGKILL)\n");
+    std::printf("[Main] Reaper: Zombie detection (300s idle -> SIGKILL)\n");
     std::printf("[Main] Auto-restore: Scan /tmp/aios_tasks/ on boot\n");
     std::printf("[Main] Module Store: COMPILE_ONLY / EXECUTE_MODULE (LRU cache=%zu)\n", (size_t)16);
     std::printf("[Main] LLM Scheduler: Priority-driven LLM_INFERENCE queue (dedicated worker thread)\n");
@@ -288,6 +372,10 @@ int main(int argc, char* argv[]) {
                 decoder_ok ? "VIA DAEMON (UDS)" : "DISABLED",
                 decoder_sock.c_str());
     std::printf("[Main] Embedding: %s\n\n", llm->has_embedding_config() ? "ENABLED" : "DISABLED");
+
+    if (is_kexec_boot && !kexec_state_path.empty()) {
+        aios::KexecManager::instance().restore_from_kexec(kexec_state_path);
+    }
 
     while (g_running.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));

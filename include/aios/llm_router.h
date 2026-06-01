@@ -14,6 +14,8 @@ public:
 
     void register_provider(std::shared_ptr<ILlmProvider> provider);
     std::string route_and_execute(const std::string& prompt);
+    std::string route_and_execute(const std::string& route_hint, const std::string& exec_prompt);
+    std::string route_and_execute(const std::string& route_hint, const std::string& system_prompt, const std::string& exec_prompt);
     bool has_providers() const { return !providers_.empty(); }
 
     LlmRouter(const LlmRouter&) = delete;

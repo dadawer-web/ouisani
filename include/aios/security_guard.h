@@ -3,76 +3,73 @@
 #include "aios/agent_registry.h"
 
 #include <cstdio>
-#include <regex>
+#include <functional>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace aios {
 
-struct SecurityRule {
-    std::string name;
-    std::regex pattern;
-    std::string description;
-};
+class LlmAdapter;
 
 class SecurityGuard {
 public:
-    static SecurityGuard& instance() {
-        static SecurityGuard guard;
-        return guard;
-    }
+    static SecurityGuard& instance();
 
-    bool is_code_safe(const std::string& code, PrivilegeLevel level) {
-        if (level == PrivilegeLevel::RING_0) {
-            std::printf("[SecurityGuard] RING_0 bypass | code=%zu bytes\n", code.size());
-            return true;
-        }
+    void set_llm(std::shared_ptr<LlmAdapter> llm);
 
-        auto violations = scan(code);
-        if (violations.empty()) {
-            std::printf("[SecurityGuard] PASS | Ring 3 code scan clean (%zu bytes)\n", code.size());
-            return true;
-        }
+    bool check_intent(int agent_id,
+                      const std::string& syscall_name,
+                      const std::string& payload);
 
-        std::printf("[SecurityGuard] BLOCKED | Ring 3 code violates %zu rule(s):\n", violations.size());
-        for (const auto& v : violations) {
-            std::printf("[SecurityGuard]   - %s\n", v.c_str());
-        }
-        return false;
-    }
+    bool is_code_safe(const std::string& code, PrivilegeLevel level);
 
-    std::vector<std::string> scan(const std::string& code) {
-        std::vector<std::string> violations;
-        for (const auto& rule : rules_) {
-            if (std::regex_search(code, rule.pattern)) {
-                violations.push_back(rule.name + ": " + rule.description);
-            }
-        }
-        return violations;
-    }
+    void add_sensitive_syscall(const std::string& name);
+    void remove_sensitive_syscall(const std::string& name);
+
+    void add_sensitive_path(const std::string& path);
+    void remove_sensitive_path(const std::string& path);
+
+    void set_enabled(bool enabled);
+    bool is_enabled() const;
+
+    size_t total_checks() const;
+    size_t total_blocks() const;
+
+    struct AuditLog {
+        int agent_id;
+        std::string syscall_name;
+        std::string payload_preview;
+        bool blocked;
+        std::string reason;
+    };
+
+    std::vector<AuditLog> recent_logs(size_t max_count = 50) const;
 
 private:
-    SecurityGuard() {
-        rules_ = {
-            {"OS_IMPORT",       std::regex(R"(import\s+os\b)",           std::regex::icase), "importing os module"},
-            {"SUBPROCESS",      std::regex(R"(import\s+subprocess\b)",   std::regex::icase), "importing subprocess module"},
-            {"SYS_IMPORT",      std::regex(R"(import\s+sys\b)",          std::regex::icase), "importing sys module"},
-            {"FILE_OPEN",       std::regex(R"(\bopen\s*\()",             std::regex::icase), "file open() call"},
-            {"EVAL_CALL",       std::regex(R"(\beval\s*\()",             std::regex::icase), "eval() call"},
-            {"EXEC_CALL",       std::regex(R"(\bexec\s*\()",             std::regex::icase), "exec() call"},
-            {"DUNDER_IMPORT",   std::regex(R"(__import__\s*\()",         std::regex::icase), "__import__() call"},
-            {"SHUTIL_IMPORT",   std::regex(R"(import\s+shutil\b)",       std::regex::icase), "importing shutil module"},
-            {"SOCKET_IMPORT",   std::regex(R"(import\s+socket\b)",       std::regex::icase), "importing socket module"},
-            {"POPEN_CALL",      std::regex(R"(\bPopen\s*\()",            std::regex::icase), "subprocess.Popen() call"},
-            {"OS_SYSTEM",       std::regex(R"(\bos\s*\.\s*system\s*\()", std::regex::icase), "os.system() call"},
-            {"OS_POPEN",        std::regex(R"(\bos\s*\.\s*popen\s*\()",  std::regex::icase), "os.popen() call"},
-        };
-    }
+    SecurityGuard();
 
-    SecurityGuard(const SecurityGuard&) = delete;
-    SecurityGuard& operator=(const SecurityGuard&) = delete;
+    bool is_sensitive_syscall(const std::string& syscall_name,
+                              const std::string& payload) const;
 
-    std::vector<SecurityRule> rules_;
+    bool llm_verify(int agent_id,
+                    const std::string& syscall_name,
+                    const std::string& payload);
+
+    std::shared_ptr<LlmAdapter> llm_;
+    mutable std::mutex mutex_;
+
+    std::unordered_set<std::string> sensitive_syscalls_;
+    std::unordered_set<std::string> sensitive_paths_;
+
+    bool enabled_ = true;
+    size_t total_checks_ = 0;
+    size_t total_blocks_ = 0;
+
+    std::vector<AuditLog> audit_log_;
+    static constexpr size_t kMaxAuditLog = 200;
 };
 
 } // namespace aios

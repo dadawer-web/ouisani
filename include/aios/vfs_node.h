@@ -24,7 +24,11 @@ enum class VfsNodeType {
     PIPE,
     WASM,
     VECTOR,
-    CAMERA
+    GRAPH,
+    CAMERA,
+    WEBHOOK,
+    DISPLAY,
+    AUDIO
 };
 
 inline const char* node_type_str(VfsNodeType t) {
@@ -36,7 +40,11 @@ inline const char* node_type_str(VfsNodeType t) {
         case VfsNodeType::PIPE:       return "PIPE";
         case VfsNodeType::WASM:       return "WASM";
         case VfsNodeType::VECTOR:     return "VEC";
+        case VfsNodeType::GRAPH:      return "GRAPH";
         case VfsNodeType::CAMERA:     return "CAM";
+        case VfsNodeType::WEBHOOK:    return "HOOK";
+        case VfsNodeType::DISPLAY:    return "FB";
+        case VfsNodeType::AUDIO:      return "AUDIO";
     }
     return "UNKNOWN";
 }

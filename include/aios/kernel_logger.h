@@ -14,6 +14,8 @@ public:
     }
 
     void log(const std::string& msg);
+    void log_alert(const std::string& msg);
+    void log_warn(const std::string& msg);
 
     std::string dump_logs();
 

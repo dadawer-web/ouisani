@@ -22,7 +22,9 @@ bool LlmRouter::needs_deep_inference(const std::string& prompt) const {
         "代码", "C++", "编译", "复杂", "算法",
         "实现", "架构", "重构", "设计模式",
         "code", "compile", "algorithm", "implement",
-        "debug", "optimize", "refactor"
+        "debug", "optimize", "refactor",
+        "翻译", "NL2Shell", "pipeline", "管道",
+        "translate", "compile", "generate command"
     };
 
     for (const auto& kw : deep_keywords) {
@@ -34,12 +36,22 @@ bool LlmRouter::needs_deep_inference(const std::string& prompt) const {
 }
 
 std::string LlmRouter::route_and_execute(const std::string& prompt) {
+    return route_and_execute(prompt, prompt);
+}
+
+std::string LlmRouter::route_and_execute(const std::string& route_hint, const std::string& exec_prompt) {
+    return route_and_execute(route_hint, "", exec_prompt);
+}
+
+std::string LlmRouter::route_and_execute(const std::string& route_hint, const std::string& system_prompt, const std::string& exec_prompt) {
     if (providers_.empty()) {
         std::fprintf(stderr, "[LlmRouter] No providers registered!\n");
         return "[LlmRouter Error] No providers available";
     }
 
-    bool deep = needs_deep_inference(prompt);
+    std::string filtered_prompt = exec_prompt;
+
+    bool deep = needs_deep_inference(route_hint);
 
     std::shared_ptr<ILlmProvider> selected;
 
@@ -57,7 +69,10 @@ std::string LlmRouter::route_and_execute(const std::string& prompt) {
         "Routing to " + std::string(selected->get_name()) +
         " (mode=" + std::string(deep ? "DEEP" : "FAST") + ")");
 
-    return selected->generate(prompt);
+    if (!system_prompt.empty()) {
+        return selected->generate_with_system(system_prompt, filtered_prompt);
+    }
+    return selected->generate(filtered_prompt);
 }
 
 } // namespace aios

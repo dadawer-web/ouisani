@@ -5,6 +5,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <httplib.h>
+
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -20,6 +22,7 @@ namespace aios {
 
 class ThreadPool;
 class SyscallServer;
+class McpServer;
 
 struct PendingResponse {
     int fd;
@@ -46,6 +49,7 @@ public:
                   uint16_t port = 8080);
 
     void set_submit_llm_fn(SubmitLlmFn fn);
+    void set_mcp_server(McpServer* mcp);
     void register_handler(const std::string& name, std::shared_ptr<ISyscallHandler> handler);
     ~SyscallServer();
 
@@ -117,6 +121,11 @@ private:
     std::string remote_host_ = "127.0.0.1";
     uint16_t remote_port_ = 9080;
     static constexpr int REMOTE_TIMEOUT_SEC = 30;
+
+    std::unique_ptr<httplib::Server> webhook_http_;
+    std::thread webhook_http_thread_;
+    uint16_t webhook_port_ = 8083;
+    McpServer* mcp_server_ = nullptr;
 
     std::mutex response_mutex_;
     std::queue<PendingResponse> response_queue_;

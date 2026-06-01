@@ -13,18 +13,20 @@ enum class EventType {
     LLM_REQ_END,
     WASM_EXEC_START,
     WASM_TRAP,
-    VFS_WRITE
+    VFS_WRITE,
+    SECURITY_VIOLATION
 };
 
 inline const char* event_type_str(EventType t) {
     switch (t) {
-        case EventType::AGENT_SPAWN:    return "AGENT_SPAWN";
-        case EventType::AGENT_EXIT:     return "AGENT_EXIT";
-        case EventType::LLM_REQ_START:  return "LLM_REQ_START";
-        case EventType::LLM_REQ_END:    return "LLM_REQ_END";
-        case EventType::WASM_EXEC_START:return "WASM_EXEC_START";
-        case EventType::WASM_TRAP:      return "WASM_TRAP";
-        case EventType::VFS_WRITE:      return "VFS_WRITE";
+        case EventType::AGENT_SPAWN:        return "AGENT_SPAWN";
+        case EventType::AGENT_EXIT:         return "AGENT_EXIT";
+        case EventType::LLM_REQ_START:      return "LLM_REQ_START";
+        case EventType::LLM_REQ_END:        return "LLM_REQ_END";
+        case EventType::WASM_EXEC_START:    return "WASM_EXEC_START";
+        case EventType::WASM_TRAP:          return "WASM_TRAP";
+        case EventType::VFS_WRITE:          return "VFS_WRITE";
+        case EventType::SECURITY_VIOLATION: return "SECURITY_VIOLATION";
     }
     return "UNKNOWN";
 }

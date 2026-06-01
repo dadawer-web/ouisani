@@ -29,6 +29,52 @@ void KernelLogger::log(const std::string& msg) {
     }
 }
 
+void KernelLogger::log_alert(const std::string& msg) {
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
+
+    std::ostringstream oss;
+    oss << std::put_time(std::localtime(&time_t_now), "%Y-%m-%d %H:%M:%S")
+        << "." << std::setfill('0') << std::setw(3) << ms.count()
+        << " " << msg;
+
+    std::string formatted = oss.str();
+
+    std::printf("\033[1;31m%s\033[0m\n", formatted.c_str());
+
+    std::string plain = "[ALERT] " + formatted;
+    std::lock_guard<std::mutex> lock(mutex_);
+    log_buffer_.push_back(std::move(plain));
+    while (log_buffer_.size() > MAX_LOG_ENTRIES) {
+        log_buffer_.pop_front();
+    }
+}
+
+void KernelLogger::log_warn(const std::string& msg) {
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
+
+    std::ostringstream oss;
+    oss << std::put_time(std::localtime(&time_t_now), "%Y-%m-%d %H:%M:%S")
+        << "." << std::setfill('0') << std::setw(3) << ms.count()
+        << " " << msg;
+
+    std::string formatted = oss.str();
+
+    std::printf("\033[1;33m%s\033[0m\n", formatted.c_str());
+
+    std::string plain = "[WARN] " + formatted;
+    std::lock_guard<std::mutex> lock(mutex_);
+    log_buffer_.push_back(std::move(plain));
+    while (log_buffer_.size() > MAX_LOG_ENTRIES) {
+        log_buffer_.pop_front();
+    }
+}
+
 std::string KernelLogger::dump_logs() {
     std::lock_guard<std::mutex> lock(mutex_);
     std::string result;

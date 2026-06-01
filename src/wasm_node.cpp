@@ -1,7 +1,12 @@
 #include "aios/wasm_node.h"
+#include "aios/audio_node.h"
+#include "aios/crash_analyzer.h"
 #include "aios/event_bus.h"
 #include "aios/kernel_logger.h"
 #include "aios/llm_adapter.h"
+#include "aios/vfs_manager.h"
+#include "aios/vector_node.h"
+#include "aios/graph_rag.h"
 
 #include <wasmedge/wasmedge.h>
 
@@ -378,6 +383,219 @@ static WasmEdge_Result aios_host_http_get(void *,
     return WasmEdge_Result_Success;
 }
 
+static WasmEdge_Result aios_host_vfs_read(void *,
+                                               const WasmEdge_CallingFrameContext *CallFrameCxt,
+                                               const WasmEdge_Value *In,
+                                               WasmEdge_Value *Out) {
+    uint32_t path_offset = WasmEdge_ValueGetI32(In[0]);
+    uint32_t path_len = WasmEdge_ValueGetI32(In[1]);
+    uint32_t resp_offset = WasmEdge_ValueGetI32(In[2]);
+    uint32_t max_resp_len = WasmEdge_ValueGetI32(In[3]);
+
+    WasmEdge_MemoryInstanceContext *MemCxt =
+        WasmEdge_CallingFrameGetMemoryInstance(CallFrameCxt, 0);
+    if (!MemCxt) {
+        Out[0] = WasmEdge_ValueGenI32(-1);
+        return WasmEdge_Result_Success;
+    }
+
+    if (path_len == 0 || path_len > 4096) {
+        std::fprintf(stderr, "[Ring 0 | VFS_READ] Invalid path length: %u\n", path_len);
+        Out[0] = WasmEdge_ValueGenI32(-1);
+        return WasmEdge_Result_Success;
+    }
+
+    uint8_t *path_buf = WasmEdge_MemoryInstanceGetPointer(MemCxt, path_offset, path_len);
+    if (!path_buf) {
+        std::fprintf(stderr, "[Ring 0 | VFS_READ] Invalid path pointer: offset=%u len=%u\n",
+                     path_offset, path_len);
+        Out[0] = WasmEdge_ValueGenI32(-2);
+        return WasmEdge_Result_Success;
+    }
+
+    std::string vfs_path(reinterpret_cast<char*>(path_buf), path_len);
+
+    std::fprintf(stderr, "[Ring 0 | VFS_READ] Sandbox requests: %s\n", vfs_path.c_str());
+
+    auto node = VfsManager::instance().resolve_path(vfs_path);
+    std::string content;
+    if (node) {
+        content = node->read();
+        std::fprintf(stderr, "[Ring 0 | VFS_READ] %s -> %zu bytes\n",
+                     vfs_path.c_str(), content.size());
+    } else {
+        content = "[VFS_READ error] Path not found: " + vfs_path;
+        std::fprintf(stderr, "[Ring 0 | VFS_READ] Path not found: %s\n", vfs_path.c_str());
+    }
+
+    uint32_t copy_len = static_cast<uint32_t>(content.size());
+    if (copy_len > max_resp_len) {
+        std::fprintf(stderr, "[Ring 0 | VFS_READ] Truncated: %u -> %u\n",
+                     copy_len, max_resp_len);
+        copy_len = max_resp_len;
+    }
+
+    if (copy_len > 0 && max_resp_len > 0) {
+        uint8_t *resp_buf = WasmEdge_MemoryInstanceGetPointer(MemCxt, resp_offset, max_resp_len);
+        if (!resp_buf) {
+            std::fprintf(stderr, "[Ring 0 | VFS_READ] Invalid resp pointer: offset=%u len=%u\n",
+                         resp_offset, max_resp_len);
+            Out[0] = WasmEdge_ValueGenI32(-3);
+            return WasmEdge_Result_Success;
+        }
+        std::memcpy(resp_buf, content.data(), copy_len);
+    }
+
+    Out[0] = WasmEdge_ValueGenI32(static_cast<int32_t>(copy_len));
+    return WasmEdge_Result_Success;
+}
+
+static WasmEdge_Result aios_host_think(void *,
+                                            const WasmEdge_CallingFrameContext *CallFrameCxt,
+                                            const WasmEdge_Value *In,
+                                            WasmEdge_Value *Out) {
+    uint32_t prompt_offset = WasmEdge_ValueGetI32(In[0]);
+    uint32_t prompt_len = WasmEdge_ValueGetI32(In[1]);
+    uint32_t resp_offset = WasmEdge_ValueGetI32(In[2]);
+    uint32_t max_resp_len = WasmEdge_ValueGetI32(In[3]);
+
+    WasmEdge_MemoryInstanceContext *MemCxt =
+        WasmEdge_CallingFrameGetMemoryInstance(CallFrameCxt, 0);
+    if (!MemCxt) {
+        Out[0] = WasmEdge_ValueGenI32(-1);
+        return WasmEdge_Result_Success;
+    }
+
+    if (prompt_len == 0 || prompt_len > 65536) {
+        std::fprintf(stderr, "[Ring 0 | Think] Invalid prompt length: %u\n", prompt_len);
+        Out[0] = WasmEdge_ValueGenI32(-1);
+        return WasmEdge_Result_Success;
+    }
+
+    uint8_t *prompt_buf = WasmEdge_MemoryInstanceGetPointer(MemCxt, prompt_offset, prompt_len);
+    if (!prompt_buf) {
+        std::fprintf(stderr, "[Ring 0 | Think] Invalid prompt pointer: offset=%u len=%u\n",
+                     prompt_offset, prompt_len);
+        Out[0] = WasmEdge_ValueGenI32(-2);
+        return WasmEdge_Result_Success;
+    }
+
+    std::string prompt(reinterpret_cast<char*>(prompt_buf), prompt_len);
+
+    std::string display = prompt.substr(0, 40);
+    if (prompt.size() > 40) display += "...";
+    std::fprintf(stderr, "[Ring 0 | Think] Sandbox LLM request: %s\n", display.c_str());
+
+    std::string result;
+    if (WasmNode::g_llm && WasmNode::g_llm->has_api_key()) {
+        int pf_retry = 0;
+        constexpr int kMaxPfRetry = 3;
+
+    pf_retry_think:
+        try {
+            result = WasmNode::g_llm->generate("", prompt);
+            std::fprintf(stderr, "[Ring 0 | Think] Inference complete: %zu bytes\n", result.size());
+        } catch (const SemanticPageFaultException& pf) {
+            pf_retry++;
+            std::fprintf(stderr, "[PageFault] WASM Think | Semantic Page Fault #%d | keywords='%s'\n",
+                         pf_retry, pf.keywords().c_str());
+
+            if (pf_retry > kMaxPfRetry) {
+                result = "[System: Knowledge retrieval exhausted. Query: " + pf.keywords() + "]";
+            } else {
+                std::string knowledge_context = build_rich_context(pf.keywords());
+
+                prompt = knowledge_context + prompt;
+                std::fprintf(stderr, "[PageFault] WASM Think | GraphRAG context injected, retrying\n");
+                goto pf_retry_think;
+            }
+        }
+    } else {
+        result = "[AIOS Think] LLM adapter offline. Configure API key to enable.";
+        std::fprintf(stderr, "[Ring 0 | Think] LLM offline, returning fallback\n");
+    }
+
+    uint32_t copy_len = static_cast<uint32_t>(result.size());
+    if (copy_len > max_resp_len) {
+        std::fprintf(stderr, "[Ring 0 | Think] Response truncated: %u -> %u\n",
+                     copy_len, max_resp_len);
+        copy_len = max_resp_len;
+    }
+
+    if (copy_len > 0 && max_resp_len > 0) {
+        uint8_t *resp_buf = WasmEdge_MemoryInstanceGetPointer(MemCxt, resp_offset, max_resp_len);
+        if (!resp_buf) {
+            std::fprintf(stderr, "[Ring 0 | Think] Invalid resp pointer: offset=%u len=%u\n",
+                         resp_offset, max_resp_len);
+            Out[0] = WasmEdge_ValueGenI32(-3);
+            return WasmEdge_Result_Success;
+        }
+        std::memcpy(resp_buf, result.data(), copy_len);
+    }
+
+    Out[0] = WasmEdge_ValueGenI32(static_cast<int32_t>(copy_len));
+    return WasmEdge_Result_Success;
+}
+
+static WasmEdge_Result aios_host_speak(void *,
+                                           const WasmEdge_CallingFrameContext *CallFrameCxt,
+                                           const WasmEdge_Value *In,
+                                           WasmEdge_Value *Out) {
+    uint32_t text_offset = WasmEdge_ValueGetI32(In[0]);
+    uint32_t text_len = WasmEdge_ValueGetI32(In[1]);
+
+    WasmEdge_MemoryInstanceContext *MemCxt =
+        WasmEdge_CallingFrameGetMemoryInstance(CallFrameCxt, 0);
+    if (!MemCxt) {
+        Out[0] = WasmEdge_ValueGenI32(-1);
+        return WasmEdge_Result_Success;
+    }
+
+    if (text_len == 0 || text_len > 65536) {
+        std::fprintf(stderr, "[Ring 0 | Speak] Invalid text length: %u\n", text_len);
+        Out[0] = WasmEdge_ValueGenI32(-1);
+        return WasmEdge_Result_Success;
+    }
+
+    uint8_t *text_buf = WasmEdge_MemoryInstanceGetPointer(MemCxt, text_offset, text_len);
+    if (!text_buf) {
+        std::fprintf(stderr, "[Ring 0 | Speak] Invalid text pointer: offset=%u len=%u\n",
+                     text_offset, text_len);
+        Out[0] = WasmEdge_ValueGenI32(-2);
+        return WasmEdge_Result_Success;
+    }
+
+    std::string text(reinterpret_cast<char*>(text_buf), text_len);
+
+    std::string display = text.substr(0, 40);
+    if (text.size() > 40) display += "...";
+    std::fprintf(stderr, "[Ring 0 | Speak] TTS request: %s\n", display.c_str());
+
+    auto& vfs = aios::VfsManager::instance();
+    auto pcm_node = vfs.resolve_path("/dev/audio/pcm", 0);
+    auto vis_node = vfs.resolve_path("/dev/audio/visemes", 0);
+
+    auto pcm_audio = std::dynamic_pointer_cast<aios::AudioNode>(pcm_node);
+    auto vis_audio = std::dynamic_pointer_cast<aios::AudioNode>(vis_node);
+
+    if (!pcm_audio && !vis_audio) {
+        std::fprintf(stderr, "[Ring 0 | Speak] Audio devices not available\n");
+        Out[0] = WasmEdge_ValueGenI32(-3);
+        return WasmEdge_Result_Success;
+    }
+
+    if (WasmNode::g_llm && WasmNode::g_llm->has_api_key()) {
+        WasmNode::g_llm->stream_tts(text, pcm_audio, vis_audio);
+    } else {
+        std::fprintf(stderr, "[Ring 0 | Speak] LLM offline, using fallback TTS simulation\n");
+        aios::LlmAdapter fallback_llm("", "", "");
+        fallback_llm.stream_tts(text, pcm_audio, vis_audio);
+    }
+
+    Out[0] = WasmEdge_ValueGenI32(0);
+    return WasmEdge_Result_Success;
+}
+
 WasmNode::WasmNode(const std::string& path, const std::string& wasm_file_path)
     : VfsNode(VfsNodeType::WASM, path)
     , wasm_file_path_(wasm_file_path)
@@ -638,10 +856,59 @@ std::string WasmNode::execute_with_fds(const std::string& payload,
     WasmEdge_ModuleInstanceAddFunction(host_mod, check_signal_name, check_signal_func);
     WasmEdge_StringDelete(check_signal_name);
 
+    WasmEdge_String vfs_read_name = WasmEdge_StringCreateByCString("__aios_vfs_read");
+    enum WasmEdge_ValType vfs_read_params[] = {
+        WasmEdge_ValType_I32, WasmEdge_ValType_I32,
+        WasmEdge_ValType_I32, WasmEdge_ValType_I32
+    };
+    enum WasmEdge_ValType vfs_read_returns[] = {
+        WasmEdge_ValType_I32
+    };
+    WasmEdge_FunctionTypeContext* vfs_read_type =
+        WasmEdge_FunctionTypeCreate(vfs_read_params, 4, vfs_read_returns, 1);
+    WasmEdge_FunctionInstanceContext* vfs_read_func =
+        WasmEdge_FunctionInstanceCreate(vfs_read_type, aios_host_vfs_read, nullptr, 0);
+    WasmEdge_FunctionTypeDelete(vfs_read_type);
+    WasmEdge_ModuleInstanceAddFunction(host_mod, vfs_read_name, vfs_read_func);
+    WasmEdge_StringDelete(vfs_read_name);
+
+    WasmEdge_String think_name = WasmEdge_StringCreateByCString("__aios_think");
+    enum WasmEdge_ValType think_params[] = {
+        WasmEdge_ValType_I32, WasmEdge_ValType_I32,
+        WasmEdge_ValType_I32, WasmEdge_ValType_I32
+    };
+    enum WasmEdge_ValType think_returns[] = {
+        WasmEdge_ValType_I32
+    };
+    WasmEdge_FunctionTypeContext* think_type =
+        WasmEdge_FunctionTypeCreate(think_params, 4, think_returns, 1);
+    WasmEdge_FunctionInstanceContext* think_func =
+        WasmEdge_FunctionInstanceCreate(think_type, aios_host_think, nullptr, 0);
+    WasmEdge_FunctionTypeDelete(think_type);
+    WasmEdge_ModuleInstanceAddFunction(host_mod, think_name, think_func);
+    WasmEdge_StringDelete(think_name);
+
+    WasmEdge_String speak_name = WasmEdge_StringCreateByCString("__aios_vfs_speak");
+    enum WasmEdge_ValType speak_params[] = {
+        WasmEdge_ValType_I32, WasmEdge_ValType_I32
+    };
+    enum WasmEdge_ValType speak_returns[] = {
+        WasmEdge_ValType_I32
+    };
+    WasmEdge_FunctionTypeContext* speak_type =
+        WasmEdge_FunctionTypeCreate(speak_params, 2, speak_returns, 1);
+    WasmEdge_FunctionInstanceContext* speak_func =
+        WasmEdge_FunctionInstanceCreate(speak_type, aios_host_speak, nullptr, 0);
+    WasmEdge_FunctionTypeDelete(speak_type);
+    WasmEdge_ModuleInstanceAddFunction(host_mod, speak_name, speak_func);
+    WasmEdge_StringDelete(speak_name);
+
     WasmEdge_Result reg_res = WasmEdge_VMRegisterModuleFromImport(vm, host_mod);
     if (!WasmEdge_ResultOK(reg_res)) {
         std::fprintf(stderr, "[WasmNode] Host module register failed: %s\n",
                      WasmEdge_ResultGetMessage(reg_res));
+    } else {
+        std::fprintf(stderr, "[WasmNode] aios module registered: kprint, http_get, shm_write, shm_read, snapshot, npu_infer, check_signal, __aios_vfs_read, __aios_think, __aios_vfs_speak\n");
     }
 
     {
@@ -858,6 +1125,22 @@ std::string WasmNode::execute_with_fds(const std::string& payload,
             KernelLogger::instance().log("[Ring 0 | Trap] 捕获到沙盒硬件异常: " + trap_detail);
             EventBus::instance().publish(EventType::WASM_TRAP, "WasmNode",
                 "Trap in " + wasm_file + ": " + trap_detail);
+
+            uint64_t crash_instr = 0;
+            uint64_t crash_gas = 0;
+            if (stat) {
+                crash_instr = WasmEdge_StatisticsGetInstrCount(stat);
+                crash_gas = WasmEdge_StatisticsGetTotalCost(stat);
+            }
+
+            CrashAnalyzer::instance().handle_wasm_crash(
+                restore_agent_id > 0 ? restore_agent_id : 0,
+                wasm_file,
+                func_name_str,
+                trap_detail,
+                crash_instr,
+                crash_gas
+            );
         }
     }
 

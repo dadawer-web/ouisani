@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import socket
+import http.client
 from typing import Any
 
 
@@ -82,6 +83,11 @@ class Kernel:
         caller_id: int = 0,
         priority: int = 0,
         top_k: int = 3,
+        depth: int = 2,
+        stdin: str = "",
+        stdout: str = "",
+        child_id: int = 0,
+        agent_id: int = 0,
     ) -> dict[str, Any]:
         """Issue a syscall to the AIOS kernel.
 
@@ -93,6 +99,11 @@ class Kernel:
             caller_id: Agent ID of the caller.
             priority: Task priority (0=low, 99=critical).
             top_k: Number of results for SEARCH.
+            depth: BFS depth for GRAPH_QUERY.
+            stdin: VFS path for stdin redirection (AGENT_SPAWN / LLM_INFERENCE).
+            stdout: VFS path for stdout redirection (AGENT_SPAWN / LLM_INFERENCE).
+            child_id: Child agent ID (AGENT_WAIT).
+            agent_id: Target agent ID (AGENT_EXPORT / AGENT_IMPORT).
 
         Returns:
             Kernel response as a dict.
@@ -109,6 +120,16 @@ class Kernel:
             req["path"] = path
         if action == "SEARCH":
             req["top_k"] = top_k
+        if action == "GRAPH_QUERY":
+            req["depth"] = depth
+        if stdin:
+            req["stdin"] = stdin
+        if stdout:
+            req["stdout"] = stdout
+        if child_id:
+            req["child_id"] = child_id
+        if agent_id:
+            req["agent_id"] = agent_id
         return self._send_tcp(self.syscall_port, req)
 
     def mcp_call(
@@ -145,6 +166,52 @@ class Kernel:
         resp = self.syscall("VFS_CALL", action="READ", path="/proc/events")
         return resp.get("events", [])
 
+    def create_pipe(self, path: str) -> dict[str, Any]:
+        """Create a named pipe in the kernel VFS.
+
+        Dynamically mounts a ``PipeNode`` at the given VFS path.
+        If a node already exists at that path the call succeeds
+        with a "Pipe already exists" message.
+
+        Args:
+            path: VFS path for the new pipe (e.g.
+                ``"/tmp/pipes/pipe_A_B"``).  The parent directory
+                must already exist in the VFS.
+
+        Returns:
+            Kernel response with ``status`` and ``path`` fields.
+        """
+        return self.syscall("VFS_CALL", action="CREATE_PIPE", path=path)
+
+    def vfs_read(self, path: str, caller_id: int = 0) -> dict[str, Any]:
+        """Read from a VFS node.
+
+        Convenience wrapper around ``VFS_CALL`` with ``action="READ"``.
+
+        Args:
+            path: VFS path to read from.
+            caller_id: Agent ID of the caller (0 = kernel).
+
+        Returns:
+            Kernel response with ``data`` field containing the read result.
+        """
+        return self.syscall("VFS_CALL", action="READ", path=path, caller_id=caller_id)
+
+    def vfs_write(self, path: str, payload: str, caller_id: int = 0) -> dict[str, Any]:
+        """Write to a VFS node.
+
+        Convenience wrapper around ``VFS_CALL`` with ``action="WRITE"``.
+
+        Args:
+            path: VFS path to write to.
+            payload: Data to write.
+            caller_id: Agent ID of the caller (0 = kernel).
+
+        Returns:
+            Kernel response.
+        """
+        return self.syscall("VFS_CALL", action="WRITE", path=path, payload=payload, caller_id=caller_id)
+
     def ping(self) -> bool:
         """Check if the kernel is alive.
 
@@ -156,3 +223,82 @@ class Kernel:
             return resp.get("status") == "ok"
         except (ConnectionError, TimeoutError, OSError):
             return False
+
+    def migrate_agent(
+        self,
+        agent_id: int,
+        target_ip: str,
+        target_port: int = 8083,
+    ) -> dict[str, Any]:
+        """Live-migrate an agent to a remote AIOS node.
+
+        The workflow is:
+
+        1. Call ``AGENT_EXPORT`` on the **local** kernel to suspend the
+           agent, serialize its PCB + memory pages, and destroy the
+           local process.
+        2. HTTP POST the snapshot JSON to
+           ``target_ip:target_port/cluster/migrate`` on the **remote**
+           node, which calls ``import_snapshot`` to resurrect the agent.
+
+        Args:
+            agent_id: The agent to migrate.
+            target_ip: IP address of the destination AIOS node.
+            target_port: HTTP port of the destination node's cluster
+                RPC server (default 8083).
+
+        Returns:
+            Response dict from the remote node.
+
+        Raises:
+            RuntimeError: If the local EXPORT step fails.
+            ConnectionError: If the remote node is unreachable.
+        """
+        export_resp = self.syscall(
+            "AGENT_EXPORT",
+            agent_id=agent_id,
+            caller_id=agent_id,
+        )
+
+        if export_resp.get("status") != "ok":
+            raise RuntimeError(
+                f"AGENT_EXPORT failed for agent {agent_id}: "
+                f"{export_resp.get('message', export_resp)}"
+            )
+
+        snapshot = export_resp.get("snapshot")
+        if snapshot is None:
+            raise RuntimeError(
+                f"AGENT_EXPORT returned no snapshot data for agent {agent_id}"
+            )
+
+        snapshot_json = json.dumps(snapshot)
+
+        conn = http.client.HTTPConnection(target_ip, target_port, timeout=30)
+        try:
+            conn.request(
+                "POST",
+                "/cluster/migrate",
+                body=snapshot_json,
+                headers={"Content-Type": "application/json"},
+            )
+            resp = conn.getresponse()
+            body = resp.read().decode("utf-8")
+        except (ConnectionRefusedError, OSError) as exc:
+            raise ConnectionError(
+                f"Remote node {target_ip}:{target_port} unreachable"
+            ) from exc
+        finally:
+            conn.close()
+
+        if resp.status != 200:
+            return {
+                "status": "error",
+                "http_code": resp.status,
+                "message": body,
+            }
+
+        result = json.loads(body)
+        result["migrated_from"] = self.host
+        result["migrated_to"] = f"{target_ip}:{target_port}"
+        return result

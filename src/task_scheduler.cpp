@@ -2,6 +2,8 @@
 #include "aios/agent_registry.h"
 #include "aios/cache_manager.h"
 #include "aios/compiler_bridge.h"
+#include "aios/crash_analyzer.h"
+#include "aios/trace_manager.h"
 #include "aios/event_bus.h"
 #include "aios/kernel_logger.h"
 #include "aios/llm_router.h"
@@ -9,9 +11,14 @@
 #include "aios/process_manager.h"
 #include "aios/security_guard.h"
 #include "aios/token_mmu.h"
+#include "aios/token_zram.h"
 #include "aios/vfs_manager.h"
 #include "aios/vfs_node.h"
 #include "aios/vector_node.h"
+#include "aios/graph_node.h"
+#include "aios/audio_node.h"
+#include "aios/bpf_manager.h"
+#include "aios/graph_rag.h"
 #include "aios/wasm_node.h"
 
 #include <chrono>
@@ -493,10 +500,10 @@ void TaskScheduler::ping_heartbeat(int agent_id) {
 }
 
 void TaskScheduler::reaper_loop() {
-    KernelLogger::instance().log("[Ring 0 | Reaper] 死神守护线程启动 (巡视间隔=5s, 僵尸判定=30s)");
+    KernelLogger::instance().log("[Ring 0 | Reaper] 死神守护线程启动 (巡视间隔=10s, 僵尸判定=300s)");
 
     while (running_.load()) {
-        std::this_thread::sleep_for(std::chrono::seconds(5));
+        std::this_thread::sleep_for(std::chrono::seconds(10));
 
         auto now = std::chrono::steady_clock::now();
 
@@ -505,7 +512,7 @@ void TaskScheduler::reaper_loop() {
             auto duration = std::chrono::duration_cast<std::chrono::seconds>(
                 now - it->second).count();
 
-            if (duration > 30) {
+            if (duration > 300) {
                 KernelLogger::instance().log("[Ring 0 | Reaper] ⚠️ 发现僵尸进程 Agent " + std::to_string(it->first) + " (失联 " + std::to_string((long)duration) + " 秒)，执行强制清理 (SIGKILL)！");
 
                 WasmNode::SendSignal(it->first, 9);
@@ -565,6 +572,7 @@ void TaskScheduler::llm_worker_loop() {
         }
 
         task->status = TaskStatus::RUNNING;
+        TraceManager::set_thread_agent_id(task->agent_id);
         total_tasks_executed_.fetch_add(1);
 
         if (task->gas_limit > 0 && task->gas_used >= task->gas_limit) {
@@ -607,8 +615,62 @@ void TaskScheduler::llm_worker_loop() {
                         : task->task_payload.c_str());
 
         std::string result;
+        int page_fault_retry_count = 0;
+        constexpr int kMaxPageFaultRetries = 3;
+
         try {
+        page_fault_retry:
+            ping_heartbeat(task->agent_id);
+
+            {
+                auto& bpf = BpfManager::instance();
+                if (bpf.has_hook("pre_llm_inference")) {
+                    std::string filtered = bpf.run_hook("pre_llm_inference", task->task_payload);
+                    if (filtered.empty()) {
+                        std::printf("[BpfManager] pre_llm_inference DROPPED agent=%d\n", task->agent_id);
+                        task->status = TaskStatus::CANCELLED;
+                        if (response_cb_) {
+                            response_cb_(task->client_fd,
+                                make_response(false, "Dropped by BPF filter (pre_llm_inference)"));
+                        }
+                        {
+                            std::lock_guard<std::mutex> lock(active_mutex_);
+                            auto& vec = active_tasks_[task->agent_id];
+                            vec.erase(std::remove(vec.begin(), vec.end(), task), vec.end());
+                        }
+                        continue;
+                    }
+                    task->task_payload = filtered;
+                }
+            }
+
             TokenMmu::instance().add_context(task->agent_id, task->task_payload);
+
+            {
+                auto& mmu = TokenMmu::instance();
+                if (mmu.check_watermark(task->agent_id)) {
+                    int tokens_before = mmu.total_tokens(task->agent_id);
+                    int token_limit = mmu.get_token_limit(task->agent_id);
+                    int watermark = static_cast<int>(token_limit * TokenMmu::WATERMARK_HIGH_RATIO);
+
+                    std::printf("[Kernel MMU] Soft page fault triggered for PID %d | tokens=%d >= watermark=%d\n",
+                                task->agent_id, tokens_before, watermark);
+                    std::printf("[Kernel MMU] Pausing inference → invoking TokenZRAM compression...\n");
+
+                    TokenZram::instance().compress_agent_memory(task);
+
+                    int tokens_after = mmu.total_tokens(task->agent_id);
+                    std::printf("[Kernel MMU] Page compression triggered for PID %d. Tokens reduced from %d to %d.\n",
+                                task->agent_id, tokens_before, tokens_after);
+                    std::printf("[Kernel MMU] Resuming inference after ZRAM soft page fault.\n");
+
+                    KernelLogger::instance().log(
+                        "[Kernel MMU] Soft page fault PID=" + std::to_string(task->agent_id) +
+                        " tokens=" + std::to_string(tokens_before) +
+                        "→" + std::to_string(tokens_after) +
+                        " (watermark=" + std::to_string(watermark) + ")");
+                }
+            }
 
             std::string safe_prompt = TokenMmu::instance().get_active_context(task->agent_id);
 
@@ -619,14 +681,62 @@ void TaskScheduler::llm_worker_loop() {
                             task->agent_id, recovered.size());
             }
 
-            if (LlmRouter::instance().has_providers()) {
-                result = LlmRouter::instance().route_and_execute(safe_prompt);
-            } else if (llm_ && llm_->has_api_key()) {
-                auto messages = build_messages(task->agent_id, safe_prompt);
-                result = llm_->generate("", messages);
-            } else {
-                std::this_thread::sleep_for(std::chrono::seconds(2));
-                result = "[LLM Kernel Response] Processed: " + safe_prompt;
+            if (!task->stdin_path.empty()) {
+                auto stdin_node = VfsManager::instance().resolve_path(task->stdin_path, 0, task->root_dir);
+                if (stdin_node) {
+                    std::string stdin_data;
+                    if (stdin_node->node_type() == VfsNodeType::PIPE) {
+                        auto pipe_node = std::dynamic_pointer_cast<PipeNode>(stdin_node);
+                        if (pipe_node) {
+                            stdin_data = pipe_node->read_nonblocking();
+                            if (stdin_data.empty()) {
+                                stdin_data = pipe_node->read_blocking();
+                            }
+                        }
+                    } else {
+                        stdin_data = stdin_node->read();
+                    }
+                    if (!stdin_data.empty()) {
+                        safe_prompt = "[stdin from " + task->stdin_path + "]\n" + stdin_data + "\n[end stdin]\n" + safe_prompt;
+                        std::printf("[I/O Redirect] Agent %d | stdin READ from %s | %zu bytes injected into prompt\n",
+                                    task->agent_id, task->stdin_path.c_str(), stdin_data.size());
+                    }
+                } else {
+                    std::printf("[I/O Redirect] Agent %d | stdin path %s not found in VFS, skipping\n",
+                                task->agent_id, task->stdin_path.c_str());
+                }
+            }
+
+            try {
+                if (LlmRouter::instance().has_providers()) {
+                    result = LlmRouter::instance().route_and_execute(safe_prompt);
+                } else if (llm_ && llm_->has_api_key()) {
+                    auto messages = build_messages(task->agent_id, safe_prompt);
+                    result = llm_->generate("", messages);
+                } else {
+                    std::this_thread::sleep_for(std::chrono::seconds(2));
+                    result = "[LLM Kernel Response] Processed: " + safe_prompt;
+                }
+            } catch (const SemanticPageFaultException& pf) {
+                page_fault_retry_count++;
+                std::printf("[PageFault] Agent=%d | Semantic Page Fault #%d | keywords='%s'\n",
+                            task->agent_id, page_fault_retry_count, pf.keywords().c_str());
+
+                if (page_fault_retry_count > kMaxPageFaultRetries) {
+                    std::printf("[PageFault] Agent=%d | Max retries (%d) exceeded, returning partial\n",
+                                task->agent_id, kMaxPageFaultRetries);
+                    result = "[System: Knowledge retrieval exhausted after " +
+                             std::to_string(kMaxPageFaultRetries) +
+                             " attempts. Original query: " + pf.keywords() + "]";
+                } else {
+                    std::string knowledge_context = build_rich_context(pf.keywords());
+
+                    task->task_payload = knowledge_context + task->task_payload;
+                    TokenMmu::instance().clear_context(task->agent_id);
+                    std::printf("[PageFault] Agent=%d | GraphRAG context injected, retrying LLM inference\n",
+                                task->agent_id);
+                    goto page_fault_retry;
+                }
             }
 
             TokenMmu::instance().add_context(task->agent_id, result);
@@ -673,6 +783,10 @@ void TaskScheduler::llm_worker_loop() {
             std::printf("[LLM Scheduler] Agent=%d LLM inference exception: %s\n",
                         task->agent_id, e.what());
             result = "[LLM Kernel Error] " + std::string(e.what());
+            task->status = TaskStatus::CRASHED;
+            CrashAnalyzer::instance().handle_kernel_panic(task->agent_id,
+                "LLM inference exception: " + std::string(e.what()));
+            CrashAnalyzer::instance().analyze_panic_for_agent(task->agent_id);
         }
 
         std::printf("[LLM Scheduler] Agent=%d LLM_INFERENCE complete | result=%zu bytes\n",
@@ -680,6 +794,23 @@ void TaskScheduler::llm_worker_loop() {
 
         EventBus::instance().publish(EventType::LLM_REQ_END, "Scheduler",
             "Agent " + std::to_string(task->agent_id) + " LLM task finished (result=" + std::to_string(result.size()) + " bytes)");
+
+        if (!task->stdout_path.empty()) {
+            auto stdout_node = VfsManager::instance().resolve_path(task->stdout_path, 0, task->root_dir);
+            if (stdout_node) {
+                bool ok = stdout_node->write(result);
+                if (ok) {
+                    std::printf("[I/O Redirect] Agent %d | stdout WRITE to %s | %zu bytes\n",
+                                task->agent_id, task->stdout_path.c_str(), result.size());
+                } else {
+                    std::printf("[I/O Redirect] Agent %d | stdout WRITE to %s FAILED\n",
+                                task->agent_id, task->stdout_path.c_str());
+                }
+            } else {
+                std::printf("[I/O Redirect] Agent %d | stdout path %s not found in VFS, skipping\n",
+                            task->agent_id, task->stdout_path.c_str());
+            }
+        }
 
         if (task->response_callback_) {
             nlohmann::json resp_data;
@@ -977,7 +1108,7 @@ void TaskScheduler::dispatch_llm_task(std::shared_ptr<AgentTask> task) {
     try {
         io_pool_.submit([this, task, messages = std::move(messages),
                          system_prompt = std::move(system_prompt),
-                         query_embedding = std::move(query_embedding)]() {
+                         query_embedding = std::move(query_embedding)]() mutable {
             if (task->cancelled()) {
                 std::printf("[Interrupt] Agent=%d LLM task cancelled, skipping HTTP call\n",
                             task->agent_id);
@@ -992,8 +1123,31 @@ void TaskScheduler::dispatch_llm_task(std::shared_ptr<AgentTask> task) {
             std::printf("[IOPool] Agent#%d LLM HTTP request started\n", task->agent_id);
 
             std::string llm_response;
+            int pf_retry = 0;
+            constexpr int kMaxPfRetry = 3;
+
             try {
-                llm_response = llm_->generate(system_prompt, messages);
+            pf_retry_dispatch:
+                try {
+                    llm_response = llm_->generate(system_prompt, messages);
+                } catch (const SemanticPageFaultException& pf) {
+                    pf_retry++;
+                    std::printf("[PageFault] Agent#%d | Semantic Page Fault #%d (dispatch_llm) | keywords='%s'\n",
+                                task->agent_id, pf_retry, pf.keywords().c_str());
+
+                    if (pf_retry > kMaxPfRetry) {
+                        llm_response = "[System: Knowledge retrieval exhausted after " +
+                                       std::to_string(kMaxPfRetry) +
+                                       " attempts. Original query: " + pf.keywords() + "]";
+                    } else {
+                        std::string knowledge_context = build_rich_context(pf.keywords());
+
+                        messages.push_back({"system", knowledge_context});
+                        std::printf("[PageFault] Agent#%d | GraphRAG context injected, retrying LLM (dispatch_llm)\n",
+                                    task->agent_id);
+                        goto pf_retry_dispatch;
+                    }
+                }
             } catch (const std::exception& e) {
                 std::printf("[IOPool] Agent#%d LLM call exception: %s\n",
                             task->agent_id, e.what());
@@ -1248,6 +1402,8 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
     std::string vfs_path = task->tool_code;
     std::string payload = task->task_payload;
 
+    TraceManager::set_thread_agent_id(task->agent_id);
+
     std::printf("[VFS] Agent#%d | action=%s | path=%s | payload=%zu bytes\n",
                 task->agent_id, action.c_str(), vfs_path.c_str(), payload.size());
 
@@ -1458,11 +1614,33 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                     if (!captured_stdout.empty()) {
                         resp_data["stdout"] = captured_stdout;
                     }
-                    auto resp_str = make_response(true, "Compile & Execute completed", resp_data.dump());
+
+                    bool is_crash = false;
+                    auto parsed_output = nlohmann::json::parse(output, nullptr, false);
+                    if (!parsed_output.is_discarded() && parsed_output.contains("status") &&
+                        parsed_output["status"].is_string() &&
+                        parsed_output["status"].get<std::string>() == "trap") {
+                        is_crash = true;
+                    }
+
+                    if (is_crash) {
+                        task->status = TaskStatus::CRASHED;
+                        resp_data["crashed"] = true;
+                        std::printf("[VFS-COMPILE] Agent#%d | WASM TRAP detected → CRASHED | triggering auto-diagnosis\n",
+                                    task->agent_id);
+                    }
+
+                    auto resp_str = make_response(!is_crash,
+                        is_crash ? "WASM trap occurred during execution" : "Compile & Execute completed",
+                        resp_data.dump());
                     if (task->response_callback_) {
                         task->response_callback_(task->client_fd, resp_str);
                     } else if (response_cb_) {
                         response_cb_(task->client_fd, resp_str);
+                    }
+
+                    if (is_crash) {
+                        CrashAnalyzer::instance().analyze_panic_for_agent(task->agent_id);
                     }
                 }
 
@@ -1830,6 +2008,8 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                 FILE* tmp_stdout = tmpfile();
                 int stdout_fd = tmp_stdout ? fileno(tmp_stdout) : -1;
 
+                ping_heartbeat(task->agent_id);
+
                 std::string output = wasm_node->execute_with_fds(
                     exec_payload.dump(), -1, stdout_fd);
 
@@ -1856,8 +2036,30 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                     resp_data["output"] = output;
                     resp_data["stdout"] = captured_stdout;
                     resp_data["cache_hit"] = static_cast<bool>(cached_node);
+
+                    bool is_crash = false;
+                    auto parsed_output = nlohmann::json::parse(output, nullptr, false);
+                    if (!parsed_output.is_discarded() && parsed_output.contains("status") &&
+                        parsed_output["status"].is_string() &&
+                        parsed_output["status"].get<std::string>() == "trap") {
+                        is_crash = true;
+                    }
+
+                    if (is_crash) {
+                        task->status = TaskStatus::CRASHED;
+                        resp_data["crashed"] = true;
+                        std::printf("[EXECUTE_MODULE] Agent#%d | WASM TRAP detected → CRASHED | triggering auto-diagnosis\n",
+                                    task->agent_id);
+                    }
+
                     response_cb_(task->client_fd,
-                        make_response(true, "EXECUTE_MODULE completed", resp_data.dump()));
+                        make_response(!is_crash,
+                            is_crash ? "WASM trap occurred during EXECUTE_MODULE" : "EXECUTE_MODULE completed",
+                            resp_data.dump()));
+
+                    if (is_crash) {
+                        CrashAnalyzer::instance().analyze_panic_for_agent(task->agent_id);
+                    }
                 }
 
                 active_io_tasks_.fetch_sub(1);
@@ -1876,7 +2078,7 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
         return;
     }
 
-    auto node = vfs.resolve_path(vfs_path, task->agent_id);
+    auto node = vfs.resolve_path(vfs_path, task->agent_id, task->root_dir);
 
     if (!node) {
         node = vfs.resolve_or_create_mem(vfs_path, memory_mgr_);
@@ -1987,6 +2189,20 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
             } else {
                 content = node->read();
             }
+        } else if (node->node_type() == VfsNodeType::GRAPH) {
+            auto graph_node = std::dynamic_pointer_cast<GraphNode>(node);
+            if (graph_node) {
+                content = graph_node->read_as(task->agent_id);
+            } else {
+                content = node->read();
+            }
+        } else if (node->node_type() == VfsNodeType::AUDIO) {
+            auto audio_node = std::dynamic_pointer_cast<AudioNode>(node);
+            if (audio_node) {
+                content = audio_node->read_as(task->agent_id);
+            } else {
+                content = node->read();
+            }
         } else if (!node->check_read(task->agent_id)) {
             content = "[PermissionDenied] uid " + std::to_string(task->agent_id) +
                       " cannot read " + vfs_path;
@@ -1994,6 +2210,12 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
             content = node->read();
         }
         std::printf("[VFS] READ %s -> %zu bytes\n", vfs_path.c_str(), content.size());
+        {
+            auto& tracer = TraceManager::instance();
+            if (tracer.mode() == TraceMode::RECORD) {
+                tracer.record_event(task->agent_id, "VFS_READ", content);
+            }
+        }
         {
             nlohmann::json resp_data;
             resp_data["path"] = vfs_path;
@@ -2033,6 +2255,21 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
             auto vec_node = std::dynamic_pointer_cast<VectorNode>(node);
             if (vec_node) {
                 ok = vec_node->write_as(payload, task->agent_id);
+            } else {
+                ok = node->write(payload);
+            }
+        } else if (node->node_type() == VfsNodeType::GRAPH) {
+            auto graph_node = std::dynamic_pointer_cast<GraphNode>(node);
+            if (graph_node) {
+                ping_heartbeat(task->agent_id);
+                ok = graph_node->write_as(payload, task->agent_id);
+            } else {
+                ok = node->write(payload);
+            }
+        } else if (node->node_type() == VfsNodeType::AUDIO) {
+            auto audio_node = std::dynamic_pointer_cast<AudioNode>(node);
+            if (audio_node) {
+                ok = audio_node->write_as(payload, task->agent_id);
             } else {
                 ok = node->write(payload);
             }
@@ -2096,8 +2333,30 @@ void TaskScheduler::dispatch_vfs_task(std::shared_ptr<AgentTask> task) {
                             nlohmann::json resp_data;
                             resp_data["path"] = vfs_path;
                             resp_data["output"] = output;
+
+                            bool is_crash = false;
+                            auto parsed_output = nlohmann::json::parse(output, nullptr, false);
+                            if (!parsed_output.is_discarded() && parsed_output.contains("status") &&
+                                parsed_output["status"].is_string() &&
+                                parsed_output["status"].get<std::string>() == "trap") {
+                                is_crash = true;
+                            }
+
+                            if (is_crash) {
+                                task->status = TaskStatus::CRASHED;
+                                resp_data["crashed"] = true;
+                                std::printf("[WasmPool] Agent#%d | WASM TRAP detected → CRASHED | triggering auto-diagnosis\n",
+                                            task->agent_id);
+                            }
+
                             response_cb_(task->client_fd,
-                                make_response(true, "WASM execution completed", resp_data.dump()));
+                                make_response(!is_crash,
+                                    is_crash ? "WASM trap occurred during VFS EXECUTE" : "WASM execution completed",
+                                    resp_data.dump()));
+
+                            if (is_crash) {
+                                CrashAnalyzer::instance().analyze_panic_for_agent(task->agent_id);
+                            }
                         }
 
                         active_io_tasks_.fetch_sub(1);

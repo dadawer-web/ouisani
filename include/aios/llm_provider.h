@@ -16,6 +16,9 @@ public:
     virtual ~ILlmProvider() = default;
     virtual std::string get_name() const = 0;
     virtual std::string generate(const std::string& prompt) = 0;
+    virtual std::string generate_with_system(const std::string& system_prompt, const std::string& user_prompt) {
+        return generate(user_prompt);
+    }
 };
 
 class LocalOllamaProvider : public ILlmProvider {
@@ -50,6 +53,22 @@ public:
         }
         std::this_thread::sleep_for(std::chrono::seconds(2));
         return "[Cloud-GPT-4o] 💡 已深度思考并编写代码: " + prompt;
+    }
+
+    std::string generate_with_system(const std::string& system_prompt, const std::string& user_prompt) override {
+        if (llm_ && llm_->has_api_key()) {
+            try {
+                std::string result = llm_->generate(system_prompt, user_prompt);
+                std::printf("[CloudGptProvider] Deep inference (with system) via %s | result=%zu bytes\n",
+                            llm_->model().c_str(), result.size());
+                return result;
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "[CloudGptProvider] API error, fallback: %s\n", e.what());
+                return "[Cloud-mimo] API Error: " + std::string(e.what());
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        return "[Cloud-GPT-4o] 💡 已深度思考并编写代码: " + user_prompt;
     }
 
 private:
