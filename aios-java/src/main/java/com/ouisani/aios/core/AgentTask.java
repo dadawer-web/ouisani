@@ -1,10 +1,13 @@
 package com.ouisani.aios.core;
 
+import com.ouisani.aios.core.ipc.SignalType;
+import com.ouisani.aios.core.security.SecurityToken;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class AgentTask {
@@ -17,7 +20,8 @@ public final class AgentTask {
         BLOCKED,
         KILLED,
         OOM_KILLED,
-        CRASHED
+        CRASHED,
+        DEADLINE_EXCEEDED
     }
 
     public enum TaskType {
@@ -40,13 +44,19 @@ public final class AgentTask {
     private final List<String> contextHistory;
 
     private int priority;
+    private ProcessPriority processPriority;
+    private NumaAffinity affinity;
+    private int budget;
     private TaskType type;
     private String payload;
     private String toolName;
     private String toolCode;
     private int gasLimit;
     private int gasUsed;
+    private volatile long deadlineMs;
+    private SecurityToken primaryToken;
     private final AtomicBoolean cancelled;
+    private final ConcurrentLinkedQueue<SignalType> pendingSignals;
 
     public AgentTask(int pid,
                      TaskStatus status,
@@ -62,10 +72,16 @@ public final class AgentTask {
         this.context = context;
         this.contextHistory = new ArrayList<>();
         this.priority = 0;
+        this.processPriority = (pid < 100) ? ProcessPriority.REALTIME : ProcessPriority.NORMAL;
+        this.affinity = NumaAffinity.PREFER_LOCAL;
+        this.budget = 200;
         this.type = TaskType.LLM_CHAT;
         this.gasLimit = 10_000;
         this.gasUsed = 0;
+        this.deadlineMs = 0;
+        this.primaryToken = SecurityToken.forAgent(this);
         this.cancelled = new AtomicBoolean(false);
+        this.pendingSignals = new ConcurrentLinkedQueue<>();
         log.debug("AgentTask created: pid={}, cgroup={}, status={}", pid, cgroup, status);
     }
 
@@ -124,6 +140,57 @@ public final class AgentTask {
 
     public void setPriority(int priority) {
         this.priority = priority;
+    }
+
+    public ProcessPriority processPriority() {
+        return processPriority;
+    }
+
+    public void setProcessPriority(ProcessPriority processPriority) {
+        ProcessPriority prev = this.processPriority;
+        this.processPriority = processPriority;
+        log.info("Task#{} processPriority transition: {} -> {}", pid, prev, processPriority);
+    }
+
+    public NumaAffinity affinity() {
+        return affinity;
+    }
+
+    public void setAffinity(NumaAffinity affinity) {
+        NumaAffinity prev = this.affinity;
+        this.affinity = affinity;
+        log.info("Task#{} affinity transition: {} -> {}", pid, prev, affinity);
+    }
+
+    public int budget() {
+        return budget;
+    }
+
+    public void setBudget(int budget) {
+        this.budget = budget;
+    }
+
+    public long deadlineMs() {
+        return deadlineMs;
+    }
+
+    public void setDeadlineMs(long deadlineMs) {
+        this.deadlineMs = deadlineMs;
+        if (deadlineMs > 0) {
+            log.info("Task#{} deadline set: {} (in {}ms)", pid, deadlineMs, deadlineMs - System.currentTimeMillis());
+        }
+    }
+
+    public SecurityToken primaryToken() {
+        return primaryToken;
+    }
+
+    public void setPrimaryToken(SecurityToken primaryToken) {
+        SecurityToken prev = this.primaryToken;
+        this.primaryToken = primaryToken;
+        log.info("Task#{} primaryToken transition: {} -> {}", pid,
+                prev != null ? prev.ownerId() : "null",
+                primaryToken != null ? primaryToken.ownerId() : "null");
     }
 
     public TaskType type() {
@@ -195,10 +262,27 @@ public final class AgentTask {
         }
     }
 
+    public void sendSignal(SignalType signal) {
+        pendingSignals.offer(signal);
+        log.info("Task#{} received signal: {}", pid, signal);
+    }
+
+    public SignalType pollSignal() {
+        return pendingSignals.poll();
+    }
+
+    public boolean hasPendingSignals() {
+        return !pendingSignals.isEmpty();
+    }
+
+    public ConcurrentLinkedQueue<SignalType> pendingSignals() {
+        return pendingSignals;
+    }
+
     @Override
     public String toString() {
-        return "AgentTask{pid=%d, status=%s, cgroup='%s', type=%s, gas=%d/%d}"
-                .formatted(pid, status, cgroup, type, gasUsed, gasLimit);
+        return "AgentTask{pid=%d, status=%s, cgroup='%s', type=%s, priority=%s, gas=%d/%d}"
+                .formatted(pid, status, cgroup, type, processPriority, gasUsed, gasLimit);
     }
 
     public record TokenRecord(String role, String content, long timestamp) {

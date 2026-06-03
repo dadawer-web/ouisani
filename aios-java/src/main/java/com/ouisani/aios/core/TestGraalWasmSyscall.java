@@ -17,7 +17,12 @@ public class TestGraalWasmSyscall {
         };
 
         System.out.println("[Test] 正在向 GraalWasm 引擎提交二进制字节码...");
-        Value result = sandbox.execute(validWasmBytes, "main");
-        System.out.println("[Test] 沙箱执行成功，WASM 返回值: " + result.asInt());
+        try {
+            Value result = sandbox.execute(validWasmBytes, "main");
+            System.out.println("[Test] 沙箱执行成功，WASM 返回值: " + result.asInt());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            System.out.println("[Test] WASM execution interrupted by signal: " + e.getMessage());
+        }
     }
 }

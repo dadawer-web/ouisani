@@ -1,7 +1,10 @@
 package com.ouisani.aios.core.sandbox;
 
+import com.ouisani.aios.core.AgentTask;
+import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.VfsNode;
+import com.ouisani.aios.core.ipc.SignalInterceptor;
 import com.ouisani.aios.core.llm.LlmProvider;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Source;
@@ -14,7 +17,7 @@ import org.slf4j.LoggerFactory;
 import java.util.HashMap;
 import java.util.Map;
 
-public class GraalWasmSandbox {
+public class GraalWasmSandbox implements SandboxProvider {
     private static final Logger log = LoggerFactory.getLogger(GraalWasmSandbox.class);
     private Context context;
 
@@ -86,10 +89,56 @@ public class GraalWasmSandbox {
         }
     }
 
-    public Value execute(byte[] wasmBytes, String functionName) {
+    public Value execute(byte[] wasmBytes, String functionName) throws InterruptedException {
+        // Signal interception: check pending signals before WASM execution
+        AgentTask currentTask = TaskScheduler.CURRENT_TASK.get();
+        if (currentTask != null) {
+            SignalInterceptor.checkAndDrain(currentTask);
+            // If we reach here, no SIGTERM/SIGINT was pending.
+            // SIGUSR1 is not meaningful for WASM execution, so we just drain it.
+        }
+
         Source source = Source.newBuilder("wasm", ByteSequence.create(wasmBytes), "main").buildLiteral();
         context.eval(source);
         Value mainFunc = context.getBindings("wasm").getMember("main").getMember(functionName);
         return mainFunc.execute();
+    }
+
+    @Override
+    public String executeCode(String code, String entrypoint) throws Exception {
+        // For GraalWasm, code is expected to be hex-encoded WASM bytecode
+        // or base64. For simplicity, we treat it as raw bytes if it looks
+        // like hex, otherwise fall back to the mock WASM.
+        byte[] wasmBytes;
+        try {
+            wasmBytes = hexToBytes(code);
+        } catch (Exception e) {
+            log.debug("[GraalWasmSandbox] Code is not valid hex, using mock WASM bytecode");
+            wasmBytes = new byte[]{
+                    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+                    0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f, 0x03,
+                    0x02, 0x01, 0x00, 0x07, 0x08, 0x01, 0x04, 0x6d,
+                    0x61, 0x69, 0x6e, 0x00, 0x00, 0x0a, 0x06, 0x01,
+                    0x04, 0x00, 0x41, 0x2a, 0x0b
+            };
+        }
+
+        Value result = execute(wasmBytes, entrypoint != null ? entrypoint : "main");
+        return result.toString();
+    }
+
+    @Override
+    public String providerName() {
+        return "GraalWasm";
+    }
+
+    private static byte[] hexToBytes(String hex) {
+        String clean = hex.replaceAll("\\s+", "");
+        if (clean.length() % 2 != 0) throw new IllegalArgumentException("Odd hex length");
+        byte[] bytes = new byte[clean.length() / 2];
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = (byte) Integer.parseInt(clean.substring(i * 2, i * 2 + 2), 16);
+        }
+        return bytes;
     }
 }

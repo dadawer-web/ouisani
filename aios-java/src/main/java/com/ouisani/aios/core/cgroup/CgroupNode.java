@@ -1,5 +1,9 @@
 package com.ouisani.aios.core.cgroup;
 
+import com.ouisani.aios.core.AgentTask;
+import com.ouisani.aios.core.ProcessPriority;
+import com.ouisani.aios.core.TaskScheduler;
+import com.ouisani.aios.core.telemetry.SemanticEtw;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,6 +48,14 @@ public class CgroupNode {
 
     public boolean consumeTokens(long amount, String agentId) {
         if (amount <= 0) return true;
+
+        // Kernel privilege: REALTIME processes bypass all cgroup limits
+        AgentTask currentTask = TaskScheduler.CURRENT_TASK.get();
+        if (currentTask != null && currentTask.processPriority() == ProcessPriority.REALTIME) {
+            log.info("[Kernel Privilege] REALTIME process '{}' requested LLM. Cgroup limits bypassed!",
+                    agentId != null ? agentId : "pid=" + currentTask.pid());
+            return true;
+        }
 
         long currentConsumed = tokenConsumed.get();
         long newConsumed = currentConsumed + amount;
@@ -90,6 +102,12 @@ public class CgroupNode {
         }
 
         log.debug("[CgroupNode] Consumed {} tokens at '{}': {}/{}", amount, name, newConsumed, tokenQuota.get());
+
+        SemanticEtw.getInstance().logEvent("CGROUP", "CONSUME",
+                "cgroup=" + name + " amount=" + amount
+                + " total=" + newConsumed + "/" + tokenQuota.get()
+                + " agent=" + (agentId != null ? agentId : "?"));
+
         return true;
     }
 

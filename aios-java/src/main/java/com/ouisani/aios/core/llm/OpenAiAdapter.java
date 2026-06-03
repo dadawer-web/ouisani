@@ -4,6 +4,10 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.ouisani.aios.core.AgentTask;
+import com.ouisani.aios.core.TaskScheduler;
+import com.ouisani.aios.core.ipc.SignalInterceptor;
+import com.ouisani.aios.core.telemetry.SemanticEtw;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -147,6 +151,31 @@ public class OpenAiAdapter implements LlmProvider {
             return error;
         }
 
+        // Signal interception: check pending signals before issuing the real LLM request
+        AgentTask currentTask = TaskScheduler.CURRENT_TASK.get();
+        if (currentTask != null) {
+            try {
+                String prefix = SignalInterceptor.checkAndDrain(currentTask);
+                if (prefix != null) {
+                    // SIGUSR1 received: inject interrupt prefix into the first user message
+                    List<ChatMessage> modified = new java.util.ArrayList<>(messages);
+                    for (int i = 0; i < modified.size(); i++) {
+                        ChatMessage msg = modified.get(i);
+                        if ("user".equals(msg.role())) {
+                            modified.set(i, new ChatMessage("user", prefix + msg.content()));
+                            break;
+                        }
+                    }
+                    messages = modified;
+                    log.info("[SignalInterceptor] SIGUSR1 prefix injected into prompt for Agent#{}", currentTask.pid());
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("[SignalInterceptor] Agent#{} interrupted by signal before LLM call", currentTask.pid());
+                return "[LLM INTERRUPTED] " + e.getMessage();
+            }
+        }
+
         JsonObject body = new JsonObject();
         body.addProperty("model", model);
         body.addProperty("stream", false);
@@ -183,7 +212,13 @@ public class OpenAiAdapter implements LlmProvider {
                 .build();
 
         try {
+            long startNanos = System.nanoTime();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
+
+            SemanticEtw.getInstance().logEvent("LLM", "CALL",
+                    "model=" + model + " status=" + response.statusCode()
+                    + " latencyMs=" + elapsedMs + " msgCount=" + msgArray.size());
 
             if (response.statusCode() != 200) {
                 String errorBody = response.body().length() > 300

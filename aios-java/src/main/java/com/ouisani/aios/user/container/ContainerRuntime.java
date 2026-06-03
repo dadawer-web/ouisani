@@ -7,7 +7,9 @@ import com.ouisani.aios.core.VfsNode;
 import com.ouisani.aios.core.cgroup.CgroupManager;
 import com.ouisani.aios.core.cgroup.CgroupNode;
 import com.ouisani.aios.core.crash.SemanticCrashAnalyzer;
+import com.ouisani.aios.core.sandbox.DockerSandboxProvider;
 import com.ouisani.aios.core.sandbox.GraalWasmSandbox;
+import com.ouisani.aios.core.sandbox.SandboxProvider;
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Value;
 
@@ -21,13 +23,33 @@ public class ContainerRuntime {
 
     private final AtomicInteger pidSeq = new AtomicInteger(1000);
     private final ConcurrentHashMap<String, ContainerContext> containers = new ConcurrentHashMap<>();
-    private final GraalWasmSandbox sandbox;
+    private final GraalWasmSandbox graalSandbox;
     private final TaskScheduler scheduler;
 
     public ContainerRuntime(TaskScheduler scheduler) {
         this.scheduler = scheduler;
-        this.sandbox = new GraalWasmSandbox();
-        this.sandbox.initContext();
+        this.graalSandbox = new GraalWasmSandbox();
+        this.graalSandbox.initContext();
+    }
+
+    /**
+     * Select sandbox provider based on the FROM directive in AgentImageConfig.
+     * <ul>
+     *   <li>{@code aios/graalwasm} → in-process GraalVM WASM engine</li>
+     *   <li>{@code docker:python:3.10} → physical Docker container</li>
+     * </ul>
+     */
+    private SandboxProvider selectSandbox(AgentImageConfig config) {
+        String baseImage = config.baseImage();
+        if (baseImage != null && baseImage.startsWith("docker:")) {
+            // Extract Docker image name: "docker:python:3.10" → "python:3.10"
+            String dockerImage = baseImage.substring("docker:".length());
+            System.out.printf("  ├─ [Cloud Sandbox] FROM %s → DockerSandboxProvider(%s)%n", baseImage, dockerImage);
+            return new DockerSandboxProvider(dockerImage);
+        }
+        // Default: GraalVM WASM engine
+        System.out.printf("  ├─ [Sandbox] FROM %s → GraalWasmSandbox%n", baseImage);
+        return graalSandbox;
     }
 
     public void runContainer(String containerId, AgentImageConfig config) {
@@ -83,13 +105,32 @@ public class ContainerRuntime {
                         containerId, config.tokenLimit());
 
                 if (config.wasmPath() != null && config.entrypoint() != null) {
-                    System.out.printf("  ├─ [WASM] Loading bytecode from %s%n", config.wasmPath());
-                    System.out.printf("  ├─ [WASM] Executing entrypoint '%s'...%n", config.entrypoint());
+                    SandboxProvider sandbox = selectSandbox(config);
+                    System.out.printf("  ├─ [Sandbox] Provider: %s%n", sandbox.providerName());
+                    System.out.printf("  ├─ [Sandbox] Loading code from %s%n", config.wasmPath());
+                    System.out.printf("  ├─ [Sandbox] Executing entrypoint '%s'...%n", config.entrypoint());
 
                     try {
-                        byte[] wasmBytes = loadWasmBytes(config.wasmPath());
-                        Value result = sandbox.execute(wasmBytes, config.entrypoint());
-                        System.out.printf("  └─ [WASM] Execution complete. Result: %s%n", result);
+                        if (sandbox instanceof GraalWasmSandbox graal) {
+                            // GraalWasm path: load WASM bytes and execute via Polyglot
+                            byte[] wasmBytes = loadWasmBytes(config.wasmPath());
+                            Value result = graal.execute(wasmBytes, config.entrypoint());
+                            System.out.printf("  └─ [WASM] Execution complete. Result: %s%n", result);
+                        } else {
+                            // Docker/cloud sandbox path: load code as string and execute
+                            String code = loadCodeString(config.wasmPath());
+                            String result = sandbox.executeCode(code, config.entrypoint());
+                            System.out.printf("  └─ [Cloud Sandbox] Execution complete. Output (%d chars):%n",
+                                    result.length());
+                            // Print first 500 chars of output
+                            String preview = result.length() > 500
+                                    ? result.substring(0, 500) + "..."
+                                    : result;
+                            System.out.println(preview);
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        System.err.printf("  ⚠ [Sandbox] Container '%s' interrupted by signal: %s%n", containerId, e.getMessage());
                     } catch (PolyglotException e) {
                         System.err.printf("  🚨 [WASM SANDBOX] PolyglotException in container '%s'!%n", containerId);
                         System.err.printf("  🚨 [WASM SANDBOX] %s: %s%n", e.getClass().getSimpleName(), e.getMessage());
@@ -97,9 +138,13 @@ public class ContainerRuntime {
                                 + "' from '" + config.wasmPath() + "' in container '" + containerId + "'";
                         SemanticCrashAnalyzer.instance().generateCoreDump(containerId, e, wasmContext);
                         throw e;
+                    } catch (Exception e) {
+                        System.err.printf("  🚨 [Sandbox] Execution failed in container '%s': %s%n",
+                                containerId, e.getMessage());
+                        throw new RuntimeException(e);
                     }
                 } else {
-                    System.out.println("  └─ [WASM] No entrypoint specified, container idle");
+                    System.out.println("  └─ [Sandbox] No entrypoint specified, container idle");
                 }
             } finally {
                 VfsManager.AGENT_ROOT.remove();
@@ -120,6 +165,18 @@ public class ContainerRuntime {
         }
         System.out.println("  ⚠ [WASM] Path not found in VFS, using mock bytecode (returns 42)");
         return MOCK_WASM_42;
+    }
+
+    private String loadCodeString(String path) {
+        Optional<VfsNode> node = VfsManager.instance().resolve(path);
+        if (node.isPresent()) {
+            String content = node.get().read();
+            if (content != null && !content.isEmpty()) {
+                return content;
+            }
+        }
+        System.out.printf("  ⚠ [Sandbox] Path '%s' not found in VFS, using placeholder code%n", path);
+        return "print('AIOS Docker Sandbox - no code found at " + path + "')";
     }
 
     public void stopContainer(String containerId) {

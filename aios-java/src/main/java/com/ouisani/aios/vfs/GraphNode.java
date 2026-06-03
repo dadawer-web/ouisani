@@ -2,6 +2,7 @@ package com.ouisani.aios.vfs;
 
 import com.ouisani.aios.core.VfsNode;
 import com.ouisani.aios.core.llm.LlmProvider;
+import com.ouisani.aios.core.vfs.VfsJournal;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -97,6 +98,9 @@ public non-sealed class GraphNode implements VfsNode {
     @Override
     public boolean write(String payload) {
         if (payload == null || payload.isBlank()) return false;
+
+        // WAL: journal the write before applying it
+        VfsJournal.getInstance().appendLog(path, "WRITE", payload);
 
         System.out.printf("  [GraphNode] %s: extracting triplets from %d chars...%n",
                 path, payload.length());
@@ -204,4 +208,47 @@ public non-sealed class GraphNode implements VfsNode {
     record PathEntry(String src, String rel, String dst, int depth) {}
 
     record BfsNode(String entity, int depth) {}
+
+    /**
+     * Create a frozen shadow copy of this GraphNode.
+     * Deep-copies the adjacency list and entity set so the snapshot is independent.
+     * The returned node is read-only (write always returns false).
+     */
+    @Override
+    public VfsNode createShadowCopy() {
+        // Deep copy adjacency list
+        Map<String, Set<Edge>> frozenAdj = new LinkedHashMap<>();
+        for (var entry : adjacencyList.entrySet()) {
+            frozenAdj.put(entry.getKey(), Set.copyOf(entry.getValue()));
+        }
+        Set<String> frozenEntities = Set.copyOf(allEntities);
+
+        int edgeCount = frozenAdj.values().stream().mapToInt(Set::size).sum();
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"path\":\"").append(path).append("\",");
+        sb.append("\"snapshot\":true,");
+        sb.append("\"entityCount\":").append(frozenEntities.size()).append(",");
+        sb.append("\"edgeCount\":").append(edgeCount).append(",");
+        sb.append("\"entities\":[");
+        List<String> sorted = frozenEntities.stream().sorted().toList();
+        for (int i = 0; i < sorted.size(); i++) {
+            if (i > 0) sb.append(",");
+            sb.append("\"").append(escape(sorted.get(i))).append("\"");
+        }
+        sb.append("],\"edges\":[");
+        boolean first = true;
+        List<String> sortedSrc = frozenAdj.keySet().stream().sorted().toList();
+        for (String src : sortedSrc) {
+            for (Edge edge : frozenAdj.get(src)) {
+                if (!first) sb.append(",");
+                first = false;
+                sb.append("{\"src\":\"").append(escape(src)).append("\",")
+                  .append("\"rel\":\"").append(escape(edge.relation)).append("\",")
+                  .append("\"dst\":\"").append(escape(edge.target)).append("\"}");
+            }
+        }
+        sb.append("]}");
+
+        return new ShadowCopyNode(path + " [SHADOW]", VfsNodeType.GRAPH, sb.toString(), ownerUid);
+    }
 }

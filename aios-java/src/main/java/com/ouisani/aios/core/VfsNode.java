@@ -13,7 +13,9 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
         com.ouisani.aios.vfs.GraphNode, com.ouisani.aios.vfs.CameraNode,
         com.ouisani.aios.vfs.DisplayNode, com.ouisani.aios.vfs.HttpNode,
         com.ouisani.aios.vfs.WebhookNode, com.ouisani.aios.vfs.AudioNode,
-        com.ouisani.aios.vfs.HostSourceNode {
+        com.ouisani.aios.vfs.HostSourceNode, com.ouisani.aios.vfs.ShmNode,
+        com.ouisani.aios.vfs.RegistryFsNode, com.ouisani.aios.vfs.ShadowCopyNode,
+        com.ouisani.aios.vfs.GuiDomNode, com.ouisani.aios.vfs.GuiActionNode {
 
     Logger log = LoggerFactory.getLogger(VfsNode.class);
 
@@ -37,6 +39,20 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
     String read();
 
     boolean write(String data);
+
+    /**
+     * Create a frozen, read-only shadow copy (VSS snapshot) of this node.
+     * The returned node captures the state at this instant and rejects all writes.
+     * Default implementation returns a read-only wrapper; nodes with internal
+     * mutable state (VectorNode, GraphNode) should override to deep-copy their data.
+     *
+     * @return a frozen VfsNode that is independent of the original
+     */
+    default VfsNode createShadowCopy() {
+        final String frozenContent = this.read();
+        final String frozenPath = this.path() + " [SHADOW]";
+        return new com.ouisani.aios.vfs.ShadowCopyNode(frozenPath, this.nodeType(), frozenContent, this.ownerUid());
+    }
 
     default boolean checkRead(int callerUid) {
         if (callerUid == 0) return true;

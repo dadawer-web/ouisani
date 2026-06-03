@@ -1,0 +1,111 @@
+package com.ouisani.aios.core.config;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.Collections;
+import java.util.Map;
+import java.util.NavigableMap;
+import java.util.concurrent.ConcurrentSkipListMap;
+
+/**
+ * Global Semantic Registry — a fusion of Windows Registry and Linux /proc philosophy.
+ * <p>
+ * Maintains a sorted global configuration tree using {@link ConcurrentSkipListMap},
+ * accessible both via Java API and through VFS at {@code /proc/registry}.
+ * <p>
+ * Default keys are initialized at startup with AIOS kernel configuration.
+ */
+public final class SemanticRegistry {
+
+    private static final Logger log = LoggerFactory.getLogger(SemanticRegistry.class);
+
+    private static final class Holder {
+        static final SemanticRegistry INSTANCE = new SemanticRegistry();
+    }
+
+    public static SemanticRegistry instance() {
+        return Holder.INSTANCE;
+    }
+
+    private final ConcurrentSkipListMap<String, String> tree = new ConcurrentSkipListMap<>();
+
+    private SemanticRegistry() {
+        // Default kernel configuration
+        setValue("HKEY_LOCAL_AIOS/System/DefaultLlm", "smart_model");
+        setValue("HKEY_LOCAL_AIOS/System/KernelVersion", "0.1.0-java");
+        setValue("HKEY_LOCAL_AIOS/System/VirtualThreads", "enabled");
+        setValue("HKEY_LOCAL_AIOS/System/SwapEnabled", "true");
+        setValue("HKEY_LOCAL_AIOS/System/SignalSupport", "SIGTERM,SIGINT,SIGUSR1");
+        setValue("HKEY_LOCAL_AIOS/System/ShmDefaultSegment", "blackboard");
+        setValue("HKEY_LOCAL_AIOS/LLM/FastModel", "fast_model");
+        setValue("HKEY_LOCAL_AIOS/LLM/SmartModel", "smart_model");
+        setValue("HKEY_LOCAL_AIOS/LLM/SmartThreshold", "500");
+        setValue("HKEY_LOCAL_AIOS/Security/BpfEnabled", "true");
+        setValue("HKEY_LOCAL_AIOS/Security/HandleBasedAccess", "true");
+        setValue("HKEY_LOCAL_AIOS/Cgroup/RootQuota", "1000000");
+        setValue("HKEY_LOCAL_AIOS/Cgroup/AgentDefaultQuota", "50000");
+        setValue("HKEY_LOCAL_AIOS/Cgroup/SwapThresholdRatio", "0.95");
+
+        log.info("[SemanticRegistry] Initialized with {} default entries", tree.size());
+    }
+
+    public void setValue(String key, String value) {
+        tree.put(key, value);
+        log.debug("[SemanticRegistry] SET: {} = {}", key, value);
+    }
+
+    public String getValue(String key) {
+        return tree.get(key);
+    }
+
+    public String getValue(String key, String defaultValue) {
+        return tree.getOrDefault(key, defaultValue);
+    }
+
+    public boolean removeKey(String key) {
+        String removed = tree.remove(key);
+        if (removed != null) {
+            log.debug("[SemanticRegistry] REMOVED: {}", key);
+            return true;
+        }
+        return false;
+    }
+
+    public boolean containsKey(String key) {
+        return tree.containsKey(key);
+    }
+
+    /**
+     * Get all keys with a given prefix (e.g. "HKEY_LOCAL_AIOS/System/").
+     */
+    public NavigableMap<String, String> getSubTree(String prefix) {
+        return tree.subMap(prefix, true, prefix + Character.MAX_VALUE, true);
+    }
+
+    /**
+     * Dump the entire registry as a formatted string.
+     */
+    public String dumpAll() {
+        StringBuilder sb = new StringBuilder();
+        tree.forEach((k, v) -> sb.append(k).append(" = ").append(v).append('\n'));
+        return sb.toString();
+    }
+
+    /**
+     * Dump a subtree as a formatted string.
+     */
+    public String dumpSubTree(String prefix) {
+        StringBuilder sb = new StringBuilder();
+        getSubTree(prefix).forEach((k, v) -> sb.append(k).append(" = ").append(v).append('\n'));
+        return sb.toString();
+    }
+
+    public int size() {
+        return tree.size();
+    }
+
+    public Map<String, String> asMap() {
+        return Collections.unmodifiableMap(tree);
+    }
+}

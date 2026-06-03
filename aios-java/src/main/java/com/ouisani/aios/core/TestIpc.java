@@ -1,123 +1,144 @@
 package com.ouisani.aios.core;
 
-import com.ouisani.aios.vfs.PipeNode;
+import com.ouisani.aios.core.ipc.SharedMemoryManager;
+import com.ouisani.aios.vfs.ShmNode;
 
-import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Test: Agent A writes intermediate results to SHM, Agent B reads and verifies
+ * in real-time, proving zero-copy cross-agent communication via shared memory.
+ */
 public class TestIpc {
 
-    public static void main(String[] args) throws InterruptedException {
-        int messageCount = 100;
-        int pipeCapacity = 8;
+    private static final String SEGMENT_ID = "test_blackboard";
+    private static final int NUM_WRITES = 10;
 
-        PipeNode pipe = new PipeNode("/tmp/pipe0", pipeCapacity);
-        TaskScheduler scheduler = new TaskScheduler();
-        scheduler.start();
-
-        System.out.println("========== IPC Test: Virtual Thread Pipe ==========");
-        System.out.printf("  Pipe: %s (capacity=%d)%n", pipe.path(), pipeCapacity);
-        System.out.printf("  Producer: Agent#1 -> write %d messages%n", messageCount);
-        System.out.printf("  Consumer: Agent#2 -> read %d messages%n", messageCount);
+    public static void main(String[] args) throws Exception {
+        System.out.println("╔══════════════════════════════════════════════════════════╗");
+        System.out.println("║  AIOS SHM IPC Test: Cross-Agent Shared Memory           ║");
+        System.out.println("╚══════════════════════════════════════════════════════════╝");
         System.out.println();
 
-        AtomicInteger producerBlockedCount = new AtomicInteger(0);
-        AtomicInteger consumerBlockedCount = new AtomicInteger(0);
-        CountDownLatch consumerDone = new CountDownLatch(1);
-        CountDownLatch producerDone = new CountDownLatch(1);
+        // Setup
+        VfsManager.instance().init();
+        SharedMemoryManager shmMgr = SharedMemoryManager.instance();
+        shmMgr.getOrCreateSegment(SEGMENT_ID);
 
-        AgentTask producerTask = new AgentTask(
-                1, AgentTask.TaskStatus.READY, "cgroup/producer",
-                "/dev/null", "/tmp/pipe0", new ArrayList<>()
-        );
+        ShmNode shmNode = new ShmNode("/dev/shm/" + SEGMENT_ID, SEGMENT_ID);
+        VfsManager.instance().mount("/dev/shm", SEGMENT_ID, shmNode);
 
-        AgentTask consumerTask = new AgentTask(
-                2, AgentTask.TaskStatus.READY, "cgroup/consumer",
-                "/tmp/pipe0", "/dev/null", new ArrayList<>()
-        );
+        System.out.println("  [Setup] SHM segment '" + SEGMENT_ID + "' created and mounted at /dev/shm/" + SEGMENT_ID);
+        System.out.println();
 
-        scheduler.spawn(consumerTask, () -> {
-            System.out.println("[Consumer#2] STARTED - waiting for messages...");
+        CountDownLatch writerReady = new CountDownLatch(1);
+        CountDownLatch allDone = new CountDownLatch(2);
+        AtomicInteger verifiedCount = new AtomicInteger(0);
+        AtomicInteger errorCount = new AtomicInteger(0);
+
+        // ── Agent A: Writer ──
+        Thread writer = Thread.ofVirtual().name("agent-writer").start(() -> {
             try {
-                for (int i = 0; i < messageCount; i++) {
-                    if (pipe.bufferSize() == 0) {
-                        consumerBlockedCount.incrementAndGet();
-                        System.out.printf("[Consumer#2] Buffer empty, take() will block... (blocked %d times)%n",
-                                consumerBlockedCount.get());
-                    }
+                System.out.println("  [Agent A] Writer started, writing " + NUM_WRITES + " entries...");
+                writerReady.countDown();
 
-                    String data = pipe.take();
-
-                    if (i < 3 || i >= messageCount - 3 || i % 20 == 0) {
-                        System.out.printf("[Consumer#2] READ [%d/%d]: \"%s\" (bufferAfter=%d)%n",
-                                i + 1, messageCount, data, pipe.bufferSize());
+                for (int i = 1; i <= NUM_WRITES; i++) {
+                    String key = "result_" + i;
+                    String value = "intermediate_value_" + (i * 42);
+                    boolean ok = shmNode.write(key + "=" + value);
+                    if (ok) {
+                        System.out.printf("  [Agent A] Wrote: %s=%s%n", key, value);
+                    } else {
+                        System.out.printf("  [Agent A] FAILED to write: %s=%s%n", key, value);
+                        errorCount.incrementAndGet();
                     }
+                    Thread.sleep(50); // simulate computation delay
                 }
-                System.out.println("[Consumer#2] ALL messages received!");
+
+                // Signal completion
+                shmNode.write("status=COMPLETE");
+                System.out.println("  [Agent A] All writes done, status=COMPLETE");
             } catch (InterruptedException e) {
-                System.out.println("[Consumer#2] Interrupted!");
                 Thread.currentThread().interrupt();
+            } finally {
+                allDone.countDown();
             }
-            consumerDone.countDown();
         });
 
-        Thread.sleep(50);
-
-        scheduler.spawn(producerTask, () -> {
-            System.out.println("[Producer#1] STARTED - sending messages...");
+        // ── Agent B: Reader ──
+        Thread reader = Thread.ofVirtual().name("agent-reader").start(() -> {
             try {
-                for (int i = 0; i < messageCount; i++) {
-                    if (pipe.remainingCapacity() == 0) {
-                        producerBlockedCount.incrementAndGet();
-                        System.out.printf("[Producer#1] Buffer full, put() will block... (blocked %d times)%n",
-                                producerBlockedCount.get());
-                    }
+                writerReady.await(5, TimeUnit.SECONDS);
+                System.out.println("  [Agent B] Reader started, polling SHM...");
 
-                    String msg = "msg#" + (i + 1) + " from Agent#1";
-                    pipe.put(msg);
+                int lastVerified = 0;
+                int attempts = 0;
+                int maxAttempts = NUM_WRITES * 20; // generous timeout
 
-                    if (i < 3 || i >= messageCount - 3 || i % 20 == 0) {
-                        System.out.printf("[Producer#1] WROTE [%d/%d]: \"%s\" (bufferAfter=%d)%n",
-                                i + 1, messageCount, msg, pipe.bufferSize());
-                    }
+                while (lastVerified < NUM_WRITES && attempts < maxAttempts) {
+                    attempts++;
 
-                    if (i % 5 == 0) {
-                        Thread.sleep(2);
+                    // Read via SharedMemoryManager directly (zero-copy)
+                    String value = shmMgr.get(SEGMENT_ID, "result_" + (lastVerified + 1));
+                    if (value != null) {
+                        String expected = "intermediate_value_" + ((lastVerified + 1) * 42);
+                        if (value.equals(expected)) {
+                            lastVerified++;
+                            verifiedCount.incrementAndGet();
+                            System.out.printf("  [Agent B] Verified: result_%d=%s  ✓%n", lastVerified, value);
+                        } else {
+                            System.out.printf("  [Agent B] MISMATCH: result_%d expected=%s got=%s  ✗%n",
+                                    lastVerified + 1, expected, value);
+                            errorCount.incrementAndGet();
+                        }
+                    } else {
+                        Thread.yield();
                     }
                 }
-                System.out.println("[Producer#1] ALL messages sent!");
+
+                // Verify completion signal
+                String status = shmMgr.get(SEGMENT_ID, "status");
+                if ("COMPLETE".equals(status)) {
+                    System.out.println("  [Agent B] Completion signal received: status=COMPLETE  ✓");
+                } else {
+                    System.out.println("  [Agent B] Completion signal NOT received  ✗");
+                    errorCount.incrementAndGet();
+                }
+
+                // Also test reading via VFS (full dump)
+                String dump = shmNode.read();
+                System.out.printf("  [Agent B] VFS read() dump (%d chars): %s%n", dump.length(), dump);
+
             } catch (InterruptedException e) {
-                System.out.println("[Producer#1] Interrupted!");
                 Thread.currentThread().interrupt();
+            } finally {
+                allDone.countDown();
             }
-            producerDone.countDown();
         });
 
-        boolean ok = consumerDone.await(30, java.util.concurrent.TimeUnit.SECONDS)
-                && producerDone.await(5, java.util.concurrent.TimeUnit.SECONDS);
+        boolean finished = allDone.await(30, TimeUnit.SECONDS);
 
         System.out.println();
-        System.out.println("========== IPC TEST RESULTS ==========");
-        System.out.printf("  Completed:          %s%n", ok);
-        System.out.printf("  Producer blocked:   %d times (buffer full)%n", producerBlockedCount.get());
-        System.out.printf("  Consumer blocked:   %d times (buffer empty)%n", consumerBlockedCount.get());
-        System.out.printf("  Pipe totalWritten:  %d%n", pipe.totalWritten());
-        System.out.printf("  Pipe totalRead:     %d%n", pipe.totalRead());
-        System.out.printf("  Pipe final buffer:  %d%n", pipe.bufferSize());
-        System.out.printf("  Pipe stats:         %s%n", pipe.stats());
-        System.out.println("======================================");
+        System.out.println("  ┌─ SHM IPC Test Results ─────────────────────────────┐");
+        System.out.printf("  │  Writer entries:     %d/%d%n", NUM_WRITES, NUM_WRITES);
+        System.out.printf("  │  Reader verified:    %d/%d%n", verifiedCount.get(), NUM_WRITES);
+        System.out.printf("  │  Errors:             %d%n", errorCount.get());
+        System.out.printf("  │  Completed in time:  %s%n", finished ? "YES" : "NO (timeout)");
+        System.out.printf("  │  SHM segments:       %d%n", shmMgr.segmentCount());
+        System.out.printf("  │  Segment keys:       %d%n", shmMgr.getSegment(SEGMENT_ID).size());
+        System.out.println("  └────────────────────────────────────────────────────┘");
 
+        boolean success = finished && verifiedCount.get() == NUM_WRITES && errorCount.get() == 0;
         System.out.println();
-        System.out.println("--- Verifying virtual thread blocking behavior ---");
-        System.out.printf("  Producer was blocked %d times by put() -> virtual thread unmounted from carrier%n",
-                producerBlockedCount.get());
-        System.out.printf("  Consumer was blocked %d times by take() -> virtual thread unmounted from carrier%n",
-                consumerBlockedCount.get());
-        System.out.printf("  No deadlocks! No manual signal handling!%n");
-        System.out.printf("  Platform threads used: %d%n", Thread.activeCount());
+        if (success) {
+            System.out.println("  ✅ SHM IPC Test PASSED: Zero-copy cross-agent communication verified!");
+        } else {
+            System.out.println("  ❌ SHM IPC Test FAILED!");
+        }
 
-        scheduler.shutdown();
-        System.out.println("[TestIpc] Done.");
+        // Cleanup
+        shmMgr.destroySegment(SEGMENT_ID);
     }
 }

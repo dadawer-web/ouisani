@@ -3,6 +3,9 @@ package com.ouisani.aios.core;
 import com.ouisani.aios.core.cgroup.CgroupManager;
 import com.ouisani.aios.core.cgroup.TokenOomException;
 import com.ouisani.aios.core.crash.SemanticCrashAnalyzer;
+import com.ouisani.aios.core.ipc.SignalType;
+import com.ouisani.aios.core.rtos.WatchdogDaemon;
+import com.ouisani.aios.core.telemetry.SemanticEtw;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +22,9 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class TaskScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(TaskScheduler.class);
+
+    /** ThreadLocal binding the current agent task to its virtual thread. */
+    public static final ThreadLocal<AgentTask> CURRENT_TASK = new ThreadLocal<>();
 
     private final ConcurrentHashMap<Integer, AgentTask> pcb = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Integer, Thread> agentThreads = new ConcurrentHashMap<>();
@@ -59,6 +65,8 @@ public final class TaskScheduler {
                 .name("agent-" + pid)
                 .unstarted(() -> {
                     try {
+                        CURRENT_TASK.set(task);
+
                         if (effectiveRoot != null) {
                             VfsManager.AGENT_ROOT.set(effectiveRoot);
                             log.debug("Agent#{} bound to AGENT_ROOT={}", pid, effectiveRoot);
@@ -108,6 +116,7 @@ public final class TaskScheduler {
                         SemanticCrashAnalyzer.instance().generateCoreDump(
                                 String.valueOf(pid), t, lastContext);
                     } finally {
+                        CURRENT_TASK.remove();
                         CgroupManager.instance().unbindFromCurrentThread();
                         if (effectiveRoot != null) {
                             VfsManager.AGENT_ROOT.remove();
@@ -119,6 +128,11 @@ public final class TaskScheduler {
 
         agentThreads.put(pid, vt);
         vt.start();
+
+        SemanticEtw.getInstance().logEvent("SCHEDULER", "SPAWN",
+                "pid=" + pid + " cgroup=" + task.cgroup()
+                + " priority=" + task.processPriority()
+                + " affinity=" + task.affinity());
 
         log.info("Agent#{} spawned on virtual thread", pid);
         return pid;
@@ -134,6 +148,9 @@ public final class TaskScheduler {
         task.cancel();
         task.setStatus(AgentTask.TaskStatus.KILLED);
 
+        SemanticEtw.getInstance().logEvent("SCHEDULER", "CANCEL",
+                "pid=" + pid + " cgroup=" + task.cgroup());
+
         Thread vt = agentThreads.get(pid);
         if (vt != null) {
             vt.interrupt();
@@ -146,14 +163,61 @@ public final class TaskScheduler {
         return true;
     }
 
+    /**
+     * Send a POSIX signal to a target agent process.
+     * <ul>
+     *   <li>{@link SignalType#SIGTERM} — Enqueue and immediately interrupt the thread.</li>
+     *   <li>{@link SignalType#SIGINT}  — Enqueue for the agent to check before its next operation.</li>
+     *   <li>{@link SignalType#SIGUSR1} — Enqueue; the next LLM call will inject a system interrupt prompt.</li>
+     * </ul>
+     *
+     * @param targetPid the PID of the target agent
+     * @param signal    the signal to send
+     * @return true if the signal was delivered, false if the PID was not found
+     */
+    public boolean kill(String targetPid, SignalType signal) {
+        int pid;
+        try {
+            pid = Integer.parseInt(targetPid);
+        } catch (NumberFormatException e) {
+            log.warn("kill: invalid PID format: {}", targetPid);
+            return false;
+        }
+
+        AgentTask task = pcb.get(pid);
+        if (task == null) {
+            log.warn("kill: PID {} not found in PCB", pid);
+            return false;
+        }
+
+        task.sendSignal(signal);
+        log.info("[Signal] {} sent to Agent#{}", signal, pid);
+
+        if (signal == SignalType.SIGTERM) {
+            task.cancel();
+            task.setStatus(AgentTask.TaskStatus.KILLED);
+            Thread vt = agentThreads.get(pid);
+            if (vt != null) {
+                vt.interrupt();
+                log.info("[Signal] Agent#{} thread interrupted by SIGTERM", pid);
+            }
+        }
+
+        return true;
+    }
+
     public void start() {
         if (running.compareAndSet(false, true)) {
             log.info("TaskScheduler started with virtual thread executor");
+            WatchdogDaemon.instance().start(this);
+            log.info("WatchdogDaemon started alongside TaskScheduler");
         }
     }
 
     public void shutdown() {
         if (running.compareAndSet(true, false)) {
+            WatchdogDaemon.instance().stop();
+
             log.info("TaskScheduler shutting down, interrupting {} active agents", agentThreads.size());
 
             for (Map.Entry<Integer, Thread> entry : agentThreads.entrySet()) {

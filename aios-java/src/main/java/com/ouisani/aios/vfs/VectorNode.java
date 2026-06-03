@@ -3,6 +3,7 @@ package com.ouisani.aios.vfs;
 import com.ouisani.aios.core.VfsNode;
 import com.ouisani.aios.core.llm.LlmProvider;
 import com.ouisani.aios.core.llm.VectorMath;
+import com.ouisani.aios.core.vfs.VfsJournal;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -80,6 +81,9 @@ public non-sealed class VectorNode implements VfsNode {
     public boolean write(String payload) {
         if (payload == null || payload.isBlank()) return false;
 
+        // WAL: journal the write before applying it
+        VfsJournal.getInstance().appendLog(path, "WRITE", payload);
+
         float[] vector = llmProvider.embed(payload);
         records.add(new VectorRecord(payload, vector));
 
@@ -139,4 +143,31 @@ public non-sealed class VectorNode implements VfsNode {
     public record VectorRecord(String text, float[] vector) {}
 
     private record SearchResult(int id, String text, float similarity) {}
+
+    /**
+     * Create a frozen shadow copy of this VectorNode.
+     * Deep-copies all vector records so the snapshot is independent of the original.
+     * The returned node is read-only (write always returns false).
+     */
+    @Override
+    public VfsNode createShadowCopy() {
+        // Deep copy: snapshot the current records list
+        List<VectorRecord> frozenRecords = List.copyOf(records);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"path\":\"").append(path).append("\",");
+        sb.append("\"snapshot\":true,");
+        sb.append("\"recordCount\":").append(frozenRecords.size()).append(",");
+        sb.append("\"records\":[");
+        for (int i = 0; i < frozenRecords.size(); i++) {
+            if (i > 0) sb.append(",");
+            VectorRecord r = frozenRecords.get(i);
+            sb.append("{\"id\":").append(i).append(",")
+              .append("\"text\":\"").append(escape(r.text)).append("\",")
+              .append("\"dimensions\":").append(r.vector.length).append("}");
+        }
+        sb.append("]}");
+
+        return new ShadowCopyNode(path + " [SHADOW]", VfsNodeType.VECTOR, sb.toString(), ownerUid);
+    }
 }

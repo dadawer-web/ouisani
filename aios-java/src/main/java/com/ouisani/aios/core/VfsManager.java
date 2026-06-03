@@ -12,6 +12,11 @@ import com.ouisani.aios.vfs.HttpNode;
 import com.ouisani.aios.vfs.WebhookNode;
 import com.ouisani.aios.vfs.AudioNode;
 import com.ouisani.aios.vfs.HostSourceNode;
+import com.ouisani.aios.vfs.ShmNode;
+import com.ouisani.aios.vfs.RegistryFsNode;
+import com.ouisani.aios.vfs.GuiDomNode;
+import com.ouisani.aios.vfs.GuiActionNode;
+import com.ouisani.aios.core.vfs.VfsJournal;
 import io.javalin.Javalin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -105,6 +110,10 @@ public final class VfsManager {
             pathTree.put("/proc/cgroups", ProcFsNode.cgroups());
             log.info("VFS mounted: /proc/cgroups [PROCFS] dynamic cgroup tree");
 
+            // ── Semantic Registry ──
+            pathTree.put("/proc/registry", new RegistryFsNode("/proc/registry"));
+            log.info("VFS mounted: /proc/registry [REGISTRY] global semantic registry");
+
             // ── Virtual hardware devices ──
             pathTree.put("/dev/camera0", new CameraNode("/dev/camera0"));
             log.info("VFS mounted: /dev/camera0 [CAMERA] read-only virtual camera");
@@ -114,6 +123,15 @@ public final class VfsManager {
 
             pathTree.put("/dev/audio0", new AudioNode("/dev/audio0"));
             log.info("VFS mounted: /dev/audio0 [AUDIO] write-only TTS device");
+
+            // ── GUI / Desktop Automation (OSWorld) ──
+            mountDirectory("/dev/gui");
+
+            pathTree.put("/dev/gui/dom", new GuiDomNode("/dev/gui/dom"));
+            log.info("VFS mounted: /dev/gui/dom [GUI_DOM] read-only screen UI element tree");
+
+            pathTree.put("/dev/gui/action", new GuiActionNode("/dev/gui/action"));
+            log.info("VFS mounted: /dev/gui/action [GUI_ACTION] write-only desktop automation");
 
             // ── Network devices ──
             mountDirectory("/dev/net");
@@ -127,6 +145,22 @@ public final class VfsManager {
             } else {
                 log.warn("No Javalin configured, /dev/net/webhook_1 not mounted");
             }
+
+            // ── Shared Memory (SHM IPC) ──
+            mountDirectory("/dev/shm");
+            pathTree.put("/dev/shm/blackboard", new ShmNode("/dev/shm/blackboard", "blackboard"));
+            log.info("VFS mounted: /dev/shm/blackboard [SHM] shared memory blackboard");
+
+            // ── WAL Journal: open and recover ──
+            VfsJournal.getInstance().open();
+            int replayed = VfsJournal.getInstance().recoverAll();
+            if (replayed > 0) {
+                log.info("[VFS Journal] Replaying {} ops from WAL... Crash consistency restored!", replayed);
+            }
+
+            // ── VSS Shadow Copy directory ──
+            mountDirectory("/shadow");
+            log.info("VFS mounted: /shadow [VSS] shadow copy root");
 
             initialized = true;
             log.info("VFS root filesystem initialized: /, /bin, /dev, /mem, /proc, /tmp, /containers, /var/crash");
@@ -235,6 +269,56 @@ public final class VfsManager {
 
     public boolean unmount(String path) {
         return unmount(path, 0);
+    }
+
+    /**
+     * Create a VSS (Volume Shadow Copy) snapshot of a VFS node.
+     * <p>
+     * Takes a frozen, read-only copy of the node at the given path and
+     * mounts it under {@code /shadow/snap_<timestamp>/<original_path>}.
+     * Other agents can then safely read the historical snapshot while
+     * the original node continues to be read/written without interference.
+     *
+     * @param path the VFS path to snapshot (e.g. "/dev/graph0")
+     * @return the shadow copy path (e.g. "/shadow/snap_20260603_143022/dev/graph0")
+     */
+    public String createVssSnapshot(String path) {
+        var nodeOpt = resolve(path);
+        if (nodeOpt.isEmpty()) {
+            log.warn("[VSS] Snapshot failed: path '{}' not found", path);
+            return null;
+        }
+
+        VfsNode original = nodeOpt.get();
+        VfsNode shadow = original.createShadowCopy();
+
+        // Generate snapshot directory name with timestamp
+        String timestamp = java.time.LocalDateTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        String snapDir = "/shadow/snap_" + timestamp;
+
+        // Build shadow path: /shadow/snap_<ts>/<original_path>
+        // e.g. /shadow/snap_20260603_143022/dev/graph0
+        String shadowPath = snapDir + path;
+
+        // Ensure the snapshot directory exists
+        mountDirectory(snapDir);
+
+        // Create intermediate directories matching the original path structure
+        String[] segments = path.split("/");
+        StringBuilder currentDir = new StringBuilder(snapDir);
+        for (int i = 1; i < segments.length - 1; i++) {
+            currentDir.append("/").append(segments[i]);
+            mountDirectory(currentDir.toString());
+        }
+
+        // Mount the shadow node
+        pathTree.put(shadowPath, shadow);
+
+        log.info("[VSS] Shadow copy created: '{}' → '{}' (frozen, read-only)",
+                path, shadowPath);
+
+        return shadowPath;
     }
 
     public String translatePath(String path, String agentRoot) {
