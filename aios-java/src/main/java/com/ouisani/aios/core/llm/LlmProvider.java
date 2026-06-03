@@ -28,5 +28,19 @@ public interface LlmProvider {
 
     String thinkWithHistory(List<ChatMessage> messages, String systemPrompt);
 
+    float[] embed(String text);
+
+    default float[] mockEmbed(String text) {
+        int dimensions = 1536;
+        float[] vector = new float[dimensions];
+        int hash = text != null ? text.hashCode() : 0;
+        long seed = hash != 0 ? Math.abs(hash) : 42;
+        for (int i = 0; i < dimensions; i++) {
+            seed = (seed * 6364136223846793005L + 1442695040888963407L);
+            vector[i] = ((float) ((seed >>> 33) & 0x7FFFFFFF) / 0x7FFFFFFF - 0.5f) * 0.1f;
+        }
+        return vector;
+    }
+
     boolean isAvailable();
 }

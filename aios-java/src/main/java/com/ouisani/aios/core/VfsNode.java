@@ -9,7 +9,11 @@ import java.util.Optional;
 public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
         VfsNode.ExecutableNode, com.ouisani.aios.vfs.PipeNode,
         com.ouisani.aios.vfs.SemanticNode, com.ouisani.aios.vfs.WebSocketNode,
-        com.ouisani.aios.vfs.ProcFsNode {
+        com.ouisani.aios.vfs.ProcFsNode, com.ouisani.aios.vfs.VectorNode,
+        com.ouisani.aios.vfs.GraphNode, com.ouisani.aios.vfs.CameraNode,
+        com.ouisani.aios.vfs.DisplayNode, com.ouisani.aios.vfs.HttpNode,
+        com.ouisani.aios.vfs.WebhookNode, com.ouisani.aios.vfs.AudioNode,
+        com.ouisani.aios.vfs.HostSourceNode {
 
     Logger log = LoggerFactory.getLogger(VfsNode.class);
 

@@ -2,6 +2,7 @@ package com.ouisani.aios.core;
 
 import com.ouisani.aios.core.cgroup.CgroupManager;
 import com.ouisani.aios.core.cgroup.TokenOomException;
+import com.ouisani.aios.core.crash.SemanticCrashAnalyzer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,14 +88,25 @@ public final class TaskScheduler {
                         System.out.printf("  ☠️ [CGROUP OOM] Agent#%d OOM_KILLED: %s%n", pid, e.getMessage());
                         log.error("[CGROUP OOM] Agent#{} killed by cgroup limit: {}", pid, e.getMessage());
                     } catch (Exception e) {
+                        task.setStatus(AgentTask.TaskStatus.KILLED);
                         if (task.isCancelled()) {
                             totalCancelled.incrementAndGet();
                             log.info("Agent#{} virtual thread interrupted (cancelled)", pid);
                         } else {
                             totalCancelled.incrementAndGet();
                             log.error("Agent#{} virtual thread crashed: {}", pid, e.getMessage(), e);
+                            String lastContext = extractLastContext(task);
+                            SemanticCrashAnalyzer.instance().generateCoreDump(
+                                    String.valueOf(pid), e, lastContext);
                         }
-                        task.setStatus(AgentTask.TaskStatus.KILLED);
+                    } catch (Throwable t) {
+                        task.setStatus(AgentTask.TaskStatus.CRASHED);
+                        totalCancelled.incrementAndGet();
+                        log.error("[KERNEL PANIC] Agent#{} crashed with fatal throwable: {}", pid, t.getClass().getName());
+
+                        String lastContext = extractLastContext(task);
+                        SemanticCrashAnalyzer.instance().generateCoreDump(
+                                String.valueOf(pid), t, lastContext);
                     } finally {
                         CgroupManager.instance().unbindFromCurrentThread();
                         if (effectiveRoot != null) {
@@ -189,6 +201,20 @@ public final class TaskScheduler {
 
     public boolean isRunning() {
         return running.get();
+    }
+
+    private String extractLastContext(AgentTask task) {
+        var history = task.contextHistory();
+        if (history == null || history.isEmpty()) return "(no context history)";
+        int size = history.size();
+        int from = Math.max(0, size - 3);
+        StringBuilder sb = new StringBuilder();
+        for (int i = from; i < size; i++) {
+            if (i > from) sb.append(" | ");
+            String entry = history.get(i);
+            sb.append(entry.length() > 200 ? entry.substring(0, 200) + "..." : entry);
+        }
+        return sb.toString();
     }
 
     public record SchedulerStats(long totalSpawned, long totalCompleted, long totalCancelled, int activeCount) {

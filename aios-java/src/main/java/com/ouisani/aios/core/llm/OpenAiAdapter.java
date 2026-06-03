@@ -25,6 +25,10 @@ public class OpenAiAdapter implements LlmProvider {
     private final HttpClient httpClient;
     private final Gson gson;
 
+    private final String embeddingApiKey;
+    private final String embeddingBaseUrl;
+    private final String embeddingModel;
+
     public OpenAiAdapter(String apiKey, String baseUrl, String model, int timeoutSeconds) {
         this.apiKey = apiKey;
         this.baseUrl = normalizeBaseUrl(baseUrl);
@@ -34,8 +38,17 @@ public class OpenAiAdapter implements LlmProvider {
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
         this.gson = new Gson();
+
+        this.embeddingApiKey = System.getenv().getOrDefault("EMBEDDING_API_KEY", "");
+        this.embeddingBaseUrl = normalizeBaseUrl(
+                System.getenv().getOrDefault("EMBEDDING_BASE_URL", ""));
+        this.embeddingModel = System.getenv().getOrDefault("EMBEDDING_MODEL", "text-embedding-3-small");
+
         log.info("OpenAiAdapter initialized: baseUrl={}, model={}, timeout={}s",
                 this.baseUrl, this.model, this.timeoutSeconds);
+        log.info("Embedding config: baseUrl={}, model={}, hasKey={}",
+                this.embeddingBaseUrl, this.embeddingModel,
+                this.embeddingApiKey != null && !this.embeddingApiKey.isBlank());
     }
 
     public OpenAiAdapter(String apiKey, String baseUrl, String model) {
@@ -44,6 +57,75 @@ public class OpenAiAdapter implements LlmProvider {
 
     public OpenAiAdapter(String apiKey) {
         this(apiKey, "https://api.openai.com", "gpt-4o-mini");
+    }
+
+    @Override
+    public float[] embed(String text) {
+        if (embeddingApiKey == null || embeddingApiKey.isBlank()) {
+            System.out.println("  [LLM Adapter] Using Mock Embedding for text: "
+                    + text.substring(0, Math.min(50, text.length())) + "...");
+            return mockEmbedLocal(text);
+        }
+
+        try {
+            JsonObject body = new JsonObject();
+            body.addProperty("model", embeddingModel);
+            body.addProperty("input", text);
+
+            String bodyStr = gson.toJson(body);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(embeddingBaseUrl + "/v1/embeddings"))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + embeddingApiKey)
+                    .timeout(Duration.ofSeconds(timeoutSeconds))
+                    .POST(HttpRequest.BodyPublishers.ofString(bodyStr))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() != 200) {
+                log.error("Embedding API returned HTTP {}: {}", response.statusCode(),
+                        response.body().length() > 200 ? response.body().substring(0, 200) : response.body());
+                System.out.println("  [LLM Adapter] Embedding API failed (HTTP " + response.statusCode()
+                        + "), falling back to Mock Embedding");
+                return mockEmbedLocal(text);
+            }
+
+            return parseEmbeddingResponse(response.body());
+        } catch (Exception e) {
+            log.error("Embedding request failed: {}", e.getMessage());
+            System.out.println("  [LLM Adapter] Embedding request failed (" + e.getMessage()
+                    + "), falling back to Mock Embedding");
+            return mockEmbedLocal(text);
+        }
+    }
+
+    private float[] parseEmbeddingResponse(String responseBody) {
+        JsonObject json = JsonParser.parseString(responseBody).getAsJsonObject();
+        JsonArray embeddingArray = json.getAsJsonArray("data")
+                .get(0).getAsJsonObject()
+                .getAsJsonArray("embedding");
+
+        float[] result = new float[embeddingArray.size()];
+        for (int i = 0; i < embeddingArray.size(); i++) {
+            result[i] = embeddingArray.get(i).getAsFloat();
+        }
+
+        log.debug("Embedding received: {} dimensions", result.length);
+        return result;
+    }
+
+    private float[] mockEmbedLocal(String text) {
+        int dimensions = 1536;
+        float[] vector = new float[dimensions];
+        int hash = text.hashCode();
+        long seed = hash != 0 ? Math.abs(hash) : 42;
+        for (int i = 0; i < dimensions; i++) {
+            seed = (seed * 6364136223846793005L + 1442695040888963407L);
+            vector[i] = ((float) ((seed >>> 33) & 0x7FFFFFFF) / 0x7FFFFFFF - 0.5f) * 0.1f;
+        }
+        return vector;
     }
 
     @Override

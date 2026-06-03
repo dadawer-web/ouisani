@@ -6,7 +6,9 @@ import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.VfsNode;
 import com.ouisani.aios.core.cgroup.CgroupManager;
 import com.ouisani.aios.core.cgroup.CgroupNode;
+import com.ouisani.aios.core.crash.SemanticCrashAnalyzer;
 import com.ouisani.aios.core.sandbox.GraalWasmSandbox;
+import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Value;
 
 import java.util.Map;
@@ -84,10 +86,18 @@ public class ContainerRuntime {
                     System.out.printf("  ├─ [WASM] Loading bytecode from %s%n", config.wasmPath());
                     System.out.printf("  ├─ [WASM] Executing entrypoint '%s'...%n", config.entrypoint());
 
-                    byte[] wasmBytes = loadWasmBytes(config.wasmPath());
-                    Value result = sandbox.execute(wasmBytes, config.entrypoint());
-
-                    System.out.printf("  └─ [WASM] Execution complete. Result: %s%n", result);
+                    try {
+                        byte[] wasmBytes = loadWasmBytes(config.wasmPath());
+                        Value result = sandbox.execute(wasmBytes, config.entrypoint());
+                        System.out.printf("  └─ [WASM] Execution complete. Result: %s%n", result);
+                    } catch (PolyglotException e) {
+                        System.err.printf("  🚨 [WASM SANDBOX] PolyglotException in container '%s'!%n", containerId);
+                        System.err.printf("  🚨 [WASM SANDBOX] %s: %s%n", e.getClass().getSimpleName(), e.getMessage());
+                        String wasmContext = "WASM execution of entrypoint '" + config.entrypoint()
+                                + "' from '" + config.wasmPath() + "' in container '" + containerId + "'";
+                        SemanticCrashAnalyzer.instance().generateCoreDump(containerId, e, wasmContext);
+                        throw e;
+                    }
                 } else {
                     System.out.println("  └─ [WASM] No entrypoint specified, container idle");
                 }

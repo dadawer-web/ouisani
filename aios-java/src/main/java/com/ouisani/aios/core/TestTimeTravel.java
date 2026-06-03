@@ -36,6 +36,11 @@ public class TestTimeTravel {
             return true;
         }
 
+        @Override
+        public float[] embed(String text) {
+            return mockEmbed(text);
+        }
+
         int callCount() {
             return callCount;
         }

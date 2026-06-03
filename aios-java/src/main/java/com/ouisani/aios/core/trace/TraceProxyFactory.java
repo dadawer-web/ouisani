@@ -1,6 +1,8 @@
 package com.ouisani.aios.core.trace;
 
 import com.ouisani.aios.core.cgroup.CgroupManager;
+import com.ouisani.aios.core.cache.SemanticCacheManager;
+import com.ouisani.aios.core.security.BpfManager;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,7 +61,35 @@ public class TraceProxyFactory {
                 System.out.printf("  ⏪ [Time Machine] Replay miss for method: %s, executing real call%n", methodName);
             }
 
+            // ── Semantic eBPF Firewall: intercept LLM calls ──
+            if ("think".equals(methodName) && args != null && args.length > 0) {
+                String prompt = args[0] != null ? args[0].toString() : "";
+                if (!BpfManager.instance().evaluatePrompt(agentId, prompt)) {
+                    throw new SecurityException("Prompt blocked by eBPF Policy");
+                }
+            }
+
+            // ── Semantic Cache: bypass LLM if similar query cached ──
+            if ("think".equals(methodName) && args != null && args.length > 0) {
+                String prompt = args[0] != null ? args[0].toString() : "";
+                String cached = SemanticCacheManager.instance().getCachedResponse(prompt);
+                if (cached != null) {
+                    return cached;
+                }
+            }
+
             Object result = method.invoke(target, args);
+
+            // ── Semantic Cache: store LLM response for future hits ──
+            if ("think".equals(methodName) && args != null && args.length > 0 && result instanceof String responseText) {
+                String prompt = args[0] != null ? args[0].toString() : "";
+                try {
+                    float[] queryVector = ((com.ouisani.aios.core.llm.LlmProvider) target).embed(prompt);
+                    SemanticCacheManager.instance().putCache(prompt, queryVector, responseText);
+                } catch (Exception e) {
+                    log.debug("[Semantic Cache] Failed to cache response: {}", e.getMessage());
+                }
+            }
 
             if (mode == TraceMode.RECORD) {
                 String responsePayload = serializeResult(result);

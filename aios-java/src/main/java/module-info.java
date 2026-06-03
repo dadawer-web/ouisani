@@ -11,7 +11,13 @@ module com.ouisani.aios {
     exports com.ouisani.aios.core.network;
     exports com.ouisani.aios.core.trace;
     exports com.ouisani.aios.core.cgroup;
+    exports com.ouisani.aios.core.crash;
     exports com.ouisani.aios.core.mcp;
+    exports com.ouisani.aios.core.memory;
+    exports com.ouisani.aios.core.security;
+    exports com.ouisani.aios.core.compiler;
+    exports com.ouisani.aios.core.cache;
+    exports com.ouisani.aios.core.migration;
     exports com.ouisani.aios.user;
     exports com.ouisani.aios.user.cli;
     exports com.ouisani.aios.user.container;
@@ -22,7 +28,13 @@ module com.ouisani.aios {
     opens com.ouisani.aios.core.network;
     opens com.ouisani.aios.core.trace;
     opens com.ouisani.aios.core.cgroup;
+    opens com.ouisani.aios.core.crash;
     opens com.ouisani.aios.core.mcp;
+    opens com.ouisani.aios.core.memory;
+    opens com.ouisani.aios.core.security;
+    opens com.ouisani.aios.core.compiler;
+    opens com.ouisani.aios.core.cache;
+    opens com.ouisani.aios.core.migration;
     opens com.ouisani.aios.user;
     opens com.ouisani.aios.user.cli;
     opens com.ouisani.aios.user.container;

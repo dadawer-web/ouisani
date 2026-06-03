@@ -4,6 +4,15 @@ import com.ouisani.aios.core.llm.LlmProvider;
 import com.ouisani.aios.core.llm.OpenAiAdapter;
 import com.ouisani.aios.vfs.ProcFsNode;
 import com.ouisani.aios.vfs.SemanticNode;
+import com.ouisani.aios.vfs.VectorNode;
+import com.ouisani.aios.vfs.GraphNode;
+import com.ouisani.aios.vfs.CameraNode;
+import com.ouisani.aios.vfs.DisplayNode;
+import com.ouisani.aios.vfs.HttpNode;
+import com.ouisani.aios.vfs.WebhookNode;
+import com.ouisani.aios.vfs.AudioNode;
+import com.ouisani.aios.vfs.HostSourceNode;
+import io.javalin.Javalin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,6 +40,7 @@ public final class VfsManager {
     private volatile boolean initialized = false;
     private volatile LlmProvider defaultLlmProvider;
     private volatile TaskScheduler taskScheduler;
+    private volatile Javalin javalinApp;
 
     private VfsManager() {
     }
@@ -43,6 +53,11 @@ public final class VfsManager {
     public void configureTaskScheduler(TaskScheduler scheduler) {
         this.taskScheduler = scheduler;
         log.info("TaskScheduler configured for /proc filesystem");
+    }
+
+    public void configureJavalin(Javalin app) {
+        this.javalinApp = app;
+        log.info("Javalin configured for webhook endpoints");
     }
 
     public LlmProvider getLlmProvider() {
@@ -68,8 +83,16 @@ public final class VfsManager {
                 SemanticNode semanticNode = new SemanticNode("/dev/semantic", defaultLlmProvider);
                 pathTree.put("/dev/semantic", semanticNode);
                 log.info("VFS mounted: /dev/semantic [SEMANTIC] provider={}", defaultLlmProvider.name());
+
+                VectorNode vectorNode = new VectorNode("/dev/vec_mem", defaultLlmProvider);
+                pathTree.put("/dev/vec_mem", vectorNode);
+                log.info("VFS mounted: /dev/vec_mem [VECTOR] provider={}", defaultLlmProvider.name());
+
+                GraphNode graphNode = new GraphNode("/dev/graph_mem", defaultLlmProvider);
+                pathTree.put("/dev/graph_mem", graphNode);
+                log.info("VFS mounted: /dev/graph_mem [GRAPH] provider={}", defaultLlmProvider.name());
             } else {
-                log.warn("No LlmProvider configured, /dev/semantic not mounted");
+                log.warn("No LlmProvider configured, /dev/semantic, /dev/vec_mem and /dev/graph_mem not mounted");
             }
 
             if (taskScheduler != null) {
@@ -81,6 +104,29 @@ public final class VfsManager {
 
             pathTree.put("/proc/cgroups", ProcFsNode.cgroups());
             log.info("VFS mounted: /proc/cgroups [PROCFS] dynamic cgroup tree");
+
+            // ── Virtual hardware devices ──
+            pathTree.put("/dev/camera0", new CameraNode("/dev/camera0"));
+            log.info("VFS mounted: /dev/camera0 [CAMERA] read-only virtual camera");
+
+            pathTree.put("/dev/display0", new DisplayNode("/dev/display0"));
+            log.info("VFS mounted: /dev/display0 [DISPLAY] write-only virtual display");
+
+            pathTree.put("/dev/audio0", new AudioNode("/dev/audio0"));
+            log.info("VFS mounted: /dev/audio0 [AUDIO] write-only TTS device");
+
+            // ── Network devices ──
+            mountDirectory("/dev/net");
+
+            pathTree.put("/dev/net/http", new HttpNode("/dev/net/http"));
+            log.info("VFS mounted: /dev/net/http [HTTP] bidirectional HTTP client");
+
+            if (javalinApp != null) {
+                pathTree.put("/dev/net/webhook_1", new WebhookNode("/dev/net/webhook_1", "1", javalinApp));
+                log.info("VFS mounted: /dev/net/webhook_1 [WEBHOOK] POST /webhook/1");
+            } else {
+                log.warn("No Javalin configured, /dev/net/webhook_1 not mounted");
+            }
 
             initialized = true;
             log.info("VFS root filesystem initialized: /, /bin, /dev, /mem, /proc, /tmp, /containers, /var/crash");
@@ -143,6 +189,32 @@ public final class VfsManager {
 
     public boolean mount(String dirPath, String name, VfsNode node) {
         return mount(dirPath, name, node, 0);
+    }
+
+    /**
+     * 将宿主机物理文件路径映射到 VFS 虚拟节点
+     */
+    public boolean mountHostFile(String vfsPath, String physicalPath) {
+        rwLock.writeLock().lock();
+        try {
+            if (!initialized) {
+                log.warn("VFS not initialized, cannot mount host file");
+                return false;
+            }
+
+            if (pathTree.containsKey(vfsPath)) {
+                log.warn("VFS mount failed: '{}' already exists", vfsPath);
+                return false;
+            }
+
+            HostSourceNode node = new HostSourceNode(vfsPath, physicalPath);
+            pathTree.put(vfsPath, node);
+            System.out.printf("  🔗 [VFS] Physical host path '%s' mounted to virtual node '%s'%n", physicalPath, vfsPath);
+            log.info("[VFS] Host file mounted: vfsPath='{}', physicalPath='{}'", vfsPath, physicalPath);
+            return true;
+        } finally {
+            rwLock.writeLock().unlock();
+        }
     }
 
     public boolean unmount(String path, int callerUid) {

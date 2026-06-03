@@ -39,6 +39,11 @@ public class TestAiosContainers {
         public boolean isAvailable() {
             return true;
         }
+
+        @Override
+        public float[] embed(String text) {
+            return mockEmbed(text);
+        }
     }
 
     public static void main(String[] args) throws InterruptedException {

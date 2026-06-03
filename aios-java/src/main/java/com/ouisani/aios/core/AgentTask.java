@@ -3,6 +3,7 @@ package com.ouisani.aios.core;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -15,7 +16,8 @@ public final class AgentTask {
         RUNNING,
         BLOCKED,
         KILLED,
-        OOM_KILLED
+        OOM_KILLED,
+        CRASHED
     }
 
     public enum TaskType {
@@ -35,6 +37,7 @@ public final class AgentTask {
     private final String stdinPath;
     private final String stdoutPath;
     private final List<TokenRecord> context;
+    private final List<String> contextHistory;
 
     private int priority;
     private TaskType type;
@@ -57,6 +60,7 @@ public final class AgentTask {
         this.stdinPath = stdinPath;
         this.stdoutPath = stdoutPath;
         this.context = context;
+        this.contextHistory = new ArrayList<>();
         this.priority = 0;
         this.type = TaskType.LLM_CHAT;
         this.gasLimit = 10_000;
@@ -97,6 +101,21 @@ public final class AgentTask {
 
     public void appendContext(TokenRecord record) {
         context.add(record);
+    }
+
+    public List<String> contextHistory() {
+        return contextHistory;
+    }
+
+    public void appendHistory(String entry) {
+        contextHistory.add(entry);
+    }
+
+    public void replaceHistoryRange(int from, int to, String compressed) {
+        for (int i = to - 1; i >= from; i--) {
+            contextHistory.remove(i);
+        }
+        contextHistory.add(from, compressed);
     }
 
     public int priority() {
