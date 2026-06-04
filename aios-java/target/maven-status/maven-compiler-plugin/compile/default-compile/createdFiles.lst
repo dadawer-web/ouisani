@@ -1,3 +1,4 @@
+com/ouisani/aios/user/apps/devhouse/ReviewerAgent.class
 com/ouisani/aios/core/llm/LlmRouter.class
 com/ouisani/aios/vfs/DisplayNode.class
 com/ouisani/aios/core/llm/TestEmbedding.class
@@ -5,6 +6,7 @@ com/ouisani/aios/core/TestSyscallStandard.class
 com/ouisani/aios/user/container/AgentfileParser.class
 com/ouisani/aios/core/llm/InstructionDecodeException.class
 com/ouisani/aios/core/VfsNode$DirectoryNode.class
+com/ouisani/aios/user/bin/AiosApt.class
 com/ouisani/aios/core/mcp/McpError.class
 com/ouisani/aios/user/cli/TestHardwareAndBPF$MockLlmProvider.class
 com/ouisani/aios/user/cli/IntentRouter$Holder.class
@@ -20,6 +22,7 @@ com/ouisani/aios/core/trace/TraceMode.class
 com/ouisani/aios/core/VfsNode$ExecutableNode.class
 com/ouisani/aios/user/container/TestContainerRuntime.class
 com/ouisani/aios/vfs/ProcFsNode.class
+com/ouisani/aios/vfs/MutableFileNode.class
 com/ouisani/aios/core/trace/TraceManager$Holder.class
 com/ouisani/aios/core/ipc/SharedMemoryManager$Holder.class
 com/ouisani/aios/core/TestIpc.class
@@ -33,12 +36,14 @@ com/ouisani/aios/core/config/SemanticRegistry.class
 com/ouisani/aios/core/TestMcpProtocol.class
 com/ouisani/aios/vfs/VectorNode$VectorRecord.class
 com/ouisani/aios/core/cgroup/CgroupNode$CgroupUsage.class
+com/ouisani/aios/user/apps/devhouse/AutoDevHouseDemo.class
 com/ouisani/aios/core/cache/SemanticCacheManager$Holder.class
 com/ouisani/aios/core/VfsNode$VfsNodeType.class
 com/ouisani/aios/core/syscall/SyscallRequest.class
 com/ouisani/aios/user/cli/TestFullSystemBoot.class
 com/ouisani/aios/vfs/ShmNode.class
 com/ouisani/aios/core/plugin/PluginManager$Holder.class
+com/ouisani/aios/user/init/InitDaemon.class
 com/ouisani/aios/core/cache/SemanticCacheManager.class
 com/ouisani/aios/vfs/HttpNode$1.class
 com/ouisani/aios/core/crash/TestCrashInterceptor$1.class
@@ -52,6 +57,7 @@ module-info.class
 com/ouisani/aios/vfs/SemanticNode.class
 com/ouisani/aios/core/rtos/WatchdogDaemon$Holder.class
 com/ouisani/aios/core/crash/SemanticCrashAnalyzer.class
+com/ouisani/aios/core/telemetry/SystemMonitorDaemon$Holder.class
 com/ouisani/aios/core/ipc/SignalInterceptor$1.class
 com/ouisani/aios/core/memory/SwapManager.class
 com/ouisani/aios/core/compiler/CompilerBridge$Holder.class
@@ -59,6 +65,8 @@ com/ouisani/aios/user/cli/IntentRouter$IntentDto.class
 com/ouisani/aios/vfs/ShadowCopyNode.class
 com/ouisani/aios/core/TestScheduler$Duration.class
 com/ouisani/aios/core/migration/SnapshotManager$Holder.class
+com/ouisani/aios/core/telemetry/SystemMonitorDaemon.class
+com/ouisani/aios/user/bin/CoreUtils.class
 com/ouisani/aios/core/trace/TraceProxyFactory$TraceInvocationHandler.class
 com/ouisani/aios/core/cgroup/CgroupNode.class
 com/ouisani/aios/vfs/WebhookNode.class
@@ -84,6 +92,7 @@ com/ouisani/aios/vfs/GraphNode$PathEntry.class
 com/ouisani/aios/core/migration/SnapshotManager.class
 com/ouisani/aios/user/cli/TestHardwareAndBPF.class
 com/ouisani/aios/vfs/GuiActionNode.class
+com/ouisani/aios/user/apps/devhouse/PmAgent.class
 com/ouisani/aios/core/TaskScheduler.class
 com/ouisani/aios/core/llm/VectorMath.class
 com/ouisani/aios/user/container/AgentImageConfig.class
@@ -105,6 +114,7 @@ com/ouisani/aios/user/DaemonManager.class
 com/ouisani/aios/core/memory/ContextInjector$Holder.class
 com/ouisani/aios/core/TestScheduler.class
 com/ouisani/aios/core/TestAiosContainers$MaliciousLlm.class
+com/ouisani/aios/user/sdk/AiosSdk$Holder.class
 com/ouisani/aios/user/container/ContainerRuntime.class
 com/ouisani/aios/core/mcp/McpRequest.class
 com/ouisani/aios/core/syscall/SyscallDispatcher$Holder.class
@@ -132,11 +142,13 @@ com/ouisani/aios/core/telemetry/EventRecord.class
 com/ouisani/aios/core/memory/TestTokenZram.class
 com/ouisani/aios/core/syscall/SyscallResponse.class
 com/ouisani/aios/core/VfsNode$FileNode.class
+com/ouisani/aios/user/apps/devhouse/CoderAgent.class
 com/ouisani/aios/core/crash/TestCrashAnalyzer.class
 com/ouisani/aios/core/crash/TestCrashInterceptor.class
 com/ouisani/aios/core/cgroup/CgroupManager.class
 com/ouisani/aios/core/syscall/SyscallDispatcher.class
 com/ouisani/aios/core/crash/TestCrashAnalyzer$1.class
+com/ouisani/aios/user/sdk/AiosSdk.class
 com/ouisani/aios/core/security/ObjectManager.class
 com/ouisani/aios/core/llm/LlmProvider$ChatMessage.class
 com/ouisani/aios/core/llm/LlmRouter$1.class
@@ -158,3 +170,4 @@ com/ouisani/aios/core/TestTimeTravel$MockLlmProvider.class
 com/ouisani/aios/core/network/EventBus$Holder.class
 com/ouisani/aios/user/TestDaemonManager.class
 com/ouisani/aios/core/mcp/McpNotification.class
+com/ouisani/aios/user/sdk/AbstractAgent.class

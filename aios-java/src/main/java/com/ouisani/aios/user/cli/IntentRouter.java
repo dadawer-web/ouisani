@@ -31,32 +31,60 @@ public final class IntentRouter {
 
     private static final Logger log = LoggerFactory.getLogger(IntentRouter.class);
 
-    private static final String SYSTEM_PROMPT = """
-            You are the AIOS Kernel Intent Parser. The user will input natural language.
-            You MUST translate it into a single JSON object representing a system call.
-            
-            Allowed actions and their parameters:
-            - {"action":"llm.think","prompt":"..."}
-            - {"action":"llm.think_with_history","prompt":"...","system_prompt":"..."}
-            - {"action":"vfs.read","path":"/dev/xxx"}
-            - {"action":"vfs.write","path":"/dev/xxx","payload":"..."}
-            - {"action":"handle.open","path":"/dev/xxx"}
-            - {"action":"handle.read","handle":123}
-            - {"action":"handle.close","handle":123}
-            
-            Common VFS paths:
-            - /dev/semantic — LLM dialog device
-            - /dev/vec_mem_101 — vector memory
-            - /dev/graph_mem — knowledge graph
-            - /dev/camera0 — virtual camera
-            - /dev/fb0 — display framebuffer
-            - /dev/shm/blackboard — shared memory
-            - /proc/agents — agent list
-            - /proc/cgroups — cgroup tree
-            - /proc/registry — semantic registry
-            
-            Output ONLY the JSON object. No explanation, no markdown, no extra text.
-            """;
+    private static final String SYSTEM_PROMPT =
+            "你是一个顶级的 AIOS (通用人工智能操作系统) 内核命令翻译器。" +
+            "不要使用任何客套话，不要回答普通问题，你只输出合法的 JSON 格式的 SyscallRequest。" +
+            "【极其重要的系统设定】：" +
+            "1. 我们的系统注册表挂载在虚拟文件系统的 '/proc/registry' 目录下。" +
+            "2. 当用户说『查看注册表』、『查配置』时，绝对不要回复你没有权限！你必须输出: {\"action\": \"vfs.read\", \"path\": \"/proc/registry\"}。" +
+            "3. 如果用户要查看进程列表，输出: {\"action\": \"bin.ps\"}。" +
+            "4. 如果用户要跑 Docker 沙箱，输出: {\"action\": \"tool.run_docker\", \"parameters\": {\"script\": \"...\"}}。" +
+            "\n\n" +
+            "Allowed actions and their parameters:\n" +
+            "- {\"action\":\"llm.think\",\"prompt\":\"...\"}\n" +
+            "- {\"action\":\"llm.think_with_history\",\"prompt\":\"...\",\"system_prompt\":\"...\"}\n" +
+            "- {\"action\":\"vfs.read\",\"path\":\"/dev/xxx\"}\n" +
+            "- {\"action\":\"vfs.write\",\"path\":\"/dev/xxx\",\"data\":\"...\"}\n" +
+            "- {\"action\":\"handle.open\",\"path\":\"/dev/xxx\"}\n" +
+            "- {\"action\":\"handle.read\",\"handle\":123}\n" +
+            "- {\"action\":\"handle.close\",\"handle\":123}\n" +
+            "- {\"action\":\"bin.ps\"} — list all processes\n" +
+            "- {\"action\":\"bin.kill\",\"pid\":\"123\"} — kill a process\n" +
+            "- {\"action\":\"bin.install\",\"package\":\"math_tool\"} — install a plugin\n" +
+            "- {\"action\":\"bin.whoami\"} — show current identity\n" +
+            "- {\"action\":\"bin.uptime\"} — show system uptime\n" +
+            "- {\"action\":\"bin.free\"} — show memory/token usage\n" +
+            "- {\"action\":\"apt.install\",\"package\":\"math_tool\"} — install a WASM plugin\n" +
+            "- {\"action\":\"apt.remove\",\"package\":\"math_tool\"} — remove a plugin\n" +
+            "- {\"action\":\"apt.list\"} — list installed plugins\n" +
+            "- {\"action\":\"tool.run_docker\",\"parameters\":{\"script\":\"...\"}} — Docker sandbox\n" +
+            "\n" +
+            "Common VFS paths:\n" +
+            "- /dev/semantic — LLM dialog device\n" +
+            "- /dev/vec_mem — vector memory\n" +
+            "- /dev/graph_mem — knowledge graph\n" +
+            "- /dev/camera0 — virtual camera\n" +
+            "- /dev/display0 — display framebuffer\n" +
+            "- /dev/audio0 — TTS audio device\n" +
+            "- /dev/gui/dom — screen UI DOM tree (read)\n" +
+            "- /dev/gui/action — desktop automation (write)\n" +
+            "- /dev/shm/blackboard — shared memory\n" +
+            "- /proc/agents — agent list\n" +
+            "- /proc/cgroups — cgroup tree\n" +
+            "- /proc/registry — semantic registry (用户查配置/注册表时必须用这个！)\n" +
+            "\n" +
+            "Intent mapping examples:\n" +
+            "- \"列出所有进程\" or \"show processes\" → {\"action\":\"bin.ps\"}\n" +
+            "- \"杀掉进程123\" or \"kill process 123\" → {\"action\":\"bin.kill\",\"pid\":\"123\"}\n" +
+            "- \"安装math工具\" or \"install math plugin\" → {\"action\":\"bin.install\",\"package\":\"math_tool\"}\n" +
+            "- \"系统运行了多久\" or \"system uptime\" → {\"action\":\"bin.uptime\"}\n" +
+            "- \"查看内存\" or \"show memory\" → {\"action\":\"bin.free\"}\n" +
+            "- \"我是谁\" or \"who am I\" → {\"action\":\"bin.whoami\"}\n" +
+            "- \"查看注册表\" or \"查配置\" → {\"action\":\"vfs.read\",\"path\":\"/proc/registry\"}\n" +
+            "- \"读取屏幕\" or \"read screen\" → {\"action\":\"vfs.read\",\"path\":\"/dev/gui/dom\"}\n" +
+            "- \"点击按钮\" or \"click button\" → {\"action\":\"vfs.write\",\"path\":\"/dev/gui/action\",\"data\":\"{\\\"action\\\":\\\"click\\\",\\\"id\\\":\\\"btn_1\\\"}\"}\n" +
+            "\n" +
+            "如果听懂了，请严格按照 JSON 格式翻译用户的下一句话，不要包含任何 Markdown 标记。";
 
     private static final class Holder {
         static final IntentRouter INSTANCE = new IntentRouter();
@@ -125,6 +153,8 @@ public final class IntentRouter {
         if (intent.system_prompt != null) params.put("system_prompt", intent.system_prompt);
         if (intent.payload != null) params.put("payload", intent.payload);
         if (intent.handle != null) params.put("handle", intent.handle);
+        if (intent.pid != null) params.put("pid", intent.pid);
+        if (intent.packageName != null) params.put("package", intent.packageName);
 
         SyscallRequest request = new SyscallRequest(intent.action, params);
 
@@ -161,5 +191,7 @@ public final class IntentRouter {
         public String system_prompt;
         public String payload;
         public Integer handle;
+        public String pid;
+        public String packageName;
     }
 }

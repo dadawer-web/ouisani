@@ -1,5 +1,0 @@
-root ::= "SYS_CMD " action " " arg " EOF\n"
-
-action ::= "EXECUTE_TASK" | "CANCEL_TASK" | "VFS_READ" | "SNAPSHOT" | "RESTORE" | "COMPILE_AND_EXECUTE"
-
-arg ::= [a-zA-Z0-9_./:]+

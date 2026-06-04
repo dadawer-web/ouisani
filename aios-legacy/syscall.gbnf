@@ -1,7 +1,0 @@
-root ::= "{" ws "\"syscall\"" ws ":" ws syscallname ws "," ws "\"payload\"" ws ":" ws string ws "}"
-
-syscallname ::= "\"EXECUTE_TASK\"" | "\"CANCEL_TASK\"" | "\"WRITE_MEMORY\"" | "\"READ_MEMORY\"" | "\"VFS_CALL\"" | "\"PROCESS_CTRL\""
-
-string ::= "\"" ([^"\\] | "\\" .)* "\"" ws
-
-ws ::= [ \t\n]*

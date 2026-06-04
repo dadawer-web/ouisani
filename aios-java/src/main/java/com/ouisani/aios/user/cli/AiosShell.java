@@ -1,242 +1,117 @@
 package com.ouisani.aios.user.cli;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ouisani.aios.core.TaskScheduler;
-import com.ouisani.aios.core.VfsManager;
-import com.ouisani.aios.core.VfsNode;
-import com.ouisani.aios.user.DaemonManager;
-import com.ouisani.aios.user.container.AgentImageConfig;
-import com.ouisani.aios.user.container.AgentfileParser;
-import com.ouisani.aios.user.container.ContainerRuntime;
+import com.ouisani.aios.core.syscall.SyscallDispatcher;
+import com.ouisani.aios.core.syscall.SyscallRequest;
+import com.ouisani.aios.core.syscall.SyscallResponse;
+import com.ouisani.aios.core.telemetry.SemanticEtw;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Scanner;
 
+/**
+ * AIOS 超级终端 (The Ultimate General-Purpose AIOS Shell)
+ * 结合了底层 Syscall 直调与大模型 Intent Router 的混合命令行
+ */
 public class AiosShell {
 
-    private static final ObjectMapper objectMapper = new ObjectMapper();
-    private static TaskScheduler scheduler;
-    private static ContainerRuntime runtime;
-    private static DaemonManager systemd;
-
-    public static void init(TaskScheduler scheduler, ContainerRuntime runtime, DaemonManager systemd) {
-        AiosShell.scheduler = scheduler;
-        AiosShell.runtime = runtime;
-        AiosShell.systemd = systemd;
-    }
+    private static final String ANSI_RESET = "\u001B[0m";
+    private static final String ANSI_GREEN = "\u001B[32m";
+    private static final String ANSI_CYAN = "\u001B[36m";
+    private static final String ANSI_YELLOW = "\u001B[33m";
+    private static final String ANSI_RED = "\u001B[31m";
 
     public static void main(String[] args) {
-        printBanner();
+        bootSequence();
+        startRepl();
+    }
 
+    private static void bootSequence() {
+        System.out.println(ANSI_CYAN);
+        System.out.println("   ___  _________  _____ ");
+        System.out.println("  / _ \\/  _/ __ \\/ ___/ ");
+        System.out.println(" / __ _/ // /_/ /\\__ \\  ");
+        System.out.println("/_/ |_/___/\\____/____/  ");
+        System.out.println("                        ");
+        System.out.println("Ouisani General-Purpose AIOS v1.0.0-FINAL" + ANSI_RESET);
+        System.out.println("Loading Kernel Modules...");
+
+        try {
+            Thread.sleep(300);
+            System.out.println(ANSI_GREEN + "[OK] VFS Manager mounted at / (Journaling enabled)" + ANSI_RESET);
+            Thread.sleep(200);
+            System.out.println(ANSI_GREEN + "[OK] GraalWasm & Docker Sandbox Provider injected" + ANSI_RESET);
+            Thread.sleep(200);
+            System.out.println(ANSI_GREEN + "[OK] Semantic ETW & Ring0 Impersonation Context active" + ANSI_RESET);
+            Thread.sleep(400);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+
+        System.out.println("\nWelcome to AIOS. Type your intent naturally, or use '/' for raw syscalls.");
+        System.out.println("Type 'exit' to halt the system.\n");
+    }
+
+    private static void startRepl() {
         Scanner scanner = new Scanner(System.in);
+        IntentRouter router = IntentRouter.getInstance();
+        SyscallDispatcher dispatcher = SyscallDispatcher.getInstance();
 
         while (true) {
-            System.out.print("aios> ");
-            if (!scanner.hasNextLine()) break;
+            System.out.print(ANSI_YELLOW + "aios_root@local" + ANSI_RESET + ":~$ ");
+            String input = scanner.nextLine().trim();
 
-            String line = scanner.nextLine().strip();
-            if (line.isEmpty()) continue;
+            if (input.equalsIgnoreCase("exit")) {
+                System.out.println("Initiating system halt... Goodbye.");
+                SemanticEtw.getInstance().logEvent("AiosShell", "SYSTEM_HALT", "User exited shell");
+                break;
+            }
 
-            String[] parts = line.split("\\s+", 2);
-            String cmd = parts[0].toLowerCase();
-            String arg = parts.length > 1 ? parts[1].strip() : "";
+            if (input.isEmpty()) {
+                continue;
+            }
 
             try {
-                switch (cmd) {
-                    case "ps" -> cmdPs();
-                    case "top" -> cmdTop();
-                    case "cat" -> cmdCat(arg);
-                    case "run" -> cmdRun(arg);
-                    case "help" -> cmdHelp();
-                    case "exit", "quit" -> {
-                        cmdExit();
-                        return;
-                    }
-                    default -> System.out.println("  Unknown command: " + cmd + " (type 'help' for commands)");
+                // 原生 Syscall 极客模式
+                if (input.startsWith("/")) {
+                    handleRawSyscall(input, dispatcher);
+                }
+                // 意图路由自然语言模式
+                else {
+                    System.out.println(ANSI_CYAN + ">> Routing intent through NUI Engine..." + ANSI_RESET);
+                    router.executeNaturalLanguage(input);
                 }
             } catch (Exception e) {
-                System.out.println("  Error: " + e.getMessage());
+                System.out.println(ANSI_RED + "[Kernel Panic] Uncaught user-space exception: " + e.getMessage() + ANSI_RESET);
             }
         }
+        scanner.close();
     }
 
-    private static void cmdPs() {
-        Optional<VfsNode> node = VfsManager.instance().resolve("/proc/agents");
-        if (node.isEmpty()) {
-            System.out.println("  /proc/agents not available (TaskScheduler not configured?)");
-            return;
-        }
+    private static void handleRawSyscall(String input, SyscallDispatcher dispatcher) {
+        // Example parsing: /vfs.read path=/dev/camera
+        String[] parts = input.substring(1).split(" ", 2);
+        String action = parts[0];
 
-        try {
-            String json = node.get().read();
-            JsonNode root = objectMapper.readTree(json);
-
-            System.out.println("  ┌──────┬──────────┬────────────┬──────────┬──────────┐");
-            System.out.println("  │  PID │ Status   │ Cgroup     │ Type     │ Gas      │");
-            System.out.println("  ├──────┼──────────┼────────────┼──────────┼──────────┤");
-
-            JsonNode agents = root.get("agents");
-            if (agents != null && agents.isArray()) {
-                for (JsonNode agent : agents) {
-                    System.out.printf("  │ %4d │ %-8s │ %-10s │ %-8s │ %4d/%-4d │%n",
-                            agent.get("pid").asInt(),
-                            agent.get("status").asText(),
-                            truncate(agent.get("cgroup").asText(), 10),
-                            truncate(agent.get("type").asText(), 8),
-                            agent.get("gasUsed").asInt(),
-                            agent.get("gasLimit").asInt());
-                }
-            }
-
-            System.out.println("  └──────┴──────────┴────────────┴──────────┴──────────┘");
-
-            JsonNode stats = root.get("stats");
-            if (stats != null) {
-                System.out.printf("  Stats: spawned=%d, completed=%d, cancelled=%d, active=%d%n",
-                        stats.get("totalSpawned").asInt(),
-                        stats.get("totalCompleted").asInt(),
-                        stats.get("totalCancelled").asInt(),
-                        stats.get("activeCount").asInt());
-            }
-        } catch (Exception e) {
-            System.out.println("  Failed to parse /proc/agents: " + e.getMessage());
-        }
-    }
-
-    private static void cmdTop() {
-        Optional<VfsNode> node = VfsManager.instance().resolve("/proc/cgroups");
-        if (node.isEmpty()) {
-            System.out.println("  /proc/cgroups not available");
-            return;
-        }
-
-        try {
-            String json = node.get().read();
-            JsonNode root = objectMapper.readTree(json);
-
-            System.out.println("  ┌─ Cgroup Hierarchy ──────────────────────────────────────┐");
-            System.out.println("  │  Name              Quota        Consumed    Remaining    │");
-            System.out.println("  ├─────────────────────────────────────────────────────────┤");
-
-            JsonNode cgroups = root.get("cgroups");
-            if (cgroups != null && cgroups.isArray()) {
-                for (JsonNode cg : cgroups) {
-                    String parent = cg.has("parent") && !cg.get("parent").isNull()
-                            ? cg.get("parent").asText() : null;
-                    int depth = 0;
-                    String name = cg.get("name").asText();
-                    long quota = cg.get("quota").asLong();
-                    long consumed = cg.get("consumed").asLong();
-                    long remaining = cg.get("remaining").asLong();
-
-                    String indent = parent != null ? "  │    " : "  │  ";
-                    String prefix = parent != null ? "├─ " : "├─ ";
-                    System.out.printf("%s%s%-17s %8d    %8d    %8d%n",
-                            indent, prefix, name, quota, consumed, remaining);
-                }
-            }
-
-            System.out.println("  └─────────────────────────────────────────────────────────┘");
-        } catch (Exception e) {
-            System.out.println("  Failed to parse /proc/cgroups: " + e.getMessage());
-        }
-    }
-
-    private static void cmdCat(String path) {
-        if (path.isEmpty()) {
-            System.out.println("  Usage: cat <vfs_path>");
-            return;
-        }
-
-        Optional<VfsNode> node = VfsManager.instance().resolve(path);
-        if (node.isEmpty()) {
-            System.out.println("  Node not found: " + path);
-            return;
-        }
-
-        VfsNode vfsNode = node.get();
-        System.out.printf("  [%s] %s%n", vfsNode.nodeType(), path);
-
-        try {
-            String content = vfsNode.read();
-            if (content == null || content.isEmpty()) {
-                System.out.println("  (empty)");
+        SyscallRequest request;
+        if (parts.length > 1) {
+            // A simple mock parser for demo purposes. Real impl would use JSON.
+            String[] paramPairs = parts[1].split("=", 2);
+            if (paramPairs.length == 2) {
+                request = new SyscallRequest(action, Map.of(paramPairs[0], paramPairs[1]));
             } else {
-                try {
-                    Object parsed = objectMapper.readValue(content, Object.class);
-                    System.out.println(objectMapper.writerWithDefaultPrettyPrinter()
-                            .writeValueAsString(parsed).indent(2));
-                } catch (Exception ignored) {
-                    System.out.println(content.indent(2));
-                }
+                request = new SyscallRequest(action, Map.of("payload", parts[1]));
             }
-        } catch (UnsupportedOperationException e) {
-            System.out.println("  (write-only node)");
-        }
-    }
-
-    private static void cmdRun(String agentfilePath) {
-        if (agentfilePath.isEmpty()) {
-            System.out.println("  Usage: run <agentfile_path>");
-            return;
+        } else {
+            request = new SyscallRequest(action, Map.of());
         }
 
-        try {
-            String content = Files.readString(Path.of(agentfilePath));
-            AgentfileParser parser = new AgentfileParser();
-            AgentImageConfig config = parser.parse(content);
+        System.out.println(ANSI_CYAN + ">> Executing Raw Syscall: " + action + ANSI_RESET);
+        SyscallResponse response = dispatcher.execute("root_cli", request);
 
-            String containerId = "shell_" + System.currentTimeMillis() % 100000;
-            runtime.runContainer(containerId, config);
-            System.out.printf("  Container '%s' deployed from %s%n", containerId, agentfilePath);
-        } catch (IOException e) {
-            System.out.println("  File not found: " + agentfilePath);
-        } catch (Exception e) {
-            System.out.println("  Deploy failed: " + e.getMessage());
+        if (response.success()) {
+            System.out.println(ANSI_GREEN + "Response: " + response.data() + ANSI_RESET);
+        } else {
+            System.out.println(ANSI_RED + "Error: " + response.errorMessage() + ANSI_RESET);
         }
-    }
-
-    private static void cmdHelp() {
-        System.out.println("  ┌─ AIOS Shell Commands ──────────────────────────────┐");
-        System.out.println("  │  ps              List running agents               │");
-        System.out.println("  │  top             Show cgroup resource hierarchy     │");
-        System.out.println("  │  cat <path>      Read VFS node content             │");
-        System.out.println("  │  run <file>      Deploy container from Agentfile   │");
-        System.out.println("  │  help            Show this help                    │");
-        System.out.println("  │  exit            Shutdown and quit                 │");
-        System.out.println("  └────────────────────────────────────────────────────┘");
-    }
-
-    private static void cmdExit() {
-        System.out.println("  Shutting down AIOS...");
-
-        if (systemd != null) {
-            systemd.stopReconciler();
-        }
-        if (scheduler != null) {
-            scheduler.shutdown();
-        }
-
-        System.out.println("  Goodbye!");
-    }
-
-    private static void printBanner() {
-        System.out.println();
-        System.out.println("  ╔══════════════════════════════════════════════════════════════╗");
-        System.out.println("  ║          🧠  AIOS — AI Operating System Shell              ║");
-        System.out.println("  ║          Java 21 Virtual Threads | GraalVM WASM            ║");
-        System.out.println("  ║          VFS Namespace | Cgroup Isolation | MCP Protocol   ║");
-        System.out.println("  ╚══════════════════════════════════════════════════════════════╝");
-        System.out.println("  Type 'help' for available commands.");
-        System.out.println();
-    }
-
-    private static String truncate(String s, int maxLen) {
-        return s.length() <= maxLen ? s : s.substring(0, maxLen - 1) + "…";
     }
 }

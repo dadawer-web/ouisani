@@ -5,10 +5,14 @@ import com.ouisani.aios.core.AgentTask;
 import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.mcp.McpServer;
+import com.ouisani.aios.core.syscall.SyscallDispatcher;
+import com.ouisani.aios.core.syscall.SyscallRequest;
+import com.ouisani.aios.core.syscall.SyscallResponse;
 import com.ouisani.aios.vfs.WebSocketNode;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.javalin.http.sse.SseClient;
+import io.javalin.websocket.WsContext;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,6 +21,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -32,6 +37,7 @@ public class SyscallServer {
     private final AtomicInteger pidCounter = new AtomicInteger(1);
     private final Map<String, WebSocketNode> wsNodes = new ConcurrentHashMap<>();
     private final Map<String, SseClient> mcpSessions = new ConcurrentHashMap<>();
+    private final Set<WsContext> monitorClients = ConcurrentHashMap.newKeySet();
     private Javalin app;
 
     public SyscallServer(TaskScheduler scheduler) {
@@ -41,6 +47,18 @@ public class SyscallServer {
     public SyscallServer(TaskScheduler scheduler, McpServer mcpServer) {
         this.scheduler = scheduler;
         this.mcpServer = mcpServer;
+
+        // Subscribe to EventBus system_metrics channel and forward to WebSocket dashboard clients
+        EventBus.instance().subscribe("system_metrics", payload -> {
+            for (WsContext client : monitorClients) {
+                try {
+                    client.send(payload);
+                } catch (Exception e) {
+                    monitorClients.remove(client);
+                    log.warn("[WebSocket Monitor] Failed to send to client, removing: {}", e.getMessage());
+                }
+            }
+        });
     }
 
     public void start(int port) {
@@ -49,9 +67,53 @@ public class SyscallServer {
                 QueuedThreadPool threadPool = (QueuedThreadPool) server.getThreadPool();
                 threadPool.setVirtualThreadsExecutor(Executors.newVirtualThreadPerTaskExecutor());
             });
+            // Static file hosting for web dashboard HTML
+            config.staticFiles.add("src/main/resources/web", io.javalin.http.staticfiles.Location.EXTERNAL);
+        });
+
+        // ── WebSocket Monitor: real-time system metrics for dashboard ──
+        app.ws("/ws/monitor", ws -> {
+            ws.onConnect(ctx -> {
+                monitorClients.add(ctx);
+                log.info("[WebSocket] Dashboard connected. Total clients: {}", monitorClients.size());
+                System.out.printf("  📡 [WebSocket] Dashboard connected. Total clients: %d%n", monitorClients.size());
+            });
+
+            ws.onClose(ctx -> {
+                monitorClients.remove(ctx);
+                log.info("[WebSocket] Dashboard disconnected. Total clients: {}", monitorClients.size());
+            });
+
+            ws.onError(ctx -> {
+                monitorClients.remove(ctx);
+                log.warn("[WebSocket] Dashboard error: {}", ctx.error() != null ? ctx.error().getMessage() : "unknown");
+            });
         });
 
         app.post("/syscall/spawn", this::handleSpawn);
+
+        // Generic syscall execution endpoint for dashboard CLI
+        app.post("/syscall/exec", ctx -> {
+            ctx.contentType("application/json");
+            try {
+                String body = ctx.body();
+                Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+                String action = (String) parsed.get("action");
+                @SuppressWarnings("unchecked")
+                Map<String, Object> params = (Map<String, Object>) parsed.getOrDefault("params", Map.of());
+
+                if (action == null || action.isEmpty()) {
+                    ctx.status(400).result("{\"success\":false,\"error\":\"Missing 'action' field\"}");
+                    return;
+                }
+
+                SyscallRequest request = new SyscallRequest(action, params);
+                SyscallResponse response = SyscallDispatcher.getInstance().execute("dashboard_cli", request);
+                ctx.result(objectMapper.writeValueAsString(response));
+            } catch (Exception e) {
+                ctx.status(500).result("{\"success\":false,\"error\":\"" + e.getMessage() + "\"}");
+            }
+        });
 
         app.sse("/kernel/stream", client -> {
             client.keepAlive();
@@ -172,6 +234,7 @@ public class SyscallServer {
         System.out.println("  ║                                                          ║");
         System.out.println("  ║   POST /syscall/spawn   → Agent spawn endpoint           ║");
         System.out.println("  ║   SSE  /kernel/stream   → Real-time kernel event bus     ║");
+        System.out.println("  ║   WS   /ws/monitor      → Dashboard metrics WebSocket    ║");
         System.out.println("  ║   WS   /ws/dev/{name}   → Full-duplex VFS bridge         ║");
         System.out.println("  ║   SSE  /mcp/sse         → MCP protocol SSE channel       ║");
         System.out.println("  ║   POST /mcp/message     → MCP JSON-RPC message endpoint  ║");

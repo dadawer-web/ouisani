@@ -17,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class TaskScheduler {
@@ -252,6 +253,12 @@ public final class TaskScheduler {
 
     public int activeCount() {
         return pcb.size();
+    }
+
+    private final AtomicInteger nextPidSeq = new AtomicInteger(1000);
+
+    public int nextPid() {
+        return nextPidSeq.incrementAndGet();
     }
 
     public SchedulerStats stats() {

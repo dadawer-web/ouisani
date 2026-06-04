@@ -8,6 +8,9 @@ import com.ouisani.aios.core.memory.ContextInjector;
 import com.ouisani.aios.core.plugin.PluginManager;
 import com.ouisani.aios.core.security.ObjectManager;
 import com.ouisani.aios.core.telemetry.SemanticEtw;
+import com.ouisani.aios.user.bin.AiosApt;
+import com.ouisani.aios.user.bin.CoreUtils;
+import com.ouisani.aios.vfs.MutableFileNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,6 +34,14 @@ import java.util.Map;
  *   <li>{@code handle.read} — read via a handle</li>
  *   <li>{@code handle.close} — close a handle</li>
  *   <li>{@code tool.*} — dynamically registered WASM plugin (via PluginManager)</li>
+ *   <li>{@code coreutils.ps} — list all processes</li>
+ *   <li>{@code coreutils.kill} — kill a process by PID</li>
+ *   <li>{@code coreutils.whoami} — show current agent identity</li>
+ *   <li>{@code coreutils.uptime} — show system uptime</li>
+ *   <li>{@code coreutils.free} — show token/memory usage</li>
+ *   <li>{@code apt.install} — install a WASM plugin</li>
+ *   <li>{@code apt.remove} — remove a WASM plugin</li>
+ *   <li>{@code apt.list} — list installed plugins</li>
  * </ul>
  */
 public final class SyscallDispatcher {
@@ -80,6 +91,12 @@ public final class SyscallDispatcher {
             // Dynamic tool.* routing: forward to PluginManager for WASM execution
             if (request.action().startsWith("tool.")) {
                 response = handleToolPlugin(agentId, request);
+            } else if (request.action().startsWith("coreutils.")) {
+                response = handleCoreUtils(agentId, request);
+            } else if (request.action().startsWith("apt.")) {
+                response = handleApt(agentId, request);
+            } else if (request.action().startsWith("bin.")) {
+                response = handleBin(agentId, request);
             } else {
                 response = switch (request.action()) {
                     case "llm.think" -> handleLlmThink(agentId, request);
@@ -192,24 +209,46 @@ public final class SyscallDispatcher {
         }
 
         String path = request.paramString("path");
-        String payload = request.paramString("payload");
+        // SDK sends "data", but also accept "payload" for backward compatibility
+        String payload = request.paramString("data");
+        if (payload == null) {
+            payload = request.paramString("payload");
+        }
         if (path == null || path.isEmpty()) {
             return SyscallResponse.fail("Missing parameter: path");
         }
         if (payload == null) {
-            return SyscallResponse.fail("Missing parameter: payload");
+            return SyscallResponse.fail("Missing parameter: data");
         }
 
         try {
             var nodeOpt = vfsManager.resolve(path);
             if (nodeOpt.isEmpty()) {
-                return SyscallResponse.fail("Path not found: " + path);
+                // Auto-create a MutableFileNode if the path doesn't exist
+                // (like creating a file in a directory)
+                MutableFileNode newNode = new MutableFileNode(path);
+                newNode.write(payload);
+                vfsManager.mount(extractDirPath(path), extractFileName(path), newNode);
+                log.debug("[VFS] Auto-created file node: {}", path);
+                return SyscallResponse.ok();
             }
             boolean ok = nodeOpt.get().write(payload);
             return ok ? SyscallResponse.ok() : SyscallResponse.fail("Write rejected by node");
         } catch (Exception e) {
             return SyscallResponse.fail(e);
         }
+    }
+
+    private static String extractDirPath(String path) {
+        int lastSlash = path.lastIndexOf('/');
+        if (lastSlash <= 0) return "/";
+        return path.substring(0, lastSlash);
+    }
+
+    private static String extractFileName(String path) {
+        int lastSlash = path.lastIndexOf('/');
+        if (lastSlash < 0) return path;
+        return path.substring(lastSlash + 1);
     }
 
     // ── Dynamic Tool Plugin Syscalls ──
@@ -231,6 +270,71 @@ public final class SyscallDispatcher {
             return SyscallResponse.ok(result);
         } catch (Exception e) {
             return SyscallResponse.fail("Plugin execution failed: " + e.getMessage());
+        }
+    }
+
+    // ── CoreUtils Syscalls ──
+
+    private SyscallResponse handleCoreUtils(String agentId, SyscallRequest request) {
+        String subAction = request.action().substring("coreutils.".length());
+        try {
+            String result = CoreUtils.dispatch(subAction, request.params());
+            return SyscallResponse.ok(result);
+        } catch (Exception e) {
+            return SyscallResponse.fail("CoreUtils error: " + e.getMessage());
+        }
+    }
+
+    // ── APT (Package Manager) Syscalls ──
+
+    private SyscallResponse handleApt(String agentId, SyscallRequest request) {
+        String subAction = request.action().substring("apt.".length());
+        try {
+            String result = switch (subAction) {
+                case "install" -> {
+                    String pkg = request.paramString("package");
+                    if (pkg == null || pkg.isEmpty()) yield "Missing parameter: package";
+                    AiosApt.install(pkg);
+                    yield "Package '" + pkg + "' installed successfully";
+                }
+                case "remove" -> {
+                    String pkg = request.paramString("package");
+                    if (pkg == null || pkg.isEmpty()) yield "Missing parameter: package";
+                    AiosApt.remove(pkg);
+                    yield "Package '" + pkg + "' removed";
+                }
+                case "list" -> AiosApt.list();
+                default -> "Unknown apt command: " + subAction;
+            };
+            return SyscallResponse.ok(result);
+        } catch (Exception e) {
+            return SyscallResponse.fail("APT error: " + e.getMessage());
+        }
+    }
+
+    // ── bin.* Unified User-Space Binary Syscalls ──
+
+    private SyscallResponse handleBin(String agentId, SyscallRequest request) {
+        String subAction = request.action().substring("bin.".length());
+        try {
+            String result = switch (subAction) {
+                case "ps" -> CoreUtils.ps();
+                case "kill" -> CoreUtils.kill(request.paramString("pid"));
+                case "whoami" -> CoreUtils.whoami();
+                case "uptime" -> CoreUtils.uptime();
+                case "free" -> CoreUtils.free();
+                case "install" -> {
+                    String pkg = request.paramString("package");
+                    if (pkg == null || pkg.isEmpty()) yield "Missing parameter: package";
+                    AiosApt.install(pkg);
+                    yield "Package '" + pkg + "' installed successfully";
+                }
+                default -> "Unknown bin command: " + subAction;
+            };
+            log.info("[User Space] Core utilities and package manager linked to Intent Router. bin.{} dispatched", subAction);
+            return SyscallResponse.ok(result);
+        } catch (Exception e) {
+            return SyscallResponse.fail("bin error: " + e.getMessage());
         }
     }
 

@@ -53,9 +53,9 @@ public final class SecurityToken {
     public SecurityToken(String ownerId, int privilegeLevel, Set<String> capabilities) {
         this.ownerId = ownerId;
         this.privilegeLevel = privilegeLevel;
-        this.capabilities = Collections.unmodifiableSet(
-                ConcurrentHashMap.newKeySet(capabilities.size()));
-        this.capabilities.addAll(capabilities);
+        Set<String> mutable = ConcurrentHashMap.newKeySet(capabilities.size());
+        mutable.addAll(capabilities);
+        this.capabilities = Collections.unmodifiableSet(mutable);
     }
 
     public String ownerId() {

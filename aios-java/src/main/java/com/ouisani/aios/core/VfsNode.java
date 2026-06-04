@@ -15,7 +15,8 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
         com.ouisani.aios.vfs.WebhookNode, com.ouisani.aios.vfs.AudioNode,
         com.ouisani.aios.vfs.HostSourceNode, com.ouisani.aios.vfs.ShmNode,
         com.ouisani.aios.vfs.RegistryFsNode, com.ouisani.aios.vfs.ShadowCopyNode,
-        com.ouisani.aios.vfs.GuiDomNode, com.ouisani.aios.vfs.GuiActionNode {
+        com.ouisani.aios.vfs.GuiDomNode, com.ouisani.aios.vfs.GuiActionNode,
+        com.ouisani.aios.vfs.MutableFileNode {
 
     Logger log = LoggerFactory.getLogger(VfsNode.class);
 

@@ -26,7 +26,6 @@ public class OpenAiAdapter implements LlmProvider {
     private final String apiKey;
     private final String model;
     private final int timeoutSeconds;
-    private final HttpClient httpClient;
     private final Gson gson;
 
     private final String embeddingApiKey;
@@ -38,9 +37,6 @@ public class OpenAiAdapter implements LlmProvider {
         this.baseUrl = normalizeBaseUrl(baseUrl);
         this.model = model;
         this.timeoutSeconds = timeoutSeconds;
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .build();
         this.gson = new Gson();
 
         this.embeddingApiKey = System.getenv().getOrDefault("EMBEDDING_API_KEY", "");
@@ -61,6 +57,17 @@ public class OpenAiAdapter implements LlmProvider {
 
     public OpenAiAdapter(String apiKey) {
         this(apiKey, "https://api.openai.com", "gpt-4o-mini");
+    }
+
+    /**
+     * Create a fresh HttpClient for each request.
+     * This avoids the "selector manager closed" issue when running on virtual threads,
+     * where a shared HttpClient's selector can be prematurely shut down.
+     */
+    private HttpClient createHttpClient() {
+        return HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build();
     }
 
     @Override
@@ -86,7 +93,7 @@ public class OpenAiAdapter implements LlmProvider {
                     .POST(HttpRequest.BodyPublishers.ofString(bodyStr))
                     .build();
 
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = createHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() != 200) {
                 log.error("Embedding API returned HTTP {}: {}", response.statusCode(),
@@ -213,7 +220,7 @@ public class OpenAiAdapter implements LlmProvider {
 
         try {
             long startNanos = System.nanoTime();
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = createHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
             long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
 
             SemanticEtw.getInstance().logEvent("LLM", "CALL",
@@ -255,7 +262,7 @@ public class OpenAiAdapter implements LlmProvider {
                     .GET()
                     .build();
 
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = createHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
             return response.statusCode() == 200 || response.statusCode() == 401;
         } catch (Exception e) {
             log.debug("Availability check failed: {}", e.getMessage());

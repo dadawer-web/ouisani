@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIOS Kernel Monitor</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0a0a0f;
+    color: #00ffaa;
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Scanline overlay */
+  body::after {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 255, 170, 0.015) 2px,
+      rgba(0, 255, 170, 0.015) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* Header */
+  .header {
+    border-bottom: 1px solid #00ffaa33;
+    padding: 12px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: linear-gradient(180deg, #0f1419 0%, #0a0a0f 100%);
+    flex-shrink: 0;
+  }
+  .header h1 {
+    font-size: 18px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    text-shadow: 0 0 10px #00ffaa88;
+  }
+  .header .status {
+    font-size: 12px;
+    color: #00ffaa88;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .header .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #00ffaa;
+    box-shadow: 0 0 6px #00ffaa;
+    animation: pulse 2s infinite;
+  }
+  .header .dot.disconnected { background: #ff3355; box-shadow: 0 0 6px #ff3355; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* Main grid */
+  .main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr auto auto;
+    gap: 1px;
+    background: #00ffaa11;
+    min-height: 0;
+  }
+
+  .panel {
+    background: #0a0a0f;
+    padding: 16px 20px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .panel-title {
+    font-size: 11px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: #00ffaa88;
+    margin-bottom: 12px;
+    border-bottom: 1px solid #00ffaa22;
+    padding-bottom: 6px;
+  }
+
+  /* Left panel - Agents */
+  .agent-list {
+    flex: 1;
+    overflow-y: auto;
+    font-size: 12px;
+  }
+  .agent-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid #00ffaa0a;
+  }
+  .agent-pid { color: #00ddff; }
+  .agent-status { color: #ffaa00; }
+  .agent-status.running { color: #00ffaa; }
+  .agent-status.killed { color: #ff3355; }
+
+  .scheduler-stats {
+    margin-top: 12px;
+    font-size: 11px;
+    color: #00ffaa66;
+    line-height: 1.8;
+  }
+  .scheduler-stats span { color: #00ddff; }
+
+  /* Right panel - Metrics */
+  .metric-group {
+    margin-bottom: 16px;
+  }
+  .metric-label {
+    font-size: 11px;
+    color: #00ffaa88;
+    margin-bottom: 4px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .metric-label .value { color: #00ddff; }
+  .bar-track {
+    height: 18px;
+    background: #111118;
+    border: 1px solid #00ffaa22;
+    position: relative;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #00ffaa, #00ddff);
+    transition: width 0.8s ease;
+    position: relative;
+  }
+  .bar-fill.warning { background: linear-gradient(90deg, #ffaa00, #ff6600); }
+  .bar-fill.critical { background: linear-gradient(90deg, #ff3355, #ff0044); }
+  .bar-fill::after {
+    content: '';
+    position: absolute;
+    top: 0; right: 0;
+    width: 20px; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15));
+  }
+
+  .zram-info {
+    font-size: 12px;
+    margin-top: 8px;
+    line-height: 2;
+  }
+  .zram-info .label { color: #00ffaa88; }
+  .zram-info .val { color: #00ddff; }
+
+  /* Bottom panel - Event log */
+  .event-panel {
+    grid-column: 1 / -1;
+    height: 160px;
+    flex-shrink: 0;
+  }
+  .event-log {
+    flex: 1;
+    overflow-y: auto;
+    font-size: 11px;
+    line-height: 1.6;
+    color: #00ffaa88;
+    padding-right: 8px;
+  }
+  .event-log .ts { color: #00ffaa44; margin-right: 8px; }
+  .event-log .ev-type { color: #00ddff; }
+  .event-log .ev-data { color: #00ffaa66; }
+
+  /* Command panel */
+  .cmd-panel {
+    grid-column: 1 / -1;
+    flex-shrink: 0;
+  }
+  .cmd-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .cmd-prompt {
+    color: #ffaa00;
+    font-size: 13px;
+    white-space: nowrap;
+    text-shadow: 0 0 6px #ffaa0066;
+  }
+  .cmd-input {
+    flex: 1;
+    background: #111118;
+    border: 1px solid #00ffaa33;
+    color: #00ffaa;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    padding: 8px 12px;
+    outline: none;
+    caret-color: #00ffaa;
+  }
+  .cmd-input:focus {
+    border-color: #00ffaa;
+    box-shadow: 0 0 8px #00ffaa33;
+  }
+  .cmd-input::placeholder { color: #00ffaa33; }
+  .cmd-send {
+    background: #00ffaa15;
+    border: 1px solid #00ffaa55;
+    color: #00ffaa;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    padding: 8px 16px;
+    cursor: pointer;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  .cmd-send:hover { background: #00ffaa30; }
+  .cmd-send:active { background: #00ffaa55; }
+  .cmd-output {
+    margin-top: 8px;
+    background: #080810;
+    border: 1px solid #00ffaa15;
+    padding: 8px 12px;
+    max-height: 120px;
+    overflow-y: auto;
+    font-size: 11px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .cmd-output .cmd-res-ok { color: #00ffaa; }
+  .cmd-output .cmd-res-err { color: #ff3355; }
+  .cmd-output .cmd-res-sys { color: #00ffaa44; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: #0a0a0f; }
+  ::-webkit-scrollbar-thumb { background: #00ffaa33; }
+
+  /* Flicker animation for numbers */
+  .num { transition: color 0.3s; }
+  .num.updated { color: #ffffff; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <h1>AIOS Kernel Monitor v1.0</h1>
+  <div class="status">
+    <div class="dot" id="ws-dot"></div>
+    <span id="ws-status">CONNECTING...</span>
+  </div>
+</div>
+
+<!-- Main Grid -->
+<div class="main">
+
+  <!-- Left Panel: Agents -->
+  <div class="panel">
+    <div class="panel-title">// Active Agents &amp; Scheduler</div>
+    <div class="agent-list" id="agent-list">
+      <div style="color:#00ffaa44;font-size:11px;">Awaiting telemetry data...</div>
+    </div>
+    <div class="scheduler-stats" id="scheduler-stats">
+      Spawned: <span id="stat-spawned">0</span> |
+      Completed: <span id="stat-completed">0</span> |
+      Cancelled: <span id="stat-cancelled">0</span>
+    </div>
+  </div>
+
+  <!-- Right Panel: Metrics -->
+  <div class="panel">
+    <div class="panel-title">// Cgroup Token Burn &amp; ZRAM</div>
+
+    <div class="metric-group">
+      <div class="metric-label">
+        <span>Token Consumption</span>
+        <span class="value" id="token-pct">0%</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill" id="token-bar" style="width:0%"></div>
+      </div>
+    </div>
+
+    <div class="metric-group">
+      <div class="metric-label">
+        <span>ZRAM Compression</span>
+        <span class="value" id="zram-pct">0%</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill" id="zram-bar" style="width:0%"></div>
+      </div>
+    </div>
+
+    <div class="zram-info">
+      <div><span class="label">Active Agents:</span> <span class="val num" id="val-agents">0</span></div>
+      <div><span class="label">Tokens Consumed:</span> <span class="val num" id="val-tokens">0</span></div>
+      <div><span class="label">Token Quota:</span> <span class="val num" id="val-quota">0</span></div>
+      <div><span class="label">Uptime:</span> <span class="val num" id="val-uptime">0s</span></div>
+    </div>
+  </div>
+
+  <!-- Bottom Panel: Event Log -->
+  <div class="panel event-panel">
+    <div class="panel-title">// Kernel Event Stream</div>
+    <div class="event-log" id="event-log"></div>
+  </div>
+
+  <!-- Command Panel -->
+  <div class="panel cmd-panel">
+    <div class="panel-title">// Syscall Terminal — type '/' for raw syscall, or natural language</div>
+    <div class="cmd-input-row">
+      <span class="cmd-prompt">aios$</span>
+      <input type="text" class="cmd-input" id="cmd-input"
+             placeholder="/vfs.read path=/dev/gui/dom  or  Read the screen DOM"
+             autocomplete="off" spellcheck="false">
+      <button class="cmd-send" id="cmd-send">EXEC</button>
+    </div>
+    <div class="cmd-output" id="cmd-output">
+      <span class="cmd-res-sys">Ready. Try: /vfs.read path=/dev/gui/dom</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // ── WebSocket Connection ──
+  const ws = new WebSocket('ws://' + location.host + '/ws/monitor');
+  const dot = document.getElementById('ws-dot');
+  const wsStatus = document.getElementById('ws-status');
+  const startTime = Date.now();
+
+  ws.onopen = function() {
+    dot.classList.remove('disconnected');
+    wsStatus.textContent = 'CONNECTED';
+    logEvent('SYSTEM', 'WebSocket connected to AIOS kernel');
+  };
+
+  ws.onclose = function() {
+    dot.classList.add('disconnected');
+    wsStatus.textContent = 'DISCONNECTED';
+    logEvent('SYSTEM', 'WebSocket disconnected');
+  };
+
+  ws.onerror = function() {
+    dot.classList.add('disconnected');
+    wsStatus.textContent = 'ERROR';
+  };
+
+  ws.onmessage = function(event) {
+    try {
+      const data = JSON.parse(event.data);
+      updateDashboard(data);
+      logEvent('METRICS', JSON.stringify(data));
+    } catch(e) {
+      logEvent('RAW', event.data);
+    }
+  };
+
+  // ── Dashboard Update ──
+  function updateDashboard(data) {
+    const tokenPct = data.total_quota > 0
+      ? Math.round((data.total_tokens / data.total_quota) * 100) : 0;
+    document.getElementById('token-pct').textContent = tokenPct + '%';
+    const tokenBar = document.getElementById('token-bar');
+    tokenBar.style.width = tokenPct + '%';
+    tokenBar.className = 'bar-fill' + (tokenPct > 90 ? ' critical' : tokenPct > 70 ? ' warning' : '');
+
+    const zramVal = parseInt(data.zram_compression) || 0;
+    document.getElementById('zram-pct').textContent = data.zram_compression;
+    const zramBar = document.getElementById('zram-bar');
+    zramBar.style.width = zramVal + '%';
+    zramBar.className = 'bar-fill' + (zramVal > 90 ? ' critical' : zramVal > 70 ? ' warning' : '');
+
+    flashUpdate('val-agents', data.active_agents);
+    flashUpdate('val-tokens', formatNum(data.total_tokens));
+    flashUpdate('val-quota', formatNum(data.total_quota));
+
+    const uptimeSec = Math.floor((Date.now() - startTime) / 1000);
+    document.getElementById('val-uptime').textContent = formatUptime(uptimeSec);
+
+    updateAgentList(data.active_agents);
+  }
+
+  function flashUpdate(id, value) {
+    const el = document.getElementById(id);
+    if (el.textContent !== String(value)) {
+      el.textContent = value;
+      el.classList.add('updated');
+      setTimeout(() => el.classList.remove('updated'), 300);
+    }
+  }
+
+  function updateAgentList(count) {
+    const container = document.getElementById('agent-list');
+    if (count === 0) {
+      container.innerHTML = '<div style="color:#00ffaa44;font-size:11px;">No active agents</div>';
+      return;
+    }
+    let html = '';
+    for (let i = 0; i < count; i++) {
+      const pid = 1001 + i;
+      html += '<div class="agent-item">'
+            + '<span class="agent-pid">PID ' + pid + '</span>'
+            + '<span class="agent-status running">RUNNING</span>'
+            + '</div>';
+    }
+    container.innerHTML = html;
+  }
+
+  // ── Event Log ──
+  const eventLog = document.getElementById('event-log');
+  const MAX_EVENTS = 200;
+
+  function logEvent(type, data) {
+    const now = new Date();
+    const ts = now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0');
+
+    const line = document.createElement('div');
+    line.innerHTML = '<span class="ts">' + ts + '</span>'
+                   + '<span class="ev-type">[' + type + ']</span> '
+                   + '<span class="ev-data">' + escapeHtml(
+                       typeof data === 'string' ? data : JSON.stringify(data)
+                     ) + '</span>';
+
+    eventLog.appendChild(line);
+    while (eventLog.childElementCount > MAX_EVENTS) {
+      eventLog.removeChild(eventLog.firstChild);
+    }
+    eventLog.scrollTop = eventLog.scrollHeight;
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function formatNum(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    return String(n);
+  }
+
+  function formatUptime(sec) {
+    if (sec < 60) return sec + 's';
+    if (sec < 3600) return Math.floor(sec/60) + 'm ' + (sec%60) + 's';
+    return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm';
+  }
+
+  // ── Periodic uptime update ──
+  setInterval(function() {
+    const uptimeSec = Math.floor((Date.now() - startTime) / 1000);
+    document.getElementById('val-uptime').textContent = formatUptime(uptimeSec);
+  }, 1000);
+
+  // ── Command Execution ──
+  const cmdInput = document.getElementById('cmd-input');
+  const cmdSend = document.getElementById('cmd-send');
+  const cmdOutput = document.getElementById('cmd-output');
+
+  cmdInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') executeCommand();
+  });
+  cmdSend.addEventListener('click', executeCommand);
+
+  function executeCommand() {
+    const raw = cmdInput.value.trim();
+    if (!raw) return;
+    cmdInput.value = '';
+
+    appendOutput('<span class="cmd-res-sys">aios$ ' + escapeHtml(raw) + '</span>');
+
+    if (raw.startsWith('/')) {
+      // Raw syscall mode: /vfs.read path=/dev/gui/dom
+      const parts = raw.substring(1).split(' ', 2);
+      const action = parts[0];
+      const params = {};
+
+      if (parts.length > 1) {
+        // Parse key=value pairs separated by spaces
+        const pairs = parts[1].match(/(\w+)=([^\s]+)/g);
+        if (pairs) {
+          pairs.forEach(pair => {
+            const [k, v] = pair.split('=', 2);
+            params[k] = v;
+          });
+        } else {
+          params['payload'] = parts[1];
+        }
+      }
+
+      sendSyscall(action, params);
+    } else {
+      // Natural language mode — send as llm.think
+      sendSyscall('llm.think', { prompt: raw });
+    }
+  }
+
+  function sendSyscall(action, params) {
+    appendOutput('<span class="cmd-res-sys">>> Syscall: ' + escapeHtml(action) + ' ' + escapeHtml(JSON.stringify(params)) + '</span>');
+
+    fetch('/syscall/exec', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: action, params: params })
+    })
+    .then(r => r.json())
+    .then(resp => {
+      if (resp.success) {
+        const data = resp.data || '(empty)';
+        appendOutput('<span class="cmd-res-ok">' + escapeHtml(truncate(data, 2000)) + '</span>');
+      } else {
+        appendOutput('<span class="cmd-res-err">Error: ' + escapeHtml(resp.errorMessage || 'unknown') + '</span>');
+      }
+    })
+    .catch(err => {
+      appendOutput('<span class="cmd-res-err">Network error: ' + escapeHtml(err.message) + '</span>');
+    });
+  }
+
+  function appendOutput(html) {
+    const line = document.createElement('div');
+    line.innerHTML = html;
+    cmdOutput.appendChild(line);
+    cmdOutput.scrollTop = cmdOutput.scrollHeight;
+
+    // Keep last 100 lines
+    while (cmdOutput.childElementCount > 100) {
+      cmdOutput.removeChild(cmdOutput.firstChild);
+    }
+  }
+
+  function truncate(s, max) {
+    if (s.length <= max) return s;
+    return s.substring(0, max) + '... (' + s.length + ' chars total)';
+  }
+
+  // Focus input on page load
+  cmdInput.focus();
+</script>
+
+</body>
+</html>
