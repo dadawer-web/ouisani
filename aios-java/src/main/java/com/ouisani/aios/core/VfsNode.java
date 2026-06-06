@@ -16,13 +16,16 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
         com.ouisani.aios.vfs.HostSourceNode, com.ouisani.aios.vfs.ShmNode,
         com.ouisani.aios.vfs.RegistryFsNode, com.ouisani.aios.vfs.ShadowCopyNode,
         com.ouisani.aios.vfs.GuiDomNode, com.ouisani.aios.vfs.GuiActionNode,
-        com.ouisani.aios.vfs.MutableFileNode {
+        com.ouisani.aios.vfs.MutableFileNode,
+        com.ouisani.aios.vfs.RemoteDeviceMountNode,
+        com.ouisani.aios.vfs.DesktopNotifyNode,
+        com.ouisani.aios.vfs.ChromeBridgeNode {
 
     Logger log = LoggerFactory.getLogger(VfsNode.class);
 
     enum VfsNodeType {
         FILE, DIRECTORY, EXECUTABLE, DEVICE, PIPE, WASM, VECTOR,
-        GRAPH, CAMERA, WEBHOOK, DISPLAY, AUDIO, SEMANTIC
+        GRAPH, CAMERA, WEBHOOK, DISPLAY, AUDIO, SEMANTIC, REMOTE_DEVICE
     }
 
     VfsNodeType nodeType();

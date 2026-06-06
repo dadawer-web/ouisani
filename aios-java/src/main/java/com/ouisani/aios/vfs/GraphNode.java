@@ -16,8 +16,8 @@ public non-sealed class GraphNode implements VfsNode {
 
     private final String path;
     private final LlmProvider llmProvider;
-    private final Map<String, Set<Edge>> adjacencyList;
-    private final Set<String> allEntities;
+    final Map<String, Set<Edge>> adjacencyList;
+    final Set<String> allEntities;
     private int ownerUid;
     private int permissions;
 

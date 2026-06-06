@@ -39,13 +39,12 @@ public class TestDaemonManager {
         System.out.println();
 
         System.out.println("── Step 3: Register daemon 'watchdog_agent' ──");
-        AgentImageConfig config = new AgentImageConfig(
-                "aios/graalwasm",
-                5000,
-                Map.of(),
-                "/bin/agent.wasm",
-                "main"
-        );
+        AgentImageConfig config = AgentImageConfig.builder()
+                .baseImage("aios/graalwasm")
+                .tokenLimit(5000)
+                .wasmPath("/bin/agent.wasm")
+                .entrypoint("main")
+                .build();
         systemd.registerService("watchdog_agent", config);
         System.out.println();
 

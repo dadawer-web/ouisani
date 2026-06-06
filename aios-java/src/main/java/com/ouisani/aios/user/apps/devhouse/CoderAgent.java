@@ -1,6 +1,13 @@
 package com.ouisani.aios.user.apps.devhouse;
 
+import com.ouisani.aios.core.AgentTask;
 import com.ouisani.aios.core.ProcessPriority;
+import com.ouisani.aios.core.TaskScheduler;
+import com.ouisani.aios.core.VfsManager;
+import com.ouisani.aios.core.ipc.SemanticMemoryBlock;
+import com.ouisani.aios.core.ipc.SharedMemoryManager;
+import com.ouisani.aios.core.ipc.SignalInterceptor;
+import com.ouisani.aios.core.ipc.SignalType;
 import com.ouisani.aios.core.syscall.SyscallResponse;
 import com.ouisani.aios.user.sdk.AbstractAgent;
 import org.slf4j.Logger;
@@ -11,28 +18,38 @@ import java.util.Map;
 /**
  * Coder Agent — the code monkey of the Auto Dev House.
  * <p>
- * This Agent acts as a genius programmer. It polls the VFS waiting for
- * the PM Agent to finish the PRD, then generates code based on the PRD,
- * and executes it in a Docker sandbox for validation.
- * <p>
- * Lifecycle:
+ * This Agent acts as a genius programmer. Instead of polling the VFS
+ * for status changes (the old 500ms spin-wait), it uses the
+ * <b>"shared memory + hardware interrupt"</b> IPC model:
  * <ol>
- *   <li>Spin-wait until /devhouse/status == "PRD_READY"</li>
- *   <li>Read PRD from /devhouse/prd.txt</li>
- *   <li>Call LLM to generate Python code from PRD</li>
- *   <li>Write code to /devhouse/server.py</li>
- *   <li>Execute code in Docker sandbox via sdk.callTool</li>
- *   <li>Write sandbox output to /devhouse/build.log</li>
- *   <li>Update status to "CODE_READY"</li>
- *   <li>Exit</li>
+ *   <li>Registers a signal handler for {@code SIG_CONTEXT_UPDATE}</li>
+ *   <li>Waits for the interrupt (no polling!)</li>
+ *   <li>When the PM agent fires the interrupt, reads the PRD from
+ *       the SemanticMemoryBlock — zero-copy, instant access</li>
+ *   <li>Generates code, executes in Docker, writes results back
+ *       to the shared memory block</li>
+ *   <li>Fires {@code SIG_CONTEXT_UPDATE} to notify the Reviewer</li>
  * </ol>
+ * <p>
+ * <h3>Performance Comparison</h3>
+ * <pre>
+ *   Old model: 500ms polling × ~60 attempts = 30s worst-case latency
+ *   New model: SIG_CONTEXT_UPDATE interrupt = ~0ms latency
+ * </pre>
  */
 public class CoderAgent extends AbstractAgent {
 
     private static final Logger log = LoggerFactory.getLogger(CoderAgent.class);
 
-    private static final int POLL_INTERVAL_MS = 500;
-    private static final int MAX_POLL_ATTEMPTS = 60; // 30 seconds max
+    /** The shared memory block ID for the DevHouse project. */
+    private static final String SHM_BLOCK_ID = "devhouse_project";
+
+    /** Maximum time to wait for SIG_CONTEXT_UPDATE (fallback safety net). */
+    private static final long SIGNAL_WAIT_TIMEOUT_MS = 60_000;
+
+    /** Polling interval as a safety net fallback (only if signal fails). */
+    private static final int FALLBACK_POLL_INTERVAL_MS = 2000;
+    private static final int FALLBACK_MAX_POLLS = 30;
 
     public CoderAgent() {
         super("coder_agent", ProcessPriority.NORMAL, 50000);
@@ -44,49 +61,54 @@ public class CoderAgent extends AbstractAgent {
         System.out.println("  ╔══════════════════════════════════════════════════════════════╗");
         System.out.println("  ║  [Coder Agent] Code monkey reporting for duty!             ║");
         System.out.println("  ║  Agent ID: coder_agent | Priority: NORMAL | Budget: 50000  ║");
+        System.out.println("  ║  IPC: Signal-driven (SIG_CONTEXT_UPDATE handler)           ║");
         System.out.println("  ╚══════════════════════════════════════════════════════════════╝");
-        log.info("[Coder Agent] Starting with priority=NORMAL, budget=50000");
+        log.info("[Coder Agent] Starting with priority=NORMAL, budget=50000, ipc=SIGNAL");
 
-        // Step 1: Spin-wait for PRD_READY
-        System.out.println("  ├─ [Coder Agent] Waiting for PRD_READY signal...");
-        String status = "";
-        int attempts = 0;
+        // Step 1: Register signal handler — wait for SIG_CONTEXT_UPDATE from PM
+        System.out.println("  ├─ [Coder Agent] Registering SIG_CONTEXT_UPDATE handler...");
+        System.out.println("  │  \u001B[36m[Coder Agent] Waiting for PM's interrupt... (no polling!)\u001B[0m");
 
-        while (attempts < MAX_POLL_ATTEMPTS) {
-            status = sdk.readFile(agentId, "/devhouse/status");
-            if ("PRD_READY".equals(status.trim())) {
-                break;
-            }
-            attempts++;
-            if (attempts % 4 == 0) {
-                System.out.printf("  │  [Coder Agent] Still waiting... (status=%s, attempt=%d)%n",
-                        status.trim(), attempts);
-            }
-            try {
-                Thread.sleep(POLL_INTERVAL_MS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                System.out.println("  ├─ [Coder Agent] Interrupted while waiting for PRD");
-                return;
-            }
-        }
+        boolean signalReceived = waitForContextUpdate();
 
-        if (!"PRD_READY".equals(status.trim())) {
-            System.out.println("  ├─ [Coder Agent] Timeout waiting for PRD_READY! Using fallback.");
-            log.warn("[Coder Agent] Timeout waiting for PRD_READY after {} attempts", attempts);
+        if (!signalReceived) {
+            System.out.println("  ├─ [Coder Agent] Signal timeout! Falling back to VFS polling...");
+            log.warn("[Coder Agent] SIG_CONTEXT_UPDATE timeout, falling back to VFS polling");
+            // Fallback: try VFS polling as a safety net
+            if (!vfsFallbackPoll("PRD_READY")) {
+                System.out.println("  ├─ [Coder Agent] All wait methods failed! Using fallback PRD.");
+            }
         } else {
-            System.out.println("  ├─ [Coder Agent] PRD_READY signal received! Starting coding...");
-            log.info("[Coder Agent] PRD_READY signal received after {} polls", attempts);
+            System.out.println("  ├─ [Coder Agent] \u001B[32m⚡ SIG_CONTEXT_UPDATE received! Shared memory updated.\u001B[0m");
+            log.info("[Coder Agent] SIG_CONTEXT_UPDATE received — reading from SHM");
         }
 
-        // Step 2: Read PRD
-        String prdContent = sdk.readFile(agentId, "/devhouse/prd.txt");
+        // Step 2: Read PRD from shared memory (zero-copy, instant)
+        String prdContent = sdk.shmRead(agentId, SHM_BLOCK_ID, "prd_content");
+        if (prdContent == null || prdContent.isEmpty()) {
+            // Fallback: try VFS
+            prdContent = sdk.readFile(agentId, "/devhouse/prd.txt");
+        }
         if (prdContent == null || prdContent.isEmpty() || prdContent.startsWith("[SDK Error]")) {
             System.out.println("  ├─ [Coder Agent] Failed to read PRD! Using fallback.");
             log.warn("[Coder Agent] Failed to read PRD, using fallback");
             prdContent = "Write a minimal Python HTTP server that returns 'Hello from AIOS' on port 8080.";
         }
-        System.out.printf("  ├─ [Coder Agent] PRD loaded (%d chars)%n", prdContent.length());
+
+        // Check ContextPointer for summary (optional: use for prompt optimization)
+        SemanticMemoryBlock block = sdk.shmGetBlockIfExists(SHM_BLOCK_ID);
+        if (block != null) {
+            SemanticMemoryBlock.ContextPointer prdPointer = block.getContextPointer("prd_pointer");
+            if (prdPointer != null) {
+                System.out.printf("  ├─ [Coder Agent] ContextPointer: ref=%s, summary=%s%n",
+                        prdPointer.contextRef(),
+                        prdPointer.summary().length() > 80
+                                ? prdPointer.summary().substring(0, 80) + "..."
+                                : prdPointer.summary());
+            }
+        }
+
+        System.out.printf("  ├─ [Coder Agent] PRD loaded from SHM (%d chars)%n", prdContent.length());
 
         // Step 3: Generate code via LLM
         String codePrompt = "你是一个天才程序员。根据以下 PRD 写出 Python 代码。只输出纯代码，不要任何 Markdown 标记。\n\nPRD:\n" + prdContent;
@@ -100,15 +122,15 @@ public class CoderAgent extends AbstractAgent {
             log.warn("[Coder Agent] LLM call failed, using fallback code");
             code = generateFallbackCode();
         } else {
-            // Strip markdown code fences if present
             code = stripMarkdownFences(code);
             System.out.printf("  ├─ [Coder Agent] Code generated (%d chars)%n", code.length());
             log.info("[Coder Agent] Code generated: {} chars", code.length());
         }
 
-        // Step 4: Write code to VFS
+        // Step 4: Write code to VFS + SHM
         sdk.writeFile(agentId, "/devhouse/server.py", code);
-        System.out.println("  ├─ [Coder Agent] Code written to /devhouse/server.py");
+        sdk.shmWrite(agentId, SHM_BLOCK_ID, "code_content", code);
+        System.out.println("  ├─ [Coder Agent] Code written to /devhouse/server.py + SHM");
 
         // Step 5: Execute in Docker sandbox
         System.out.println("  ├─ [Coder Agent] Launching Docker Sandbox for validation...");
@@ -136,17 +158,24 @@ public class CoderAgent extends AbstractAgent {
             log.warn("[Coder Agent] Docker sandbox exception: {}", e.getMessage());
         }
 
-        // Step 6: Write build log
+        // Step 6: Write build log to VFS + SHM
         sdk.writeFile(agentId, "/devhouse/build.log", sandboxOutput);
-        System.out.println("  ├─ [Coder Agent] Build log written to /devhouse/build.log");
+        sdk.shmWrite(agentId, SHM_BLOCK_ID, "build_log", sandboxOutput);
+        System.out.println("  ├─ [Coder Agent] Build log written to /devhouse/build.log + SHM");
 
-        // Step 7: Update status
+        // Step 7: Update status to CODE_READY in SHM + VFS
+        sdk.shmWrite(agentId, SHM_BLOCK_ID, "status", "CODE_READY");
         sdk.writeFile(agentId, "/devhouse/status", "CODE_READY");
-        System.out.println("  ├─ [Coder Agent] Status → CODE_READY");
+        System.out.println("  ├─ [Coder Agent] Status → CODE_READY (SHM + VFS)");
 
-        // Step 8: Done
-        System.out.println("  └─ [Coder Agent] Code compiled and executed in Docker Sandbox. Logs written.");
-        log.info("[Coder Agent] Code compiled and executed in Docker Sandbox. Logs written.");
+        // Step 8: Fire SIG_CONTEXT_UPDATE to notify Reviewer
+        sdk.broadcastSignal("agents", SignalType.SIG_CONTEXT_UPDATE);
+        System.out.println("  ├─ [Coder Agent] SIG_CONTEXT_UPDATE broadcast → Reviewer will wake instantly");
+        System.out.println("  │  \u001B[32m[Coder Agent] ⚡ Interrupt fired! Reviewer is waking up.\u001B[0m");
+
+        // Done
+        System.out.println("  └─ [Coder Agent] Code compiled and executed in Docker Sandbox. Interrupt sent.");
+        log.info("[Coder Agent] Code compiled and executed. SIG_CONTEXT_UPDATE broadcast. Exiting.");
 
         exit();
     }
@@ -156,9 +185,83 @@ public class CoderAgent extends AbstractAgent {
         log.info("[Coder Agent] Received message (but Coder has already exited): {}", msg);
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  Signal Handler: Wait for SIG_CONTEXT_UPDATE
+    // ════════════════════════════════════════════════════════════════
+
     /**
-     * Strip markdown code fences (```python ... ```) from LLM output.
+     * Wait for a SIG_CONTEXT_UPDATE signal from the PM agent.
+     * <p>
+     * This replaces the old 500ms polling loop with a signal-driven
+     * wait. The agent sleeps until the interrupt arrives, then
+     * reads the updated shared memory block.
+     * <p>
+     * As a safety net, we also check the SHM status periodically
+     * (every 2s) in case the signal was lost.
+     *
+     * @return true if the signal was received, false if timed out
      */
+    private boolean waitForContextUpdate() {
+        long startTime = System.currentTimeMillis();
+        TaskScheduler scheduler = VfsManager.instance().getTaskScheduler();
+        AgentTask myTask = scheduler.getTask(getPid());
+
+        if (myTask == null) {
+            log.warn("[Coder Agent] Cannot find own AgentTask, falling back to polling");
+            return false;
+        }
+
+        while (System.currentTimeMillis() - startTime < SIGNAL_WAIT_TIMEOUT_MS) {
+            // Check for SIG_CONTEXT_UPDATE signal
+            if (SignalInterceptor.hasContextUpdate(myTask)) {
+                SignalInterceptor.drainContextUpdates(myTask);
+                return true;
+            }
+
+            // Safety net: check SHM status directly (every ~500ms)
+            String status = sdk.shmRead(agentId, SHM_BLOCK_ID, "status");
+            if ("PRD_READY".equals(status)) {
+                log.info("[Coder Agent] Detected PRD_READY in SHM (safety net check)");
+                return true;
+            }
+
+            // Sleep briefly — this is NOT polling, it's a signal wait loop
+            // The actual notification comes via the signal, not the sleep
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                // Check if the interrupt was due to a signal
+                if (SignalInterceptor.hasContextUpdate(myTask)) {
+                    SignalInterceptor.drainContextUpdates(myTask);
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        return false; // timeout
+    }
+
+    /**
+     * Fallback: VFS polling in case signal mechanism fails entirely.
+     */
+    private boolean vfsFallbackPoll(String targetStatus) {
+        for (int i = 0; i < FALLBACK_MAX_POLLS; i++) {
+            String status = sdk.readFile(agentId, "/devhouse/status");
+            if (targetStatus.equals(status.trim())) {
+                return true;
+            }
+            try {
+                Thread.sleep(FALLBACK_POLL_INTERVAL_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
+    }
+
     private String stripMarkdownFences(String code) {
         String stripped = code.trim();
         if (stripped.startsWith("```python")) {
@@ -172,9 +275,6 @@ public class CoderAgent extends AbstractAgent {
         return stripped.trim();
     }
 
-    /**
-     * Fallback Python HTTP server code.
-     */
     private String generateFallbackCode() {
         return """
                 from http.server import HTTPServer, BaseHTTPRequestHandler

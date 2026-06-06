@@ -1,47 +1,82 @@
 package com.ouisani.aios.vfs;
 
+import com.ouisani.aios.core.AgentTask;
+import com.ouisani.aios.core.TaskScheduler;
+import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.VfsNode;
+import com.ouisani.aios.core.ipc.SignalType;
+import com.ouisani.aios.core.network.EventBus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.Consumer;
 
 /**
- * GUI Action Node — accepts JSON actions to manipulate the host desktop.
+ * GUI Action Node — the AIOS kernel's input device (mouse + keyboard).
  * <p>
- * Inspired by OSWorld's desktop environment manipulation, this node allows
- * Agents to "act" on the screen by writing action commands. The node parses
- * incoming JSON and simulates physical GUI interactions (click, type, scroll, etc.).
+ * When a user clicks a button or types into an input on the frontend
+ * dashboard, the event flows through this node:
+ * <ol>
+ *   <li>Frontend sends a JSON action event via WebSocket to
+ *       {@code /ws/gui/action}</li>
+ *   <li>{@code SyscallServer} routes the event to this node's
+ *       {@link #write(String)} method</li>
+ *   <li>The node resolves which Agent owns the target component</li>
+ *   <li>The node delivers the event to the Agent via one of:
+ *       <ul>
+ *         <li>Enqueuing to the Agent's message queue (stdin)</li>
+ *         <li>Sending a {@code SIGIO} signal to wake the Agent</li>
+ *       </ul>
+ * </ol>
  * <p>
- * Mount point: {@code /dev/gui/action}
+ * <h3>Action Event Protocol</h3>
+ * The frontend sends JSON action events in this format:
+ * <pre>
+ * {
+ *   "agentId": "pm_agent",
+ *   "action": "click",          // click | type | change | submit | scroll
+ *   "componentId": "btn_confirm",
+ *   "value": "optional text",   // for type/change events
+ *   "timestamp": 1717584000000
+ * }
+ * </pre>
  * <p>
- * Supported actions:
- * <ul>
- *   <li>{@code {"action": "click", "id": "btn_1"}} — click a UI element</li>
- *   <li>{@code {"action": "type", "id": "input_query", "text": "hello"}} — type text into an input</li>
- *   <li>{@code {"action": "scroll", "id": "output_panel", "direction": "down"}} — scroll an element</li>
- *   <li>{@code {"action": "screenshot"}} — capture current screen state</li>
- * </ul>
- * <p>
- * Read returns the last action result. Write dispatches the action.
+ * <h3>OS Analogy: /dev/input + SIGIO</h3>
+ * In Linux, {@code /dev/input/event0} receives hardware interrupts from
+ * the keyboard/mouse, and the kernel delivers them to the focused
+ * application via {@code SIGIO} or {@code read()}. GuiActionNode is
+ * the AIOS equivalent: it receives UI interaction events from the
+ * frontend and delivers them to the owning Agent process.
+ *
+ * @see GuiDomNode
+ * @see EventBus
  */
 public non-sealed class GuiActionNode implements VfsNode {
 
     private static final Logger log = LoggerFactory.getLogger(GuiActionNode.class);
 
-    private static final Pattern ACTION_PATTERN = Pattern.compile("\"action\"\\s*:\\s*\"([^\"]+)\"");
-    private static final Pattern ID_PATTERN = Pattern.compile("\"id\"\\s*:\\s*\"([^\"]+)\"");
-    private static final Pattern TEXT_PATTERN = Pattern.compile("\"text\"\\s*:\\s*\"([^\"]+)\"");
-    private static final Pattern DIR_PATTERN = Pattern.compile("\"direction\"\\s*:\\s*\"([^\"]+)\"");
+    // ── VFS Fields ──
 
     private final String path;
     private int ownerUid;
     private int permissions;
-    private volatile String lastResult = "{\"status\": \"idle\"}";
+
+    // ── Action State ──
+
+    /** Pending actions per agent (agentId → queue of action events). */
+    private final ConcurrentHashMap<String, ConcurrentLinkedQueue<String>> pendingActions = new ConcurrentHashMap<>();
+
+    /** Last action result (for read() compatibility). */
+    private volatile String lastResult = "{\"status\":\"idle\"}";
+
+    /** Action event subscribers (agentId → callback). */
+    private final ConcurrentHashMap<String, Consumer<String>> actionSubscribers = new ConcurrentHashMap<>();
 
     public GuiActionNode(String path) {
-        this(path, 0, 0222);
+        this(path, 0, 0666);
     }
 
     public GuiActionNode(String path, int ownerUid, int permissions) {
@@ -50,38 +85,34 @@ public non-sealed class GuiActionNode implements VfsNode {
         this.permissions = permissions;
     }
 
-    @Override
-    public VfsNodeType nodeType() {
-        return VfsNodeType.DEVICE;
-    }
+    // ════════════════════════════════════════════════════════════════
+    //  VfsNode Interface
+    // ════════════════════════════════════════════════════════════════
 
     @Override
-    public String path() {
-        return path;
-    }
+    public VfsNodeType nodeType() { return VfsNodeType.DEVICE; }
 
     @Override
-    public int ownerUid() {
-        return ownerUid;
-    }
+    public String path() { return path; }
 
     @Override
-    public void setOwnerUid(int uid) {
-        this.ownerUid = uid;
-    }
+    public int ownerUid() { return ownerUid; }
 
     @Override
-    public int permissions() {
-        return permissions;
-    }
+    public void setOwnerUid(int uid) { this.ownerUid = uid; }
 
     @Override
-    public void setPermissions(int perm) {
-        this.permissions = perm;
-    }
+    public int permissions() { return permissions; }
+
+    @Override
+    public void setPermissions(int perms) { this.permissions = perms; }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Read: Get pending actions
+    // ════════════════════════════════════════════════════════════════
 
     /**
-     * Return the result of the last executed action.
+     * Read the last action result (legacy compatibility).
      */
     @Override
     public String read() {
@@ -89,87 +120,190 @@ public non-sealed class GuiActionNode implements VfsNode {
     }
 
     /**
-     * Parse and execute a GUI action from JSON payload.
+     * Read and drain all pending actions for a specific agent.
      * <p>
-     * Simulates physical desktop interactions by printing action logs
-     * and updating the last result state.
+     * This is the "polling" approach — the Agent periodically calls
+     * this to check for UI events. For interrupt-driven approach,
+     * use {@link #subscribe(String, Consumer)}.
+     */
+    public String drainActions(String agentId) {
+        ConcurrentLinkedQueue<String> queue = pendingActions.get(agentId);
+        if (queue == null || queue.isEmpty()) return "[]";
+
+        List<String> actions = new ArrayList<>();
+        String action;
+        while ((action = queue.poll()) != null) {
+            actions.add(action);
+        }
+
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < actions.size(); i++) {
+            if (i > 0) sb.append(",");
+            sb.append(actions.get(i));
+        }
+        sb.append("]");
+        return sb.toString();
+    }
+
+    /**
+     * Check if there are pending actions for an agent.
+     */
+    public boolean hasPendingActions(String agentId) {
+        ConcurrentLinkedQueue<String> queue = pendingActions.get(agentId);
+        return queue != null && !queue.isEmpty();
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Write: Receive action event from frontend
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Write an action event from the frontend.
+     * <p>
+     * This method is called when the user interacts with the UI
+     * rendered by an Agent. It:
+     * <ol>
+     *   <li>Enqueues the event to the Agent's action queue</li>
+     *   <li>Notifies the Agent via subscriber callback (if registered)</li>
+     *   <li>Sends SIGIO to the Agent process (interrupt-driven)</li>
+     * </ol>
      */
     @Override
     public boolean write(String payload) {
         if (payload == null || payload.isBlank()) return false;
 
-        String action = extract(payload, ACTION_PATTERN);
-        String id = extract(payload, ID_PATTERN);
-        String text = extract(payload, TEXT_PATTERN);
-        String direction = extract(payload, DIR_PATTERN);
+        try {
+            String agentId = extractField(payload, "agentId");
+            String action = extractField(payload, "action");
+            String componentId = extractField(payload, "componentId");
 
-        if (action == null) {
-            lastResult = "{\"status\": \"error\", \"message\": \"Missing 'action' field\"}";
-            log.warn("[RPA Engine] Invalid action payload: no 'action' field found");
-            return false;
-        }
-
-        return switch (action) {
-            case "click" -> executeClick(id);
-            case "type" -> executeType(id, text);
-            case "scroll" -> executeScroll(id, direction);
-            case "screenshot" -> executeScreenshot();
-            default -> {
-                lastResult = "{\"status\": \"error\", \"message\": \"Unknown action: " + action + "\"}";
-                log.warn("[RPA Engine] Unknown action: {}", action);
-                yield false;
+            if (agentId == null || agentId.isBlank()) {
+                agentId = "default";
             }
-        };
-    }
 
-    private boolean executeClick(String id) {
-        if (id == null) {
-            lastResult = "{\"status\": \"error\", \"message\": \"Missing 'id' for click\"}";
+            // Enqueue the action for the agent
+            ConcurrentLinkedQueue<String> queue =
+                    pendingActions.computeIfAbsent(agentId, k -> new ConcurrentLinkedQueue<>());
+            queue.offer(payload);
+
+            // Update last result
+            lastResult = String.format(
+                    "{\"status\":\"ok\",\"action\":\"%s\",\"componentId\":\"%s\",\"agentId\":\"%s\"}",
+                    action != null ? action : "unknown",
+                    componentId != null ? componentId : "unknown",
+                    agentId);
+
+            log.info("[GuiActionNode] Action received: agent={}, action={}, component={}",
+                    agentId, action, componentId);
+
+            // ── Notify the Agent (interrupt-driven) ──
+
+            // 1. Call subscriber callback if registered
+            Consumer<String> subscriber = actionSubscribers.get(agentId);
+            if (subscriber != null) {
+                try {
+                    subscriber.accept(payload);
+                } catch (Exception e) {
+                    log.warn("[GuiActionNode] Subscriber callback error for agent {}: {}",
+                            agentId, e.getMessage());
+                }
+            }
+
+            // 2. Send SIGIO signal to the Agent process
+            deliverSignalToAgent(agentId, componentId);
+
+            // 3. Broadcast the action event on EventBus for logging/monitoring
+            EventBus.instance().broadcast("ui_action", payload);
+
+            return true;
+
+        } catch (Exception e) {
+            log.error("[GuiActionNode] Action processing failed: {}", e.getMessage());
             return false;
         }
-
-        System.out.printf("  🖱 [RPA Engine] Executing physical click on UI element: %s%n", id);
-        log.info("[RPA Engine] Executing physical click on UI element: {}", id);
-
-        lastResult = "{\"status\": \"ok\", \"action\": \"click\", \"id\": \"" + id + "\"}";
-        return true;
     }
 
-    private boolean executeType(String id, String text) {
-        if (id == null) {
-            lastResult = "{\"status\": \"error\", \"message\": \"Missing 'id' for type\"}";
-            return false;
+    // ════════════════════════════════════════════════════════════════
+    //  Agent Notification: Signal Delivery
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Deliver a SIGIO signal to the Agent process that owns the
+     * target component.
+     * <p>
+     * This is the AIOS equivalent of the kernel sending SIGIO to
+     * a process when I/O is possible on a file descriptor — the
+     * Agent is woken up to handle the UI event.
+     */
+    private void deliverSignalToAgent(String agentId, String componentId) {
+        VfsManager vfs = VfsManager.instance();
+        TaskScheduler scheduler = vfs.getTaskScheduler();
+        if (scheduler == null) return;
+
+        // Find the agent's task by iterating active tasks
+        for (AgentTask task : scheduler.activeTasks().values()) {
+            if (agentId.equals(task.payload())) {
+                // Send SIGIO signal to the agent
+                task.sendSignal(SignalType.SIGIO);
+                log.debug("[GuiActionNode] SIGIO sent to agent={} (pid={})", agentId, task.pid());
+                return;
+            }
         }
 
-        String safeText = text != null ? text : "";
-        System.out.printf("  ⌨ [RPA Engine] Executing physical type on UI element: %s, text: \"%s\"%n", id, safeText);
-        log.info("[RPA Engine] Executing physical type on UI element: {}, text length: {}", id, safeText.length());
-
-        lastResult = "{\"status\": \"ok\", \"action\": \"type\", \"id\": \"" + id + "\", \"chars_typed\": " + safeText.length() + "}";
-        return true;
+        log.debug("[GuiActionNode] No running task found for agent={}", agentId);
     }
 
-    private boolean executeScroll(String id, String direction) {
-        String dir = direction != null ? direction : "down";
-        String target = id != null ? id : "viewport";
+    // ════════════════════════════════════════════════════════════════
+    //  Subscriber Registration
+    // ════════════════════════════════════════════════════════════════
 
-        System.out.printf("  🔄 [RPA Engine] Executing physical scroll on UI element: %s, direction: %s%n", target, dir);
-        log.info("[RPA Engine] Executing physical scroll on UI element: {}, direction: {}", target, dir);
-
-        lastResult = "{\"status\": \"ok\", \"action\": \"scroll\", \"id\": \"" + target + "\", \"direction\": \"" + dir + "\"}";
-        return true;
+    /**
+     * Register a callback to be invoked when a UI action event
+     * arrives for the specified agent.
+     * <p>
+     * This enables the Agent to receive UI events in an
+     * interrupt-driven manner, rather than polling.
+     *
+     * @param agentId   the agent to subscribe for
+     * @param callback  the callback to invoke with the action JSON
+     */
+    public void subscribe(String agentId, Consumer<String> callback) {
+        actionSubscribers.put(agentId, callback);
+        log.info("[GuiActionNode] Subscriber registered for agent={}", agentId);
     }
 
-    private boolean executeScreenshot() {
-        System.out.println("  📸 [RPA Engine] Executing physical screenshot capture");
-        log.info("[RPA Engine] Executing physical screenshot capture");
-
-        lastResult = "{\"status\": \"ok\", \"action\": \"screenshot\", \"path\": \"/tmp/aios_screenshot_" + System.currentTimeMillis() + ".png\"}";
-        return true;
+    /**
+     * Unregister a previously registered subscriber.
+     */
+    public void unsubscribe(String agentId) {
+        actionSubscribers.remove(agentId);
     }
 
-    private static String extract(String json, Pattern pattern) {
-        Matcher m = pattern.matcher(json);
-        return m.find() ? m.group(1) : null;
+    // ════════════════════════════════════════════════════════════════
+    //  Utility
+    // ════════════════════════════════════════════════════════════════
+
+    private static String extractField(String json, String field) {
+        String key = "\"" + field + "\"";
+        int idx = json.indexOf(key);
+        if (idx < 0) return null;
+        int colon = json.indexOf(':', idx + key.length());
+        if (colon < 0) return null;
+
+        int start = colon + 1;
+        while (start < json.length() && json.charAt(start) == ' ') start++;
+        if (start >= json.length()) return null;
+
+        if (json.charAt(start) == '"') {
+            int end = json.indexOf('"', start + 1);
+            if (end < 0) return null;
+            return json.substring(start + 1, end);
+        } else {
+            int end = start;
+            while (end < json.length() && json.charAt(end) != ',' && json.charAt(end) != '}' && json.charAt(end) != ']') {
+                end++;
+            }
+            return json.substring(start, end).trim();
+        }
     }
 }

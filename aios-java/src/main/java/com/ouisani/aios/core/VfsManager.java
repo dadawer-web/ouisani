@@ -16,6 +16,10 @@ import com.ouisani.aios.vfs.ShmNode;
 import com.ouisani.aios.vfs.RegistryFsNode;
 import com.ouisani.aios.vfs.GuiDomNode;
 import com.ouisani.aios.vfs.GuiActionNode;
+import com.ouisani.aios.vfs.RemoteDeviceMountNode;
+import com.ouisani.aios.vfs.DeviceOfflineException;
+import com.ouisani.aios.vfs.DesktopNotifyNode;
+import com.ouisani.aios.vfs.ChromeBridgeNode;
 import com.ouisani.aios.core.vfs.VfsJournal;
 import io.javalin.Javalin;
 import org.slf4j.Logger;
@@ -60,6 +64,10 @@ public final class VfsManager {
         log.info("TaskScheduler configured for /proc filesystem");
     }
 
+    public TaskScheduler getTaskScheduler() {
+        return taskScheduler;
+    }
+
     public void configureJavalin(Javalin app) {
         this.javalinApp = app;
         log.info("Javalin configured for webhook endpoints");
@@ -83,6 +91,7 @@ public final class VfsManager {
             mountDirectory("/containers");
             mountDirectory("/var");
             mountDirectory("/var/crash");
+            mountDirectory("/var/db");
 
             if (defaultLlmProvider != null) {
                 SemanticNode semanticNode = new SemanticNode("/dev/semantic", defaultLlmProvider);
@@ -92,6 +101,11 @@ public final class VfsManager {
                 VectorNode vectorNode = new VectorNode("/dev/vec_mem", defaultLlmProvider);
                 pathTree.put("/dev/vec_mem", vectorNode);
                 log.info("VFS mounted: /dev/vec_mem [VECTOR] provider={}", defaultLlmProvider.name());
+
+                // ── Persistent Long-Term Memory (Dream Daemon target) ──
+                VectorNode memoryDb = new VectorNode("/var/db/memory", defaultLlmProvider);
+                pathTree.put("/var/db/memory", memoryDb);
+                log.info("VFS mounted: /var/db/memory [VECTOR] persistent long-term memory (Dream Daemon target)");
 
                 GraphNode graphNode = new GraphNode("/dev/graph_mem", defaultLlmProvider);
                 pathTree.put("/dev/graph_mem", graphNode);
@@ -150,6 +164,23 @@ public final class VfsManager {
             mountDirectory("/dev/shm");
             pathTree.put("/dev/shm/blackboard", new ShmNode("/dev/shm/blackboard", "blackboard"));
             log.info("VFS mounted: /dev/shm/blackboard [SHM] shared memory blackboard");
+
+            // ── Remote Device Mount Point ──
+            mountDirectory("/dev/remote");
+            log.info("VFS mounted: /dev/remote [REMOTE_DEVICE] dynamic remote device mount point");
+
+            // ── Host Physical Layer (/dev/host/) ──
+            mountDirectory("/dev/host");
+            pathTree.put("/dev/host/notify", new DesktopNotifyNode("/dev/host/notify"));
+            log.info("VFS mounted: /dev/host/notify [DEVICE] native desktop notification (write-only)");
+
+            ChromeBridgeNode chromeBridge = new ChromeBridgeNode("/dev/host/browser");
+            pathTree.put("/dev/host/browser", chromeBridge);
+            log.info("VFS mounted: /dev/host/browser [DEVICE] Chrome browser bridge (WebSocket)");
+            // 启动浏览器 WebSocket 桥接（端口 19999）
+            if (javalinApp != null) {
+                chromeBridge.startWebSocket(19999);
+            }
 
             // ── WAL Journal: open and recover ──
             VfsJournal.getInstance().open();
@@ -459,5 +490,123 @@ public final class VfsManager {
         return path.length() > root.length()
                 && path.startsWith(root)
                 && path.charAt(root.length()) == '/';
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Remote Device Dynamic Mount/Unmount
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Dynamically mount a remote device into the VFS.
+     * <p>
+     * Called by {@code SyscallServer} when a new remote device connects
+     * via the {@code /ws/remote/{deviceId}} WebSocket endpoint. Creates
+     * a {@link RemoteDeviceMountNode} and mounts it at
+     * {@code /dev/remote/{deviceId}}.
+     * <p>
+     * If a node already exists at that path (e.g., the device
+     * reconnected), the existing node is returned instead.
+     *
+     * @param deviceId   unique identifier for the remote device
+     * @param deviceType type hint (e.g., "sensor", "actuator", "vcp_node")
+     * @return the mounted RemoteDeviceMountNode
+     */
+    public RemoteDeviceMountNode mountRemoteDevice(String deviceId, String deviceType) {
+        rwLock.writeLock().lock();
+        try {
+            if (!initialized) {
+                throw new IllegalStateException("VFS not initialized, cannot mount remote device");
+            }
+
+            String vfsPath = "/dev/remote/" + deviceId;
+
+            // Check if the node already exists (device reconnection)
+            VfsNode existing = pathTree.get(vfsPath);
+            if (existing instanceof RemoteDeviceMountNode existingNode) {
+                log.info("[VFS] Remote device '{}' already mounted at {}, returning existing node", deviceId, vfsPath);
+                return existingNode;
+            }
+
+            // Create and mount the new remote device node
+            RemoteDeviceMountNode node = new RemoteDeviceMountNode(
+                    vfsPath, deviceId, deviceType, 512, 0, 0666);
+            pathTree.put(vfsPath, node);
+
+            log.info("[VFS] Remote device mounted: {} [REMOTE_DEVICE] type={}", vfsPath, deviceType);
+            System.out.println("  \u001B[36m[VFS] Remote device '" + deviceId + "' mounted at " + vfsPath
+                    + " (type=" + deviceType + ")\u001B[0m");
+
+            return node;
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Look up an existing remote device node by deviceId.
+     *
+     * @param deviceId the device identifier
+     * @return the RemoteDeviceMountNode, or null if not found
+     */
+    public RemoteDeviceMountNode getRemoteDevice(String deviceId) {
+        String vfsPath = "/dev/remote/" + deviceId;
+        VfsNode node = pathTree.get(vfsPath);
+        if (node instanceof RemoteDeviceMountNode rdmn) {
+            return rdmn;
+        }
+        return null;
+    }
+
+    /**
+     * Unmount a remote device from the VFS.
+     * <p>
+     * Called by {@code SyscallServer} when a remote device disconnects.
+     * Marks the node as permanently unmounted (which causes subsequent
+     * reads to return EOF and writes to fail), then removes it from
+     * the VFS path tree.
+     * <p>
+     * The Agent process will receive a {@link DeviceOfflineException}
+     * on its next {@code sys_read}, or EOF if the node has been
+     * permanently removed.
+     *
+     * @param deviceId the device identifier to unmount
+     * @return true if the device was found and unmounted
+     */
+    public boolean unmountRemoteDevice(String deviceId) {
+        rwLock.writeLock().lock();
+        try {
+            String vfsPath = "/dev/remote/" + deviceId;
+            VfsNode node = pathTree.get(vfsPath);
+
+            if (node instanceof RemoteDeviceMountNode rdmn) {
+                rdmn.markPermanentlyUnmounted();
+                pathTree.remove(vfsPath);
+
+                log.info("[VFS] Remote device unmounted: {} [REMOTE_DEVICE]", vfsPath);
+                System.out.println("  \u001B[31m[VFS] Remote device '" + deviceId + "' unmounted from " + vfsPath + "\u001B[0m");
+                return true;
+            }
+
+            log.warn("[VFS] Remote device unmount failed: '{}' not found or not a RemoteDeviceMountNode", vfsPath);
+            return false;
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * List all currently mounted remote devices.
+     *
+     * @return map of deviceId → vfsPath for all remote device nodes
+     */
+    public Map<String, String> listRemoteDevices() {
+        Map<String, String> devices = new LinkedHashMap<>();
+        String prefix = "/dev/remote/";
+        for (Map.Entry<String, VfsNode> entry : pathTree.entrySet()) {
+            if (entry.getKey().startsWith(prefix) && entry.getValue() instanceof RemoteDeviceMountNode rdmn) {
+                devices.put(rdmn.deviceId(), entry.getKey());
+            }
+        }
+        return devices;
     }
 }

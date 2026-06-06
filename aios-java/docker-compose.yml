@@ -1,0 +1,45 @@
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  AIOS — Docker Compose for Cloud Native Deployment          ║
+# ║  Universal AI Operating System                              ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+version: "3.9"
+
+services:
+  aios-kernel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aios-kernel
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount Docker socket for Docker-in-Docker sandbox execution
+      # This allows AIOS's DockerSandboxProvider to spawn sibling containers
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persist AIOS workspace across restarts
+      - aios-workspace:/opt/aios/workspace
+    environment:
+      # LLM Configuration (override with your own keys)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      # Fallback LLM
+      - FALLBACK_API_KEY=${FALLBACK_API_KEY:-}
+      - FALLBACK_BASE_URL=${FALLBACK_BASE_URL:-}
+      - FALLBACK_MODEL=${FALLBACK_MODEL:-}
+      # AIOS Gateway Auth
+      - AIOS_GATEWAY_SECRET=${AIOS_GATEWAY_SECRET:-AIOS-SUPER-SECRET-KEY}
+      # JVM tuning
+      - JAVA_OPTS=-Xms256m -Xmx512m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  aios-workspace:
+    driver: local

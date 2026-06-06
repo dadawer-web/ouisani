@@ -75,7 +75,7 @@
     flex: 1;
     display: grid;
     grid-template-columns: 1fr 1fr;
-    grid-template-rows: 1fr auto auto;
+    grid-template-rows: 1fr 1fr auto auto;
     gap: 1px;
     background: #00ffaa11;
     min-height: 0;
@@ -167,10 +167,209 @@
   .zram-info .label { color: #00ffaa88; }
   .zram-info .val { color: #00ddff; }
 
+  /* ════════════════════════════════════════════════════════════════
+     Semantic Display Panel — the "Monitor" for Agent UIs
+     ════════════════════════════════════════════════════════════════ */
+
+  .display-panel {
+    grid-column: 1 / -1;
+    min-height: 0;
+  }
+
+  .display-tabs {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 8px;
+  }
+  .display-tab {
+    font-size: 11px;
+    padding: 4px 12px;
+    background: #111118;
+    border: 1px solid #00ffaa22;
+    color: #00ffaa66;
+    cursor: pointer;
+    letter-spacing: 1px;
+    font-family: 'Courier New', monospace;
+  }
+  .display-tab.active {
+    background: #00ffaa15;
+    border-color: #00ffaa55;
+    color: #00ffaa;
+  }
+  .display-tab:hover { background: #00ffaa10; }
+
+  .display-viewport {
+    flex: 1;
+    overflow-y: auto;
+    background: #080810;
+    border: 1px solid #00ffaa15;
+    padding: 16px;
+    min-height: 0;
+  }
+
+  /* ── Semantic DOM Component Styles ── */
+
+  .sdom-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .sdom-container[data-direction="row"] {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .sdom-text {
+    color: #00ffaa;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .sdom-text[data-style="heading"] {
+    font-size: 20px;
+    font-weight: bold;
+    color: #00ddff;
+    text-shadow: 0 0 8px #00ddff44;
+  }
+  .sdom-text[data-style="subheading"] {
+    font-size: 16px;
+    font-weight: bold;
+    color: #00ffaa;
+  }
+  .sdom-text[data-style="caption"] {
+    font-size: 11px;
+    color: #00ffaa66;
+  }
+
+  .sdom-text-input {
+    background: #111118;
+    border: 1px solid #00ffaa33;
+    color: #00ffaa;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    padding: 8px 12px;
+    outline: none;
+    width: 100%;
+    caret-color: #00ffaa;
+  }
+  .sdom-text-input:focus {
+    border-color: #00ffaa;
+    box-shadow: 0 0 8px #00ffaa33;
+  }
+  .sdom-text-input::placeholder { color: #00ffaa33; }
+
+  .sdom-text-area {
+    background: #111118;
+    border: 1px solid #00ffaa33;
+    color: #00ffaa;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    padding: 8px 12px;
+    outline: none;
+    width: 100%;
+    resize: vertical;
+    caret-color: #00ffaa;
+  }
+  .sdom-text-area:focus {
+    border-color: #00ffaa;
+    box-shadow: 0 0 8px #00ffaa33;
+  }
+
+  .sdom-button {
+    background: #00ffaa15;
+    border: 1px solid #00ffaa55;
+    color: #00ffaa;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    padding: 8px 20px;
+    cursor: pointer;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    transition: all 0.15s ease;
+  }
+  .sdom-button:hover { background: #00ffaa30; box-shadow: 0 0 12px #00ffaa33; }
+  .sdom-button:active { background: #00ffaa55; transform: scale(0.97); }
+  .sdom-button[data-variant="primary"] {
+    background: #00ffaa25;
+    border-color: #00ffaa;
+    text-shadow: 0 0 6px #00ffaa66;
+  }
+  .sdom-button[data-variant="danger"] {
+    background: #ff335515;
+    border-color: #ff335555;
+    color: #ff3355;
+  }
+  .sdom-button[data-variant="danger"]:hover { background: #ff335530; }
+
+  .sdom-card {
+    background: #0f1419;
+    border: 1px solid #00ffaa22;
+    padding: 16px;
+    border-radius: 2px;
+  }
+  .sdom-card-title {
+    font-size: 12px;
+    color: #00ddff;
+    margin-bottom: 8px;
+    letter-spacing: 1px;
+  }
+
+  .sdom-list {
+    list-style: none;
+    padding: 0;
+  }
+  .sdom-list-item {
+    padding: 6px 0;
+    border-bottom: 1px solid #00ffaa0a;
+    font-size: 12px;
+    color: #00ffaa;
+  }
+
+  .sdom-chart {
+    background: #080810;
+    border: 1px solid #00ffaa15;
+    padding: 12px;
+    min-height: 80px;
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+  }
+  .sdom-chart-bar {
+    background: linear-gradient(0deg, #00ffaa, #00ddff);
+    min-width: 20px;
+    transition: height 0.5s ease;
+  }
+
+  .sdom-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+  }
+  .sdom-status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+  }
+  .sdom-status-dot.ok { background: #00ffaa; box-shadow: 0 0 6px #00ffaa; }
+  .sdom-status-dot.warn { background: #ffaa00; box-shadow: 0 0 6px #ffaa00; }
+  .sdom-status-dot.error { background: #ff3355; box-shadow: 0 0 6px #ff3355; }
+
+  .sdom-image {
+    max-width: 100%;
+    border: 1px solid #00ffaa22;
+  }
+
+  /* Empty state */
+  .display-empty {
+    color: #00ffaa33;
+    font-size: 12px;
+    text-align: center;
+    padding: 40px;
+  }
+
   /* Bottom panel - Event log */
   .event-panel {
     grid-column: 1 / -1;
-    height: 160px;
+    height: 140px;
     flex-shrink: 0;
   }
   .event-log {
@@ -235,7 +434,7 @@
     background: #080810;
     border: 1px solid #00ffaa15;
     padding: 8px 12px;
-    max-height: 120px;
+    max-height: 100px;
     overflow-y: auto;
     font-size: 11px;
     line-height: 1.6;
@@ -254,6 +453,15 @@
   /* Flicker animation for numbers */
   .num { transition: color 0.3s; }
   .num.updated { color: #ffffff; }
+
+  /* Render flash effect */
+  @keyframes renderFlash {
+    0% { box-shadow: inset 0 0 20px #00ffaa33; }
+    100% { box-shadow: none; }
+  }
+  .display-viewport.flash {
+    animation: renderFlash 0.4s ease-out;
+  }
 </style>
 </head>
 <body>
@@ -315,6 +523,19 @@
     </div>
   </div>
 
+  <!-- ═══════════════════════════════════════════════════════════════
+       Semantic Display Panel — the "Monitor" for Agent-rendered UIs
+       ═══════════════════════════════════════════════════════════════ -->
+  <div class="panel display-panel">
+    <div class="panel-title">// Semantic Display Server — Agent Viewport</div>
+    <div class="display-tabs" id="display-tabs">
+      <!-- Agent tabs are dynamically created -->
+    </div>
+    <div class="display-viewport" id="display-viewport">
+      <div class="display-empty">No Agent UI rendered yet. Waiting for render events...</div>
+    </div>
+  </div>
+
   <!-- Bottom Panel: Event Log -->
   <div class="panel event-panel">
     <div class="panel-title">// Kernel Event Stream</div>
@@ -339,7 +560,9 @@
 </div>
 
 <script>
-  // ── WebSocket Connection ──
+  // ════════════════════════════════════════════════════════════════
+  //  Kernel Monitor WebSocket
+  // ════════════════════════════════════════════════════════════════
   const ws = new WebSocket('ws://' + location.host + '/ws/monitor');
   const dot = document.getElementById('ws-dot');
   const wsStatus = document.getElementById('ws-status');
@@ -372,7 +595,338 @@
     }
   };
 
-  // ── Dashboard Update ──
+  // ════════════════════════════════════════════════════════════════
+  //  Semantic Display Server: /ws/display (render push)
+  // ════════════════════════════════════════════════════════════════
+  const displayWs = new WebSocket('ws://' + location.host + '/ws/display');
+  let displayConnected = false;
+
+  /** Per-agent DOM state cache (agentId → dom object) */
+  const agentDomCache = {};
+
+  /** Currently active agent tab */
+  let activeAgentTab = null;
+
+  displayWs.onopen = function() {
+    displayConnected = true;
+    logEvent('DISPLAY', 'Semantic Display Server connected');
+  };
+
+  displayWs.onclose = function() {
+    displayConnected = false;
+    logEvent('DISPLAY', 'Semantic Display Server disconnected');
+  };
+
+  displayWs.onmessage = function(event) {
+    try {
+      const msg = JSON.parse(event.data);
+      handleDisplayEvent(msg);
+    } catch(e) {
+      logEvent('DISPLAY_ERR', 'Parse error: ' + e.message);
+    }
+  };
+
+  /**
+   * Handle a render/patch/init event from the Semantic Display Server.
+   *
+   * Protocol:
+   *   { type: "init",   dom: { agentId: domTree, ... } }
+   *   { type: "render", agentId: "...", version: N, seq: N, dom: {...}, timestamp: T }
+   *   { type: "patch",  agentId: "...", version: N, seq: N, patch: {...}, timestamp: T }
+   */
+  function handleDisplayEvent(msg) {
+    if (msg.type === 'init') {
+      // Full state sync on connect
+      const dom = msg.dom || {};
+      for (const [agentId, agentDom] of Object.entries(dom)) {
+        try {
+          agentDomCache[agentId] = typeof agentDom === 'string' ? JSON.parse(agentDom) : agentDom;
+        } catch(e) { agentDomCache[agentId] = agentDom; }
+      }
+      rebuildTabs();
+      logEvent('DISPLAY', 'Initial DOM state loaded: ' + Object.keys(agentDomCache).length + ' agents');
+      return;
+    }
+
+    if (msg.type === 'render') {
+      // Full DOM replacement
+      const agentId = msg.agentId;
+      try {
+        agentDomCache[agentId] = typeof msg.dom === 'string' ? JSON.parse(msg.dom) : msg.dom;
+      } catch(e) { agentDomCache[agentId] = msg.dom; }
+      rebuildTabs();
+      if (activeAgentTab === agentId) renderViewport(agentId);
+      flashViewport();
+      logEvent('DISPLAY', 'Render: agent=' + agentId + ' v' + msg.version);
+      return;
+    }
+
+    if (msg.type === 'patch') {
+      // Incremental patch — for now, re-apply the patch dom if present
+      const agentId = msg.agentId;
+      if (msg.patch && msg.patch.dom) {
+        try {
+          agentDomCache[agentId] = typeof msg.patch.dom === 'string' ? JSON.parse(msg.patch.dom) : msg.patch.dom;
+        } catch(e) { agentDomCache[agentId] = msg.patch.dom; }
+      }
+      if (activeAgentTab === agentId) renderViewport(agentId);
+      flashViewport();
+      logEvent('DISPLAY', 'Patch: agent=' + agentId + ' v' + msg.version);
+      return;
+    }
+  }
+
+  /** Rebuild the agent tabs based on agentDomCache keys. */
+  function rebuildTabs() {
+    const tabsEl = document.getElementById('display-tabs');
+    const agentIds = Object.keys(agentDomCache);
+
+    if (agentIds.length === 0) {
+      tabsEl.innerHTML = '';
+      return;
+    }
+
+    // If no active tab, select the first
+    if (!activeAgentTab || !agentIds.includes(activeAgentTab)) {
+      activeAgentTab = agentIds[0];
+    }
+
+    let html = '';
+    for (const id of agentIds) {
+      const isActive = id === activeAgentTab ? ' active' : '';
+      html += '<div class="display-tab' + isActive + '" data-agent="' + escapeHtml(id) + '">' + escapeHtml(id) + '</div>';
+    }
+    tabsEl.innerHTML = html;
+
+    // Bind click handlers
+    tabsEl.querySelectorAll('.display-tab').forEach(tab => {
+      tab.addEventListener('click', function() {
+        activeAgentTab = this.dataset.agent;
+        rebuildTabs();
+        renderViewport(activeAgentTab);
+      });
+    });
+  }
+
+  /** Render the Virtual DOM for a specific agent into the viewport. */
+  function renderViewport(agentId) {
+    const viewport = document.getElementById('display-viewport');
+    const dom = agentDomCache[agentId];
+
+    if (!dom) {
+      viewport.innerHTML = '<div class="display-empty">No UI data for agent: ' + escapeHtml(agentId) + '</div>';
+      return;
+    }
+
+    viewport.innerHTML = renderComponent(dom, agentId);
+  }
+
+  /**
+   * Recursive Virtual DOM → HTML renderer.
+   * This is the "GPU driver" that translates the Semantic DOM protocol
+   * into actual HTML elements that the user can interact with.
+   */
+  function renderComponent(node, agentId) {
+    if (!node || typeof node !== 'object') return escapeHtml(String(node || ''));
+
+    const type = node.type || 'container';
+    const id = node.id || '';
+    const props = node.props || {};
+    const children = node.children || [];
+
+    switch (type) {
+      case 'container':
+        return '<div class="sdom-container" id="' + escAttr(id) + '" data-direction="' + escAttr(props.direction || 'column') + '"'
+             + styleFromProps(props) + '>'
+             + children.map(c => renderComponent(c, agentId)).join('')
+             + '</div>';
+
+      case 'text':
+        return '<div class="sdom-text" id="' + escAttr(id) + '" data-style="' + escAttr(props.style || '') + '"'
+             + styleFromProps(props) + '>'
+             + escapeHtml(props.value || '')
+             + '</div>';
+
+      case 'text_input':
+        return '<input type="text" class="sdom-text-input" id="' + escAttr(id) + '"'
+             + ' placeholder="' + escAttr(props.placeholder || '') + '"'
+             + ' value="' + escAttr(props.value || '') + '"'
+             + ' data-agent="' + escAttr(agentId) + '"'
+             + styleFromProps(props) + '>';
+
+      case 'text_area':
+        return '<textarea class="sdom-text-area" id="' + escAttr(id) + '"'
+             + ' rows="' + (props.rows || 4) + '"'
+             + ' placeholder="' + escAttr(props.placeholder || '') + '"'
+             + ' data-agent="' + escAttr(agentId) + '"'
+             + styleFromProps(props) + '>'
+             + escapeHtml(props.value || '')
+             + '</textarea>';
+
+      case 'button':
+        return '<button class="sdom-button" id="' + escAttr(id) + '"'
+             + ' data-variant="' + escAttr(props.variant || '') + '"'
+             + ' data-agent="' + escAttr(agentId) + '"'
+             + styleFromProps(props) + '>'
+             + escapeHtml(props.label || 'Button')
+             + '</button>';
+
+      case 'card':
+        return '<div class="sdom-card" id="' + escAttr(id) + '"' + styleFromProps(props) + '>'
+             + (props.title ? '<div class="sdom-card-title">' + escapeHtml(props.title) + '</div>' : '')
+             + children.map(c => renderComponent(c, agentId)).join('')
+             + '</div>';
+
+      case 'list':
+        return '<ul class="sdom-list" id="' + escAttr(id) + '"' + styleFromProps(props) + '>'
+             + (Array.isArray(props.items) ? props.items.map(item =>
+                 '<li class="sdom-list-item">' + escapeHtml(String(item)) + '</li>'
+               ).join('') : '')
+             + children.map(c => '<li class="sdom-list-item">' + renderComponent(c, agentId) + '</li>').join('')
+             + '</ul>';
+
+      case 'chart': {
+        const values = Array.isArray(props.values) ? props.values : [];
+        const maxVal = Math.max(...values, 1);
+        let bars = values.map(v =>
+          '<div class="sdom-chart-bar" style="height:' + Math.round((v / maxVal) * 80) + 'px"></div>'
+        ).join('');
+        return '<div class="sdom-chart" id="' + escAttr(id) + '"' + styleFromProps(props) + '>' + bars + '</div>';
+      }
+
+      case 'status': {
+        const state = props.state || 'ok';
+        return '<div class="sdom-status" id="' + escAttr(id) + '">'
+             + '<span class="sdom-status-dot ' + escAttr(state) + '"></span>'
+             + '<span>' + escapeHtml(props.label || state) + '</span>'
+             + '</div>';
+      }
+
+      case 'image':
+        return '<img class="sdom-image" id="' + escAttr(id) + '"'
+             + ' src="' + escAttr(props.src || '') + '"'
+             + ' alt="' + escAttr(props.alt || '') + '"'
+             + styleFromProps(props) + '>';
+
+      default:
+        // Unknown type: render as a generic div with children
+        return '<div id="' + escAttr(id) + '" data-type="' + escAttr(type) + '"' + styleFromProps(props) + '>'
+             + children.map(c => renderComponent(c, agentId)).join('')
+             + '</div>';
+    }
+  }
+
+  /** Build inline style string from props.style map. */
+  function styleFromProps(props) {
+    if (!props.style_map) return '';
+    const s = props.style_map;
+    let css = '';
+    if (s.padding) css += 'padding:' + s.padding + 'px;';
+    if (s.margin) css += 'margin:' + s.margin + 'px;';
+    if (s.width) css += 'width:' + s.width + ';';
+    if (s.height) css += 'height:' + s.height + ';';
+    if (s.color) css += 'color:' + s.color + ';';
+    if (s.background) css += 'background:' + s.background + ';';
+    return css ? ' style="' + escAttr(css) + '"' : '';
+  }
+
+  /** Flash the viewport to indicate a render update (like screen refresh). */
+  function flashViewport() {
+    const vp = document.getElementById('display-viewport');
+    vp.classList.remove('flash');
+    void vp.offsetWidth; // trigger reflow
+    vp.classList.add('flash');
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  //  Semantic Display Server: /ws/gui/action (input events)
+  // ════════════════════════════════════════════════════════════════
+  let actionWs = null;
+
+  function connectActionWs() {
+    actionWs = new WebSocket('ws://' + location.host + '/ws/gui/action');
+
+    actionWs.onopen = function() {
+      logEvent('ACTION', 'Action channel connected');
+    };
+
+    actionWs.onclose = function() {
+      logEvent('ACTION', 'Action channel disconnected, reconnecting in 3s...');
+      setTimeout(connectActionWs, 3000);
+    };
+
+    actionWs.onerror = function() {
+      logEvent('ACTION', 'Action channel error');
+    };
+  }
+
+  connectActionWs();
+
+  /**
+   * Send a UI action event to the backend via the action WebSocket.
+   * This is the "keyboard/mouse interrupt" — the frontend tells the
+   * kernel that the user interacted with a rendered component.
+   */
+  function sendAction(agentId, action, componentId, value) {
+    if (!actionWs || actionWs.readyState !== WebSocket.OPEN) {
+      logEvent('ACTION_ERR', 'Action channel not connected');
+      return;
+    }
+
+    const event = {
+      agentId: agentId,
+      action: action,
+      componentId: componentId,
+      value: value || '',
+      timestamp: Date.now()
+    };
+
+    actionWs.send(JSON.stringify(event));
+    logEvent('ACTION', action + ' → ' + componentId + ' (agent=' + agentId + ')');
+  }
+
+  // ── Delegate click/input events from rendered components ──
+
+  document.getElementById('display-viewport').addEventListener('click', function(e) {
+    const btn = e.target.closest('.sdom-button');
+    if (btn) {
+      const agentId = btn.dataset.agent || activeAgentTab;
+      const componentId = btn.id;
+      sendAction(agentId, 'click', componentId);
+      return;
+    }
+
+    // Also handle card clicks
+    const card = e.target.closest('.sdom-card');
+    if (card && card.id) {
+      const agentId = card.dataset.agent || activeAgentTab;
+      sendAction(agentId, 'click', card.id);
+    }
+  });
+
+  // Debounced input events for text fields
+  let inputDebounce = null;
+  document.getElementById('display-viewport').addEventListener('input', function(e) {
+    if (e.target.classList.contains('sdom-text-input') || e.target.classList.contains('sdom-text-area')) {
+      clearTimeout(inputDebounce);
+      inputDebounce = setTimeout(function() {
+        const agentId = e.target.dataset.agent || activeAgentTab;
+        sendAction(agentId, 'type', e.target.id, e.target.value);
+      }, 300);
+    }
+  });
+
+  // Change events for text areas
+  document.getElementById('display-viewport').addEventListener('change', function(e) {
+    if (e.target.classList.contains('sdom-text-input') || e.target.classList.contains('sdom-text-area')) {
+      const agentId = e.target.dataset.agent || activeAgentTab;
+      sendAction(agentId, 'change', e.target.id, e.target.value);
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════
+  //  Dashboard Update (metrics)
+  // ════════════════════════════════════════════════════════════════
   function updateDashboard(data) {
     const tokenPct = data.total_quota > 0
       ? Math.round((data.total_tokens / data.total_quota) * 100) : 0;
@@ -423,7 +977,9 @@
     container.innerHTML = html;
   }
 
-  // ── Event Log ──
+  // ════════════════════════════════════════════════════════════════
+  //  Event Log
+  // ════════════════════════════════════════════════════════════════
   const eventLog = document.getElementById('event-log');
   const MAX_EVENTS = 200;
 
@@ -449,6 +1005,10 @@
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
+  function escAttr(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
   function formatNum(n) {
     if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
     if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
@@ -467,7 +1027,9 @@
     document.getElementById('val-uptime').textContent = formatUptime(uptimeSec);
   }, 1000);
 
-  // ── Command Execution ──
+  // ════════════════════════════════════════════════════════════════
+  //  Command Execution
+  // ════════════════════════════════════════════════════════════════
   const cmdInput = document.getElementById('cmd-input');
   const cmdSend = document.getElementById('cmd-send');
   const cmdOutput = document.getElementById('cmd-output');

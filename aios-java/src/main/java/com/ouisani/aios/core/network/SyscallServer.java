@@ -5,10 +5,14 @@ import com.ouisani.aios.core.AgentTask;
 import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.mcp.McpServer;
+import com.ouisani.aios.core.snapshot.ProcessSnapshot;
+import com.ouisani.aios.core.snapshot.SnapshotManager;
 import com.ouisani.aios.core.syscall.SyscallDispatcher;
 import com.ouisani.aios.core.syscall.SyscallRequest;
 import com.ouisani.aios.core.syscall.SyscallResponse;
 import com.ouisani.aios.vfs.WebSocketNode;
+import com.ouisani.aios.vfs.RemoteDeviceMountNode;
+import com.ouisani.aios.vfs.DeviceOfflineException;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.javalin.http.sse.SseClient;
@@ -18,6 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -36,6 +41,7 @@ public class SyscallServer {
     private final McpServer mcpServer;
     private final AtomicInteger pidCounter = new AtomicInteger(1);
     private final Map<String, WebSocketNode> wsNodes = new ConcurrentHashMap<>();
+    private final Map<String, RemoteDeviceMountNode> remoteDevices = new ConcurrentHashMap<>();
     private final Map<String, SseClient> mcpSessions = new ConcurrentHashMap<>();
     private final Set<WsContext> monitorClients = ConcurrentHashMap.newKeySet();
     private Javalin app;
@@ -71,9 +77,45 @@ public class SyscallServer {
             config.staticFiles.add("src/main/resources/web", io.javalin.http.staticfiles.Location.EXTERNAL);
         });
 
+        // ── API Gateway Auth: global before-handler ──
+        AuthManager authManager = AuthManager.instance();
+        app.before(ctx -> {
+            String path = ctx.path();
+
+            // Allow static resources (dashboard HTML/CSS/JS) without auth
+            if (isStaticResource(path)) {
+                return;
+            }
+
+            // Check Authorization header
+            String authHeader = ctx.header("Authorization");
+            String token = authManager.extractFromHeader(authHeader);
+
+            // Fallback: check query parameter (for easy curl testing)
+            if (token == null) {
+                token = authManager.extractFromQuery(ctx.queryParam("token"));
+            }
+
+            // Verify token
+            if (!authManager.verifyToken(token)) {
+                log.warn("[API Gateway] Connection rejected due to missing or invalid security token. path={}", path);
+                System.out.printf("  🚫 [API Gateway] Connection rejected due to missing or invalid security token. path=%s%n", path);
+                ctx.status(401).result("Unauthorized access to AIOS Kernel");
+            }
+        });
+
         // ── WebSocket Monitor: real-time system metrics for dashboard ──
         app.ws("/ws/monitor", ws -> {
             ws.onConnect(ctx -> {
+                // Auth check for WebSocket: verify token from query param
+                String token = ctx.queryParam("token");
+                if (!authManager.verifyToken(token)) {
+                    log.warn("[API Gateway] WebSocket /ws/monitor rejected: invalid token");
+                    System.out.println("  🚫 [API Gateway] WebSocket /ws/monitor rejected: invalid token");
+                    ctx.session.close();
+                    return;
+                }
+
                 monitorClients.add(ctx);
                 log.info("[WebSocket] Dashboard connected. Total clients: {}", monitorClients.size());
                 System.out.printf("  📡 [WebSocket] Dashboard connected. Total clients: %d%n", monitorClients.size());
@@ -115,6 +157,206 @@ public class SyscallServer {
             }
         });
 
+        // ════════════════════════════════════════════════════════════
+        //  Snapshot / Live Migration Endpoints
+        // ════════════════════════════════════════════════════════════
+
+        // 创建进程快照（冻结 + 序列化）
+        app.post("/snapshot/create", ctx -> {
+            ctx.contentType("application/json");
+            try {
+                Map<String, Object> body = objectMapper.readValue(ctx.body(), Map.class);
+                int pid = ((Number) body.get("pid")).intValue();
+
+                AgentTask task = scheduler.getTask(pid);
+                if (task == null) {
+                    ctx.status(404).result("{\"error\":\"PID not found: " + pid + "\"}");
+                    return;
+                }
+
+                ProcessSnapshot snapshot = SnapshotManager.instance().createSnapshot(task);
+
+                Map<String, Object> response = new LinkedHashMap<>();
+                response.put("snapshotId", snapshot.snapshotId());
+                response.put("pid", snapshot.pid());
+                response.put("originalStatus", snapshot.taskStatus().name());
+                response.put("cachedPages", snapshot.cachedPages().size());
+                response.put("openHandles", snapshot.openHandles().size());
+                response.put("journalTail", snapshot.journalTail().size());
+                response.put("contextHistorySize", snapshot.contextHistory().size());
+                ctx.result(objectMapper.writeValueAsString(response));
+
+            } catch (Exception e) {
+                log.error("[Snapshot API] Create failed: {}", e.getMessage());
+                ctx.status(500).result("{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
+            }
+        });
+
+        // 从快照恢复进程
+        app.post("/snapshot/restore", ctx -> {
+            ctx.contentType("application/json");
+            try {
+                Map<String, Object> body = objectMapper.readValue(ctx.body(), Map.class);
+                String snapshotId = (String) body.get("snapshotId");
+
+                ProcessSnapshot snapshot = SnapshotManager.instance().loadSnapshot(snapshotId);
+                if (snapshot == null) {
+                    ctx.status(404).result("{\"error\":\"Snapshot not found: " + snapshotId + "\"}");
+                    return;
+                }
+
+                AgentTask restored = SnapshotManager.instance().restore(snapshot);
+
+                Map<String, Object> response = new LinkedHashMap<>();
+                response.put("newPid", restored.pid());
+                response.put("snapshotId", snapshotId);
+                response.put("status", restored.status().name());
+                ctx.result(objectMapper.writeValueAsString(response));
+
+            } catch (Exception e) {
+                log.error("[Snapshot API] Restore failed: {}", e.getMessage());
+                ctx.status(500).result("{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
+            }
+        });
+
+        // 列出所有快照
+        app.get("/snapshot/list", ctx -> {
+            ctx.contentType("application/json");
+            var snapshots = SnapshotManager.instance().listSnapshots();
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("count", snapshots.size());
+            response.put("snapshots", snapshots);
+            ctx.result(objectMapper.writeValueAsString(response));
+        });
+
+        // 获取快照统计
+        app.get("/snapshot/stats", ctx -> {
+            ctx.contentType("text/plain");
+            ctx.result(SnapshotManager.instance().getStatsReport());
+        });
+
+        // 热迁移：冻结 + 序列化，返回二进制数据供传输
+        app.post("/migration/checkpoint", ctx -> {
+            try {
+                Map<String, Object> body = objectMapper.readValue(ctx.body(), Map.class);
+                int pid = ((Number) body.get("pid")).intValue();
+
+                AgentTask task = scheduler.getTask(pid);
+                if (task == null) {
+                    ctx.status(404).result("PID not found: " + pid);
+                    return;
+                }
+
+                byte[] data = SnapshotManager.instance().prepareMigration(task);
+
+                ctx.contentType("application/octet-stream");
+                ctx.header("X-Snapshot-Size", String.valueOf(data.length));
+                ctx.header("X-Original-PID", String.valueOf(pid));
+                ctx.result(data);
+
+                log.info("[Migration API] Checkpoint prepared: PID={}, size={} bytes", pid, data.length);
+
+            } catch (Exception e) {
+                log.error("[Migration API] Checkpoint failed: {}", e.getMessage());
+                ctx.status(500).result("Checkpoint failed: " + e.getMessage());
+            }
+        });
+
+        // 热迁移：接收二进制快照数据并恢复
+        app.post("/migration/restore", ctx -> {
+            try {
+                byte[] data = ctx.bodyAsBytes();
+                ProcessSnapshot snapshot = SnapshotManager.instance().deserializeFromTransfer(data);
+
+                AgentTask restored = SnapshotManager.instance().restore(snapshot);
+
+                ctx.contentType("application/json");
+                Map<String, Object> response = new LinkedHashMap<>();
+                response.put("newPid", restored.pid());
+                response.put("snapshotId", snapshot.snapshotId());
+                response.put("sourceNode", snapshot.sourceNode());
+                response.put("originalPid", snapshot.pid());
+                response.put("status", "RESTORED");
+                ctx.result(objectMapper.writeValueAsString(response));
+
+                log.info("[Migration API] Restored from remote: sourceNode={}, origPID={}, newPID={}",
+                        snapshot.sourceNode(), snapshot.pid(), restored.pid());
+
+            } catch (Exception e) {
+                log.error("[Migration API] Restore failed: {}", e.getMessage());
+                ctx.status(500).result("Restore failed: " + e.getMessage());
+            }
+        });
+
+        // ── Migration WebSocket: 双向流式迁移通道 ──
+        app.ws("/ws/migration", ws -> {
+            ws.onConnect(ctx -> {
+                String token = ctx.queryParam("token");
+                if (!authManager.verifyToken(token)) {
+                    log.warn("[Migration WS] Rejected: invalid token");
+                    ctx.session.close();
+                    return;
+                }
+                log.info("[Migration WS] Client connected for live migration");
+            });
+
+            ws.onMessage(ctx -> {
+                try {
+                    String message = ctx.message();
+                    Map<String, Object> parsed = objectMapper.readValue(message, Map.class);
+                    String action = (String) parsed.get("action");
+
+                    if ("checkpoint".equals(action)) {
+                        int pid = ((Number) parsed.get("pid")).intValue();
+                        AgentTask task = scheduler.getTask(pid);
+                        if (task == null) {
+                            ctx.send("{\"error\":\"PID not found: " + pid + "\"}");
+                            return;
+                        }
+
+                        byte[] data = SnapshotManager.instance().prepareMigration(task);
+                        String base64Data = Base64.getEncoder().encodeToString(data);
+
+                        Map<String, Object> response = new LinkedHashMap<>();
+                        response.put("action", "checkpoint_data");
+                        response.put("snapshotId", "snap-" + pid + "-" + System.currentTimeMillis());
+                        response.put("pid", pid);
+                        response.put("data", base64Data);
+                        response.put("size", data.length);
+                        ctx.send(objectMapper.writeValueAsString(response));
+
+                    } else if ("restore".equals(action)) {
+                        String base64Data = (String) parsed.get("data");
+                        byte[] data = Base64.getDecoder().decode(base64Data);
+
+                        ProcessSnapshot snapshot = SnapshotManager.instance().deserializeFromTransfer(data);
+                        AgentTask restored = SnapshotManager.instance().restore(snapshot);
+
+                        Map<String, Object> response = new LinkedHashMap<>();
+                        response.put("action", "restore_complete");
+                        response.put("newPid", restored.pid());
+                        response.put("snapshotId", snapshot.snapshotId());
+                        response.put("sourceNode", snapshot.sourceNode());
+                        ctx.send(objectMapper.writeValueAsString(response));
+                    }
+
+                } catch (Exception e) {
+                    log.error("[Migration WS] Error: {}", e.getMessage());
+                    try {
+                        ctx.send("{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
+                    } catch (Exception ignored) {}
+                }
+            });
+
+            ws.onClose(ctx -> {
+                log.info("[Migration WS] Client disconnected");
+            });
+
+            ws.onError(ctx -> {
+                log.warn("[Migration WS] Error: {}", ctx.error() != null ? ctx.error().getMessage() : "unknown");
+            });
+        });
+
         app.sse("/kernel/stream", client -> {
             client.keepAlive();
             EventBus.instance().register(client);
@@ -123,6 +365,15 @@ public class SyscallServer {
 
         app.ws("/ws/dev/{nodeName}", ws -> {
             ws.onConnect(ctx -> {
+                // Auth check for WebSocket
+                String token = ctx.queryParam("token");
+                if (!authManager.verifyToken(token)) {
+                    log.warn("[API Gateway] WebSocket /ws/dev rejected: invalid token");
+                    System.out.println("  🚫 [API Gateway] WebSocket /ws/dev rejected: invalid token");
+                    ctx.session.close();
+                    return;
+                }
+
                 String nodeName = ctx.pathParam("nodeName");
                 String vfsPath = "/dev/ws/" + nodeName;
                 log.info("[WS] Client connecting: nodeName={}, vfsPath={}", nodeName, vfsPath);
@@ -168,6 +419,168 @@ public class SyscallServer {
             ws.onError(ctx -> {
                 String nodeName = ctx.pathParam("nodeName");
                 log.error("[WS] Error on nodeName={}: {}", nodeName, ctx.error() != null ? ctx.error().getMessage() : "unknown");
+            });
+        });
+
+        // ── Remote Device WebSocket: dynamic mount/unmount into /dev/remote/ ──
+        app.ws("/ws/remote/{deviceId}", ws -> {
+            ws.onConnect(ctx -> {
+                // Auth check
+                String token = ctx.queryParam("token");
+                if (!authManager.verifyToken(token)) {
+                    log.warn("[API Gateway] WebSocket /ws/remote rejected: invalid token");
+                    ctx.session.close();
+                    return;
+                }
+
+                String deviceId = ctx.pathParam("deviceId");
+                String deviceType = ctx.queryParam("type") != null ? ctx.queryParam("type") : "generic";
+
+                log.info("[RemoteDevice] Device connecting: deviceId={}, type={}", deviceId, deviceType);
+
+                // Mount or retrieve the RemoteDeviceMountNode from VFS
+                RemoteDeviceMountNode node = VfsManager.instance().mountRemoteDevice(deviceId, deviceType);
+                node.attachWsContext(ctx);
+
+                remoteDevices.put(deviceId, node);
+
+                EventBus.instance().broadcast("device_mount",
+                        "{\"deviceId\":\"" + deviceId + "\",\"type\":\"" + deviceType
+                                + "\",\"path\":\"/dev/remote/" + deviceId + "\"}");
+
+                log.info("[RemoteDevice] Device mounted: deviceId={} → /dev/remote/{}", deviceId, deviceId);
+                System.out.println("  \u001B[32m[RemoteDevice] Device '" + deviceId + "' connected and mounted at /dev/remote/" + deviceId + "\u001B[0m");
+            });
+
+            ws.onMessage(ctx -> {
+                String deviceId = ctx.pathParam("deviceId");
+                RemoteDeviceMountNode node = remoteDevices.get(deviceId);
+                if (node != null) {
+                    String message = ctx.message();
+                    node.onWsMessage(message);
+                    log.debug("[RemoteDevice] Message received: deviceId={}, len={}", deviceId, message.length());
+                }
+            });
+
+            ws.onClose(ctx -> {
+                String deviceId = ctx.pathParam("deviceId");
+                log.info("[RemoteDevice] Device disconnecting: deviceId={}", deviceId);
+
+                RemoteDeviceMountNode node = remoteDevices.remove(deviceId);
+                if (node != null) {
+                    node.detachWsContext();
+
+                    // Unmount from VFS — the device is gone
+                    VfsManager.instance().unmountRemoteDevice(deviceId);
+
+                    log.info("[RemoteDevice] Device unmounted: deviceId={}", deviceId);
+                }
+
+                EventBus.instance().broadcast("device_unmount",
+                        "{\"deviceId\":\"" + deviceId + "\",\"reason\":\""
+                                + escapeJson(ctx.reason() != null ? ctx.reason() : "closed") + "\"}");
+            });
+
+            ws.onError(ctx -> {
+                String deviceId = ctx.pathParam("deviceId");
+                log.error("[RemoteDevice] Error on deviceId={}: {}", deviceId,
+                        ctx.error() != null ? ctx.error().getMessage() : "unknown");
+
+                RemoteDeviceMountNode node = remoteDevices.remove(deviceId);
+                if (node != null) {
+                    node.detachWsContext();
+                    VfsManager.instance().unmountRemoteDevice(deviceId);
+                }
+            });
+        });
+
+        // ════════════════════════════════════════════════════════════
+        //  Semantic Display Server: /ws/display (render push)
+        // ════════════════════════════════════════════════════════════
+
+        // Subscribe to ui_render events and forward to all connected display clients
+        Set<io.javalin.websocket.WsContext> displayClients = ConcurrentHashMap.newKeySet();
+        EventBus.instance().subscribe("ui_render", payload -> {
+            for (io.javalin.websocket.WsContext client : displayClients) {
+                try {
+                    client.send(payload);
+                } catch (Exception e) {
+                    displayClients.remove(client);
+                }
+            }
+        });
+
+        app.ws("/ws/display", ws -> {
+            ws.onConnect(ctx -> {
+                String token = ctx.queryParam("token");
+                if (!authManager.verifyToken(token)) {
+                    log.warn("[Display Server] WebSocket /ws/display rejected: invalid token");
+                    ctx.session.close();
+                    return;
+                }
+                displayClients.add(ctx);
+                log.info("[Display Server] Client connected: total={}", displayClients.size());
+
+                // Send current DOM state on connect (like loading the current framebuffer)
+                try {
+                    java.util.Optional<com.ouisani.aios.core.VfsNode> domNode =
+                            VfsManager.instance().resolve("/dev/gui/dom");
+                    if (domNode.isPresent() && domNode.get() instanceof com.ouisani.aios.vfs.GuiDomNode gui) {
+                        String currentDom = gui.read();
+                        ctx.send("{\"type\":\"init\",\"dom\":" + currentDom + "}");
+                    }
+                } catch (Exception e) {
+                    log.warn("[Display Server] Failed to send initial DOM state: {}", e.getMessage());
+                }
+            });
+
+            ws.onClose(ctx -> {
+                displayClients.remove(ctx);
+                log.info("[Display Server] Client disconnected: total={}", displayClients.size());
+            });
+
+            ws.onError(ctx -> {
+                displayClients.remove(ctx);
+            });
+        });
+
+        // ════════════════════════════════════════════════════════════
+        //  Semantic Display Server: /ws/gui/action (input events)
+        // ════════════════════════════════════════════════════════════
+
+        app.ws("/ws/gui/action", ws -> {
+            ws.onConnect(ctx -> {
+                String token = ctx.queryParam("token");
+                if (!authManager.verifyToken(token)) {
+                    log.warn("[Display Server] WebSocket /ws/gui/action rejected: invalid token");
+                    ctx.session.close();
+                    return;
+                }
+                log.info("[Display Server] Action client connected");
+            });
+
+            ws.onMessage(ctx -> {
+                String actionPayload = ctx.message();
+                log.debug("[Display Server] Action event received: len={}", actionPayload.length());
+
+                // Route the action to GuiActionNode
+                try {
+                    java.util.Optional<com.ouisani.aios.core.VfsNode> actionNode =
+                            VfsManager.instance().resolve("/dev/gui/action");
+                    if (actionNode.isPresent()) {
+                        actionNode.get().write(actionPayload);
+                    }
+                } catch (Exception e) {
+                    log.error("[Display Server] Action routing failed: {}", e.getMessage());
+                }
+            });
+
+            ws.onClose(ctx -> {
+                log.info("[Display Server] Action client disconnected");
+            });
+
+            ws.onError(ctx -> {
+                log.warn("[Display Server] Action WebSocket error");
             });
         });
 
@@ -225,6 +638,9 @@ public class SyscallServer {
             }
         });
 
+        // ── App Gateway: bridge external UIs to application stdin/stdout ──
+        AppGateway.attachTo(app);
+
         app.start(port);
 
         System.out.println();
@@ -236,8 +652,15 @@ public class SyscallServer {
         System.out.println("  ║   SSE  /kernel/stream   → Real-time kernel event bus     ║");
         System.out.println("  ║   WS   /ws/monitor      → Dashboard metrics WebSocket    ║");
         System.out.println("  ║   WS   /ws/dev/{name}   → Full-duplex VFS bridge         ║");
+        System.out.println("  ║   WS   /ws/remote/{id}  → Remote device auto-mount       ║");
         System.out.println("  ║   SSE  /mcp/sse         → MCP protocol SSE channel       ║");
         System.out.println("  ║   POST /mcp/message     → MCP JSON-RPC message endpoint  ║");
+        System.out.println("  ║   WS   /api/app/{name}/stream → App stdin/stdout gateway ║");
+        System.out.println("  ║   POST /snapshot/create → Freeze agent (checkpoint)      ║");
+        System.out.println("  ║   POST /snapshot/restore→ Restore agent from snapshot    ║");
+        System.out.println("  ║   POST /migration/checkpoint → Prepare live migration    ║");
+        System.out.println("  ║   POST /migration/restore    → Receive migrated agent    ║");
+        System.out.println("  ║   WS   /ws/migration    → Live migration WebSocket       ║");
         System.out.println("  ╚══════════════════════════════════════════════════════════╝");
         System.out.println();
 
@@ -325,5 +748,20 @@ public class SyscallServer {
 
     private static String escapeJson(String s) {
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
+    }
+
+    /**
+     * Determine if a request path is a static resource that should bypass auth.
+     * Static resources: /, *.html, *.css, *.js, *.ico, *.png, *.svg, etc.
+     */
+    private static boolean isStaticResource(String path) {
+        if (path.equals("/") || path.equals("/index.html")) {
+            return true;
+        }
+        String lower = path.toLowerCase();
+        return lower.endsWith(".html") || lower.endsWith(".css") || lower.endsWith(".js")
+                || lower.endsWith(".ico") || lower.endsWith(".png") || lower.endsWith(".svg")
+                || lower.endsWith(".jpg") || lower.endsWith(".gif") || lower.endsWith(".woff2")
+                || lower.endsWith(".ttf") || lower.endsWith(".map");
     }
 }

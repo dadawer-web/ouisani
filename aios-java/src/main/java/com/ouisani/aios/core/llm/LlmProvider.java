@@ -6,6 +6,17 @@ public interface LlmProvider {
 
     String name();
 
+    /**
+     * 返回此 Provider 对应的算力核心层级。
+     * <p>
+     * P_CORE Provider（如 GPT-4o）返回 {@link ComputeCore#P_CORE}，
+     * E_CORE Provider（如 GPT-4o-mini）返回 {@link ComputeCore#E_CORE}。
+     * 默认为 P_CORE（向后兼容）。
+     */
+    default ComputeCore computeCore() {
+        return ComputeCore.P_CORE;
+    }
+
     String think(String prompt, String systemPrompt);
 
     default String think(String prompt) {

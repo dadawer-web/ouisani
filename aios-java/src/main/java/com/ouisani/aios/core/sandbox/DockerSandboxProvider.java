@@ -52,16 +52,30 @@ public class DockerSandboxProvider implements SandboxProvider {
             execCommand = "bash";
         }
 
-        // Build the docker run command
+        // Build the docker run command with hardened security parameters:
+        // --network none    : No network access (air-gapped)
+        // -m 256m           : Memory hard cap at 256MB
+        // --memory-swap 256m: No swap beyond memory limit
+        // --cpus=0.5        : CPU quota at half a core
+        // --pids-limit 64   : Prevent fork bombs
+        // --read-only       : Read-only root filesystem (only /tmp mount is writable)
         List<String> command = List.of(
                 "docker", "run", "--rm",
-                "-v", HOST_SCRIPT_PATH + ":" + containerScriptPath,
+                "--network", "none",
+                "-m", "256m",
+                "--memory-swap", "256m",
+                "--cpus", "0.5",
+                "--pids-limit", "64",
+                "--read-only",
+                "-v", HOST_SCRIPT_PATH + ":" + containerScriptPath + ":ro",
+                "--tmpfs", "/tmp:size=64m,noexec",
                 dockerImage,
                 execCommand, containerScriptPath
         );
 
         log.info("[Cloud Sandbox] Executing: {}", String.join(" ", command));
         System.out.printf("  ├─ [Cloud Sandbox] CMD: %s%n", String.join(" ", command));
+        System.out.println("  ├─ [Sandbox Security] Spawned isolated container with network bridged off and resource hard-capped.");
 
         ProcessBuilder pb = new ProcessBuilder(command)
                 .redirectErrorStream(true);

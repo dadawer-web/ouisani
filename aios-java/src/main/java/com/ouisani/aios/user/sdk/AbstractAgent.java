@@ -3,11 +3,15 @@ package com.ouisani.aios.user.sdk;
 import com.ouisani.aios.core.AgentTask;
 import com.ouisani.aios.core.ProcessPriority;
 import com.ouisani.aios.core.TaskScheduler;
+import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.network.EventBus;
+import com.ouisani.aios.vfs.GuiActionNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.Consumer;
 
 /**
  * Abstract base class for AIOS Agents — implements Runnable for
@@ -192,5 +196,146 @@ public abstract class AbstractAgent implements Runnable {
 
     public int getTokenBudget() {
         return tokenBudget;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Semantic Display Server: UI Rendering & Action Handling
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Render a UI component tree to the Semantic Display Server.
+     * <p>
+     * This is the high-level equivalent of writing to the framebuffer:
+     * the Agent constructs a Virtual DOM tree, and the kernel pushes
+     * it to all connected frontends via WebSocket.
+     * <p>
+     * Example:
+     * <pre>
+     * renderUI(Map.of(
+     *     "id", "root",
+     *     "type", "container",
+     *     "props", Map.of("direction", "column"),
+     *     "children", List.of(
+     *         Map.of("id", "title", "type", "text", "props", Map.of("value", "Hello AIOS", "style", "heading")),
+     *         Map.of("id", "btn_ok", "type", "button", "props", Map.of("label", "OK", "variant", "primary"))
+     *     )
+     * ));
+     * </pre>
+     *
+     * @param component the root component of the Virtual DOM tree
+     */
+    protected void renderUI(Map<String, Object> component) {
+        String json = componentToJson(component);
+        String payload = "{\"type\":\"render\",\"agentId\":\"" + agentId + "\",\"dom\":" + json + "}";
+        sdk.writeFile(agentId, "/dev/gui/dom", payload);
+        log.debug("[Agent:{}] UI rendered: {} bytes", agentId, json.length());
+    }
+
+    /**
+     * Apply an incremental patch to the current UI.
+     * <p>
+     * Like dirty-rect rendering: only update the changed components.
+     *
+     * @param patch the patch operations
+     */
+    protected void patchUI(Map<String, Object> patch) {
+        String json = componentToJson(patch);
+        String payload = "{\"type\":\"patch\",\"agentId\":\"" + agentId + "\",\"dom\":" + json + "}";
+        sdk.writeFile(agentId, "/dev/gui/dom", payload);
+    }
+
+    /**
+     * Clear the UI rendered by this agent.
+     */
+    protected void clearUI() {
+        String payload = "{\"type\":\"render\",\"agentId\":\"" + agentId + "\",\"dom\":{\"id\":\"root\",\"type\":\"container\",\"props\":{},\"children\":[]}}";
+        sdk.writeFile(agentId, "/dev/gui/dom", payload);
+    }
+
+    /**
+     * Register a callback to handle UI action events from the frontend.
+     * <p>
+     * When a user clicks a button or types into an input, the
+     * GuiActionNode receives the event and delivers it to this
+     * Agent via the registered callback.
+     * <p>
+     * This is the AIOS equivalent of setting up a SIGIO handler:
+     * the Agent registers interest in UI events and is woken up
+     * when they occur.
+     *
+     * @param callback the callback to invoke with action JSON
+     */
+    protected void onAction(Consumer<String> callback) {
+        GuiActionNode actionNode = resolveActionNode();
+        if (actionNode != null) {
+            actionNode.subscribe(agentId, callback);
+            log.info("[Agent:{}] Action handler registered", agentId);
+        }
+    }
+
+    /**
+     * Poll for pending UI action events (non-blocking).
+     * <p>
+     * Returns a JSON array of all pending actions, or "[]" if none.
+     */
+    protected String pollActions() {
+        GuiActionNode actionNode = resolveActionNode();
+        if (actionNode != null) {
+            return actionNode.drainActions(agentId);
+        }
+        return "[]";
+    }
+
+    // ── Utility ──
+
+    private GuiActionNode resolveActionNode() {
+        try {
+            return VfsManager.instance().resolve("/dev/gui/action")
+                    .filter(n -> n instanceof GuiActionNode)
+                    .map(n -> (GuiActionNode) n)
+                    .orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String componentToJson(Map<String, Object> map) {
+        StringBuilder sb = new StringBuilder("{");
+        boolean first = true;
+        for (Map.Entry<String, Object> entry : map.entrySet()) {
+            if (!first) sb.append(",");
+            sb.append("\"").append(entry.getKey()).append("\":");
+            sb.append(valueToJson(entry.getValue()));
+            first = false;
+        }
+        sb.append("}");
+        return sb.toString();
+    }
+
+    private static String valueToJson(Object v) {
+        if (v == null) return "null";
+        if (v instanceof String s) return "\"" + escapeJson(s) + "\"";
+        if (v instanceof Number) return v.toString();
+        if (v instanceof Boolean) return v.toString();
+        if (v instanceof Map) return componentToJson((Map<String, Object>) v);
+        if (v instanceof java.util.List<?> list) {
+            StringBuilder sb = new StringBuilder("[");
+            boolean first = true;
+            for (Object item : list) {
+                if (!first) sb.append(",");
+                sb.append(valueToJson(item));
+                first = false;
+            }
+            sb.append("]");
+            return sb.toString();
+        }
+        return "\"" + escapeJson(v.toString()) + "\"";
+    }
+
+    private static String escapeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "").replace("\t", "\\t");
     }
 }

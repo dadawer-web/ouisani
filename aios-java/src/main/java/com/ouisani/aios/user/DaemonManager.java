@@ -35,14 +35,14 @@ public class DaemonManager {
         restartCounts.putIfAbsent(serviceName, new AtomicInteger(0));
         System.out.printf("  [Systemd] Registered daemon '%s' (baseImage=%s, tokenLimit=%d)%n",
                 serviceName, config.baseImage(), config.tokenLimit());
-        runtime.runContainer(serviceName, config);
+        runtime.run(serviceName, config);
         System.out.printf("  [Systemd] Daemon '%s' started and under watch%n", serviceName);
     }
 
     public void unregisterService(String serviceName) {
         targetState.remove(serviceName);
         restartCounts.remove(serviceName);
-        runtime.stopContainer(serviceName);
+        runtime.stop(serviceName);
         System.out.printf("  [Systemd] Daemon '%s' unregistered and stopped%n", serviceName);
     }
 
@@ -74,12 +74,12 @@ public class DaemonManager {
                 System.out.printf("  ╚══════════════════════════════════════════════════════════════╝%n");
 
                 try {
-                    runtime.stopContainer(serviceName);
+                    runtime.stop(serviceName);
                 } catch (Exception ignored) {
                 }
 
                 try {
-                    runtime.runContainer(serviceName, config);
+                    runtime.run(serviceName, config);
                     System.out.printf("  [Systemd] Daemon '%s' restarted successfully%n", serviceName);
                 } catch (Exception e) {
                     System.out.printf("  [Systemd] Failed to restart '%s': %s%n", serviceName, e.getMessage());

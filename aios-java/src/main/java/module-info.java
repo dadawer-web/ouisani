@@ -2,12 +2,15 @@ module com.ouisani.aios {
     requires org.slf4j;
     requires com.google.gson;
     requires java.net.http;
+    requires java.desktop;
     requires org.graalvm.polyglot;
     requires io.javalin;
     requires com.fasterxml.jackson.databind;
     exports com.ouisani.aios.core;
     exports com.ouisani.aios.core.llm;
+    exports com.ouisani.aios.core.llm.decode;
     exports com.ouisani.aios.core.sandbox;
+    exports com.ouisani.aios.core.sandbox.rpa;
     exports com.ouisani.aios.core.network;
     exports com.ouisani.aios.core.trace;
     exports com.ouisani.aios.core.cgroup;
@@ -17,6 +20,7 @@ module com.ouisani.aios {
     exports com.ouisani.aios.core.security;
     exports com.ouisani.aios.core.compiler;
     exports com.ouisani.aios.core.cache;
+    exports com.ouisani.aios.core.cache.eviction;
     exports com.ouisani.aios.core.migration;
     exports com.ouisani.aios.user;
     exports com.ouisani.aios.user.cli;
@@ -24,7 +28,9 @@ module com.ouisani.aios {
     exports com.ouisani.aios.vfs;
     opens com.ouisani.aios.core;
     opens com.ouisani.aios.core.llm;
+    opens com.ouisani.aios.core.llm.decode;
     opens com.ouisani.aios.core.sandbox;
+    opens com.ouisani.aios.core.sandbox.rpa;
     opens com.ouisani.aios.core.network;
     opens com.ouisani.aios.core.trace;
     opens com.ouisani.aios.core.cgroup;
@@ -34,6 +40,7 @@ module com.ouisani.aios {
     opens com.ouisani.aios.core.security;
     opens com.ouisani.aios.core.compiler;
     opens com.ouisani.aios.core.cache;
+    opens com.ouisani.aios.core.cache.eviction;
     opens com.ouisani.aios.core.migration;
     opens com.ouisani.aios.user;
     opens com.ouisani.aios.user.cli;

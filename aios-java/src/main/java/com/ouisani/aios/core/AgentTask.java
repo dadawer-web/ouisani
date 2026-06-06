@@ -1,6 +1,8 @@
 package com.ouisani.aios.core;
 
 import com.ouisani.aios.core.ipc.SignalType;
+import com.ouisani.aios.core.llm.ComputeAffinity;
+import com.ouisani.aios.core.llm.ComputeCore;
 import com.ouisani.aios.core.security.SecurityToken;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,7 +34,9 @@ public final class AgentTask {
         READ_MEMORY,
         CANCEL_TASK,
         VFS_CALL,
-        PROCESS_CTRL
+        PROCESS_CTRL,
+        /** 推测执行任务 — 由 SpeculativePredictor 生成的预测性后台任务 */
+        SPECULATIVE
     }
 
     private final int pid;
@@ -46,6 +50,7 @@ public final class AgentTask {
     private int priority;
     private ProcessPriority processPriority;
     private NumaAffinity affinity;
+    private ComputeAffinity computeAffinity;
     private int budget;
     private TaskType type;
     private String payload;
@@ -74,6 +79,7 @@ public final class AgentTask {
         this.priority = 0;
         this.processPriority = (pid < 100) ? ProcessPriority.REALTIME : ProcessPriority.NORMAL;
         this.affinity = NumaAffinity.PREFER_LOCAL;
+        this.computeAffinity = ComputeAffinity.fromPriority(this.processPriority);
         this.budget = 200;
         this.type = TaskType.LLM_CHAT;
         this.gasLimit = 10_000;
@@ -160,6 +166,16 @@ public final class AgentTask {
         NumaAffinity prev = this.affinity;
         this.affinity = affinity;
         log.info("Task#{} affinity transition: {} -> {}", pid, prev, affinity);
+    }
+
+    public ComputeAffinity computeAffinity() {
+        return computeAffinity;
+    }
+
+    public void setComputeAffinity(ComputeAffinity computeAffinity) {
+        ComputeAffinity prev = this.computeAffinity;
+        this.computeAffinity = computeAffinity;
+        log.info("Task#{} computeAffinity transition: {} -> {}", pid, prev, computeAffinity);
     }
 
     public int budget() {
@@ -260,6 +276,15 @@ public final class AgentTask {
         if (!was) {
             log.info("Task#{} cancelled", pid);
         }
+    }
+
+    /**
+     * 重置取消标志 — 用于崩溃恢复后重新调度。
+     * 仅由 SemanticCrashAnalyzer 的恢复流程调用。
+     */
+    public void resetForRecovery() {
+        cancelled.set(false);
+        log.info("Task#{} reset for recovery", pid);
     }
 
     public void sendSignal(SignalType signal) {

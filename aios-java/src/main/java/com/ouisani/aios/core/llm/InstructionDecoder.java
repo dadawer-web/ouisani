@@ -1,147 +1,180 @@
 package com.ouisani.aios.core.llm;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ouisani.aios.core.llm.decode.DecodeStrategy;
+import com.ouisani.aios.core.llm.decode.SemanticFuzzyDecodeStrategy;
+import com.ouisani.aios.core.llm.decode.StrictDecodeStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+
+/**
+ * Instruction Decoder — the AIOS kernel's instruction fetch unit.
+ * <p>
+ * Translates raw LLM text output into typed Java objects using a
+ * <b>Dual-Track Decoding Pipeline</b> (双轨制解码管线):
+ * <p>
+ * <h3>Track 1: Strict Decoder (严格解码器)</h3>
+ * The fast path — attempts standard JSON parsing via Jackson.
+ * Handles markdown code blocks and embedded JSON extraction.
+ * If the LLM follows the schema contract, this is the only track needed.
+ * <p>
+ * <h3>Track 2: Semantic Fuzzy Decoder (语义模糊解码器)</h3>
+ * The resilient fallback — when strict parsing fails, this track
+ * uses regex deep cleaning, field name fuzzy matching, and fragment
+ * assembly to extract the intent from malformed or informal LLM output.
+ * <p>
+ * <h3>Chain of Responsibility</h3>
+ * The two tracks are implemented as a chain of {@link DecodeStrategy}
+ * instances. Each strategy is tried in priority order until one succeeds.
+ * This makes the decode pipeline extensible — new strategies can be
+ * added without modifying existing code.
+ * <p>
+ * <h3>OS Analogy: Trap → Fault → Panic</h3>
+ * <pre>
+ *   Strict parse succeeds  →  TLB hit (fast path)
+ *   Strict fails, Fuzzy succeeds  →  Page fault (slow but recovered)
+ *   Both fail  →  Kernel panic (InstructionDecodeException)
+ * </pre>
+ * <p>
+ * The key insight: a "flexible kernel" doesn't mean "no rules." It means
+ * the kernel tries the fast strict path first, and only falls back to
+ * the slow fuzzy path when necessary — just like a real OS handles
+ * page faults without compromising memory protection.
+ *
+ * @see DecodeStrategy
+ * @see StrictDecodeStrategy
+ * @see SemanticFuzzyDecodeStrategy
+ * @see InstructionDecodeException
+ */
 public class InstructionDecoder {
 
     private static final Logger log = LoggerFactory.getLogger(InstructionDecoder.class);
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-    private static final int MAX_RETRIES = 3;
+
+    /** The ordered chain of decode strategies. */
+    private static final List<DecodeStrategy> strategyChain = new ArrayList<>();
+
+    static {
+        // Initialize the dual-track pipeline
+        strategyChain.add(new StrictDecodeStrategy());
+        strategyChain.add(new SemanticFuzzyDecodeStrategy());
+
+        // Sort by priority (lower number = higher priority)
+        strategyChain.sort(Comparator.comparingInt(DecodeStrategy::priority));
+
+        log.info("[InstructionDecoder] Dual-track decode pipeline initialized: {}",
+                strategyChain.stream().map(DecodeStrategy::name).toList());
+        System.out.println("  \u001B[36m[InstructionDecoder] Dual-track decode pipeline mounted: "
+                + strategyChain.stream().map(DecodeStrategy::name).toList() + "\u001B[0m");
+    }
 
     private InstructionDecoder() {}
 
+    // ════════════════════════════════════════════════════════════════
+    //  Public API
+    // ════════════════════════════════════════════════════════════════
+
     /**
-     * 将 LLM 输出解码为强类型 Java 对象。
-     * 如果 JSON 解析失败，自动向大模型发起自愈请求，最多重试 3 次。
+     * Decode LLM output into a typed Java object using the full
+     * dual-track pipeline with self-healing.
+     * <p>
+     * Execution order:
+     * <ol>
+     *   <li>Strict Decoder (with self-healing retries)</li>
+     *   <li>Semantic Fuzzy Decoder (3-stage fuzzy pipeline)</li>
+     * </ol>
+     * If all strategies fail, throws {@link InstructionDecodeException}.
      *
-     * @param llmOutput   大模型的原始输出文本
-     * @param targetClass 目标 Java 类型
-     * @param llmProvider 用于自愈重试的 LLM 提供者
-     * @return 解析后的 Java 对象
-     * @throws InstructionDecodeException 超过最大重试次数仍无法解析
+     * @param llmOutput   the raw text output from the LLM
+     * @param targetClass the expected Java type
+     * @param llmProvider the LLM provider (for self-healing retries)
+     * @return the decoded object
+     * @throws InstructionDecodeException if all strategies fail
      */
     public static <T> T decodeJson(String llmOutput, Class<T> targetClass, LlmProvider llmProvider) {
-        // 第一次尝试直接解析
-        T result = tryParse(llmOutput, targetClass);
-        if (result != null) {
-            log.debug("[InstructionDecoder] First-pass decode successful: type={}", targetClass.getSimpleName());
-            return result;
-        }
+        log.info("[InstructionDecoder] Decoding: type={}, inputLen={}, strategies={}",
+                targetClass.getSimpleName(), llmOutput != null ? llmOutput.length() : 0,
+                strategyChain.size());
 
-        // 进入自愈循环
-        String currentOutput = llmOutput;
-        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-            String errorMsg = lastParseError;
-
-            System.out.printf("  🔄 [InstructionDecoder] Self-healing attempt %d/%d (error: %s)%n",
-                    attempt, MAX_RETRIES, errorMsg.length() > 80 ? errorMsg.substring(0, 80) + "..." : errorMsg);
-            log.warn("[InstructionDecoder] Parse failed, self-healing attempt {}/{}: {}", attempt, MAX_RETRIES, errorMsg);
-
-            String healPrompt = "Your previous output was invalid JSON. Error: " + errorMsg
-                    + ". Please fix it and output ONLY valid JSON matching the schema for " + targetClass.getSimpleName() + ".";
-
-            currentOutput = llmProvider.think(healPrompt);
-            log.info("[InstructionDecoder] LLM self-heal response (attempt {}): {} chars", attempt, currentOutput.length());
-
-            result = tryParse(currentOutput, targetClass);
-            if (result != null) {
-                System.out.printf("  ✅ [InstructionDecoder] Self-healing successful on attempt %d!%n", attempt);
-                log.info("[InstructionDecoder] Self-healing succeeded on attempt {}", attempt);
-                return result;
+        for (DecodeStrategy strategy : strategyChain) {
+            try {
+                T result = strategy.decode(llmOutput, targetClass, llmProvider);
+                if (result != null) {
+                    log.info("[InstructionDecoder] Decode succeeded via strategy '{}': type={}",
+                            strategy.name(), targetClass.getSimpleName());
+                    return result;
+                }
+            } catch (Exception e) {
+                log.warn("[InstructionDecoder] Strategy '{}' threw exception: {}",
+                        strategy.name(), e.getMessage());
+                // Continue to next strategy — don't let one strategy's exception
+                // crash the entire pipeline
             }
         }
 
-        // 全部失败
-        String fatalMsg = "Instruction decode failed after " + MAX_RETRIES + " self-healing attempts. Last error: " + lastParseError;
-        System.err.printf("  💀 [InstructionDecoder] FATAL: %s%n", fatalMsg);
-        log.error("[InstructionDecoder] {}", fatalMsg);
-        throw new InstructionDecodeException(fatalMsg, MAX_RETRIES + 1);
+        // All strategies exhausted — kernel panic
+        String fatalMsg = "All decode strategies failed for type " + targetClass.getSimpleName()
+                + ". Tried: " + strategyChain.stream().map(DecodeStrategy::name).toList();
+        log.error("[InstructionDecoder] FATAL: {}", fatalMsg);
+        System.err.printf("  \u001B[31m[InstructionDecoder] FATAL: %s\u001B[0m%n", fatalMsg);
+        throw new InstructionDecodeException(fatalMsg, strategyChain.size());
     }
 
     /**
-     * 无自愈版本：仅尝试解析，失败直接抛异常
+     * Decode without self-healing — tries each strategy once.
+     * <p>
+     * Useful when the caller doesn't have an LlmProvider available
+     * for self-healing retries.
+     *
+     * @param llmOutput   the raw text output from the LLM
+     * @param targetClass the expected Java type
+     * @return the decoded object
+     * @throws InstructionDecodeException if all strategies fail
      */
     public static <T> T decodeJson(String llmOutput, Class<T> targetClass) {
-        T result = tryParse(llmOutput, targetClass);
-        if (result != null) {
-            return result;
-        }
-        throw new InstructionDecodeException(
-                "JSON parse failed (no self-healing): " + lastParseError, 1);
+        return decodeJson(llmOutput, targetClass, null);
     }
 
-    private static String lastParseError = "";
+    // ════════════════════════════════════════════════════════════════
+    //  Pipeline Management
+    // ════════════════════════════════════════════════════════════════
 
-    private static <T> T tryParse(String output, Class<T> targetClass) {
-        try {
-            // 尝试提取 JSON 块（LLM 可能在 JSON 前后附加了 markdown 代码块标记）
-            String json = extractJson(output);
-            return OBJECT_MAPPER.readValue(json, targetClass);
-        } catch (JsonProcessingException e) {
-            lastParseError = e.getOriginalMessage() != null ? e.getOriginalMessage() : e.getMessage();
-            log.debug("[InstructionDecoder] Parse failed: {}", lastParseError);
-            return null;
-        }
+    /**
+     * Register a custom decode strategy into the pipeline.
+     * <p>
+     * Strategies are sorted by priority after registration.
+     *
+     * @param strategy the strategy to add
+     */
+    public static void registerStrategy(DecodeStrategy strategy) {
+        strategyChain.add(strategy);
+        strategyChain.sort(Comparator.comparingInt(DecodeStrategy::priority));
+        log.info("[InstructionDecoder] Strategy registered: name={}, priority={}, pipeline={}",
+                strategy.name(), strategy.priority(),
+                strategyChain.stream().map(DecodeStrategy::name).toList());
     }
 
     /**
-     * 从 LLM 输出中提取 JSON 内容。
-     * 支持 ```json ... ``` 包裹的 markdown 代码块。
+     * Remove a strategy by name.
+     *
+     * @param name the strategy name to remove
+     * @return true if a strategy was removed
      */
-    private static String extractJson(String output) {
-        if (output == null || output.isBlank()) {
-            return output;
+    public static boolean removeStrategy(String name) {
+        boolean removed = strategyChain.removeIf(s -> s.name().equals(name));
+        if (removed) {
+            log.info("[InstructionDecoder] Strategy removed: name={}, pipeline={}",
+                    name, strategyChain.stream().map(DecodeStrategy::name).toList());
         }
+        return removed;
+    }
 
-        // 尝试提取 ```json ... ``` 代码块
-        String trimmed = output.trim();
-        int jsonBlockStart = trimmed.indexOf("```json");
-        if (jsonBlockStart != -1) {
-            int contentStart = trimmed.indexOf('\n', jsonBlockStart) + 1;
-            int contentEnd = trimmed.indexOf("```", contentStart);
-            if (contentEnd != -1) {
-                return trimmed.substring(contentStart, contentEnd).trim();
-            }
-        }
-
-        // 尝试提取 ``` ... ``` 代码块
-        int codeBlockStart = trimmed.indexOf("```");
-        if (codeBlockStart != -1) {
-            int contentStart = trimmed.indexOf('\n', codeBlockStart) + 1;
-            int contentEnd = trimmed.indexOf("```", contentStart);
-            if (contentEnd != -1) {
-                return trimmed.substring(contentStart, contentEnd).trim();
-            }
-        }
-
-        // 尝试提取 { ... } 或 [ ... ] 范围
-        int objStart = trimmed.indexOf('{');
-        int arrStart = trimmed.indexOf('[');
-        if (objStart != -1 || arrStart != -1) {
-            int start = -1;
-            if (objStart != -1 && arrStart != -1) {
-                start = Math.min(objStart, arrStart);
-            } else {
-                start = objStart != -1 ? objStart : arrStart;
-            }
-            // 找到匹配的结束括号
-            char openChar = trimmed.charAt(start);
-            char closeChar = openChar == '{' ? '}' : ']';
-            int depth = 0;
-            for (int i = start; i < trimmed.length(); i++) {
-                if (trimmed.charAt(i) == openChar) depth++;
-                if (trimmed.charAt(i) == closeChar) depth--;
-                if (depth == 0) {
-                    return trimmed.substring(start, i + 1);
-                }
-            }
-            // 深度不匹配，返回从 start 开始的子串
-            return trimmed.substring(start);
-        }
-
-        return trimmed;
+    /**
+     * Get the current pipeline configuration.
+     */
+    public static List<String> getPipelineNames() {
+        return strategyChain.stream().map(DecodeStrategy::name).toList();
     }
 }

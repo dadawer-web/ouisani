@@ -57,7 +57,7 @@ public class TestCrashAnalyzer {
                 + "Context history had 15 entries totaling ~4000 tokens. "
                 + "The task required generating a comprehensive report.";
 
-        analyzer.generateCoreDump("agent_crash_test", oomCrash, lastContext);
+        analyzer.kernelPanic("agent_crash_test", oomCrash);
         System.out.println();
 
         System.out.println("── Step 4: Simulate another crash (NullPointerException) ──");
@@ -65,8 +65,7 @@ public class TestCrashAnalyzer {
             String s = null;
             s.length();
         } catch (NullPointerException e) {
-            analyzer.generateCoreDump("agent_npe_test", e,
-                    "Agent was attempting to read from /dev/vec_mem but the VFS node was not mounted");
+            analyzer.kernelPanic("agent_npe_test", e);
         }
         System.out.println();
 
@@ -74,8 +73,7 @@ public class TestCrashAnalyzer {
         RuntimeException wasmCrash = new RuntimeException(
                 "WASM execution failed: function 'process_data' trapped with unreachable",
                 new IllegalArgumentException("Invalid WASM bytecode: section size mismatch"));
-        analyzer.generateCoreDump("agent_wasm_test", wasmCrash,
-                "Agent loaded a corrupted WASM module from /bin/agent.wasm");
+        analyzer.kernelPanic("agent_wasm_test", wasmCrash);
         System.out.println();
 
         System.out.println("  ╔══════════════════════════════════════════════════════════╗");

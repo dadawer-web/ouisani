@@ -151,6 +151,14 @@ public final class ObjectManager {
     }
 
     /**
+     * Get all currently active handle info entries (read-only view).
+     * Used by CrashAnalyzer to collect handle snapshots for core dumps.
+     */
+    public Map<Integer, HandleInfo> activeHandleInfo() {
+        return Collections.unmodifiableMap(handleInfo);
+    }
+
+    /**
      * Get the number of active handles.
      */
     public int activeHandleCount() {

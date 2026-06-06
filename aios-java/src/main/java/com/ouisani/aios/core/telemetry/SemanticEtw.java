@@ -1,31 +1,49 @@
 package com.ouisani.aios.core.telemetry;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 /**
- * Semantic ETW (Event Tracing for Windows) — zero-overhead event tracing for AIOS.
+ * 语义事件追踪 (Semantic ETW) — AIOS 的零开销安全审计内核。
  * <p>
- * Uses a lock-free ring buffer to capture kernel events at maximum throughput.
- * No locks, no disk I/O, no console output during recording — just a single
- * atomic index increment and an array store.
- * <p>
- * Component conventions:
+ * 将被 BpfManager 拦截的危险行为，连同 Agent 当时的"思考逻辑上下文"，
+ * 写入 SemanticEtw 进行审计追溯。
+ *
+ * <h3>OS 类比: Windows ETW + Linux Auditd</h3>
  * <ul>
- *   <li>"LLM" — LLM Provider (latency, model selection)</li>
- *   <li>"CGROUP" — Cgroup (token consumption, OOM events)</li>
- *   <li>"SCHEDULER" — Scheduler (context switches, spawn/cancel)</li>
- *   <li>"VFS" — VFS (read/write operations)</li>
- *   <li>"SECURITY" — Security (handle grants, denials)</li>
- *   <li>"WATCHDOG" — Watchdog (deadline exceeded)</li>
+ *   <li>Windows ETW → 零开销环形缓冲区事件写入</li>
+ *   <li>Linux auditd → 安全审计日志，记录谁在什么时候做了什么</li>
+ *   <li>AIOS SemanticEtw → 两者融合 + 语义上下文（Agent 的思考逻辑）</li>
+ * </ul>
+ *
+ * <h3>语义审计记录 (SemanticAuditRecord)</h3>
+ * 与普通 EventRecord 不同，语义审计记录包含：
+ * <ul>
+ *   <li>{@code agentId} — 哪个 Agent 触发了此事件</li>
+ *   <li>{@code securityToken} — Agent 当时的安全令牌（权限等级）</li>
+ *   <li>{@code thinkingContext} — Agent 当时的思考逻辑上下文</li>
+ *   <li>{@code threatLevel} — 威胁等级</li>
+ *   <li>{@code ruleId} — 触发拦截的规则 ID</li>
+ * </ul>
+ *
+ * <h3>Component 约定</h3>
+ * <ul>
+ *   <li>"LLM" — LLM Provider（延迟、模型选择）</li>
+ *   <li>"CGROUP" — Cgroup（Token 消费、OOM 事件）</li>
+ *   <li>"SCHEDULER" — 调度器（上下文切换、spawn/cancel）</li>
+ *   <li>"VFS" — VFS（读写操作）</li>
+ *   <li>"SECURITY" — 安全（BpfManager 拦截、冒充操作、OOM Kill）</li>
+ *   <li>"WATCHDOG" — 看门狗（截止时间超限）</li>
+ *   <li>"AUDIT" — 语义审计（带思考上下文的安全事件）</li>
  * </ul>
  */
 public final class SemanticEtw {
 
     private static final int BUFFER_SIZE = 16384;
-    private static final int INDEX_MASK = BUFFER_SIZE - 1; // BUFFER_SIZE must be power of 2
+    private static final int INDEX_MASK = BUFFER_SIZE - 1;
 
     private static final class Holder {
         static final SemanticEtw INSTANCE = new SemanticEtw();
@@ -35,31 +53,99 @@ public final class SemanticEtw {
         return Holder.INSTANCE;
     }
 
+    // ── 通用事件环形缓冲区 ──
+
     private final EventRecord[] ringBuffer = new EventRecord[BUFFER_SIZE];
     private final AtomicInteger cursor = new AtomicInteger(0);
     private final AtomicLong totalEvents = new AtomicLong(0);
     private volatile boolean enabled = true;
 
+    // ── 语义审计专用缓冲区 ──
+
+    private static final int AUDIT_BUFFER_SIZE = 4096;
+    private final SemanticAuditRecord[] auditBuffer = new SemanticAuditRecord[AUDIT_BUFFER_SIZE];
+    private final AtomicInteger auditCursor = new AtomicInteger(0);
+    private final AtomicLong totalAuditEvents = new AtomicLong(0);
+
+    // ── 安全事件统计 ──
+
+    private final ConcurrentHashMap<String, AtomicLong> securityStats = new ConcurrentHashMap<>();
+
     private SemanticEtw() {}
 
+    // ════════════════════════════════════════════════════════════════
+    //  通用事件写入（零开销）
+    // ════════════════════════════════════════════════════════════════
+
     /**
-     * Zero-overhead event write. No locks, no I/O, no console output.
-     * Uses bitwise AND for fast modulo (BUFFER_SIZE is power of 2).
+     * 零开销事件写入。无锁、无 I/O、无控制台输出。
+     * 使用位运算 AND 实现快速取模（BUFFER_SIZE 为 2 的幂）。
      *
-     * @param component the event source (e.g. "LLM", "CGROUP", "SCHEDULER")
-     * @param type      the event type (e.g. "CALL", "CONSUME", "SWITCH")
-     * @param payload   the event description
+     * @param component 事件来源（如 "LLM", "CGROUP", "SECURITY"）
+     * @param type      事件类型（如 "CALL", "CONSUME", "BPF_INTERCEPT"）
+     * @param payload   事件描述
      */
     public void logEvent(String component, String type, String payload) {
         if (!enabled) return;
         int idx = cursor.getAndIncrement() & INDEX_MASK;
         ringBuffer[idx] = new EventRecord(System.nanoTime(), component, type, payload);
         totalEvents.incrementAndGet();
+
+        // 安全事件统计
+        if ("SECURITY".equals(component)) {
+            securityStats.computeIfAbsent(type, k -> new AtomicLong(0)).incrementAndGet();
+        }
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  语义审计写入 — 带思考上下文的安全事件
+    // ════════════════════════════════════════════════════════════════
+
     /**
-     * Flush all buffered events to a consumer (e.g. WebSocket handler).
-     * Returns events in insertion order (oldest first).
+     * 写入一条语义审计记录。
+     * <p>
+     * 与 {@link #logEvent} 不同，语义审计记录包含 Agent 的完整安全上下文：
+     * <ul>
+     *   <li>谁触发了此事件（agentId + securityToken）</li>
+     *   <li>Agent 当时的思考逻辑（thinkingContext）</li>
+     *   <li>威胁等级和触发规则（threatLevel + ruleId）</li>
+     *   <li>被拦截的操作详情（action + reason）</li>
+     * </ul>
+     *
+     * @param agentId         触发事件的 Agent 标识
+     * @param securityToken   Agent 当时的安全令牌描述
+     * @param thinkingContext Agent 当时的思考逻辑上下文
+     * @param threatLevel     威胁等级
+     * @param ruleId          触发拦截的规则 ID
+     * @param action          被拦截的操作
+     * @param reason          拦截原因
+     */
+    public void logAuditEvent(String agentId, String securityToken, String thinkingContext,
+                              String threatLevel, String ruleId, String action, String reason) {
+        if (!enabled) return;
+
+        // 同时写入通用环形缓冲区
+        String payload = String.format(
+                "agent=%s token=%s threat=%s rule=%s action=%s reason=%s thinking=%s",
+                agentId, securityToken, threatLevel, ruleId, action, reason,
+                thinkingContext != null ? truncate(thinkingContext, 200) : "null");
+        logEvent("AUDIT", "SECURITY_AUDIT", payload);
+
+        // 写入语义审计专用缓冲区
+        int idx = auditCursor.getAndIncrement() & (AUDIT_BUFFER_SIZE - 1);
+        auditBuffer[idx] = new SemanticAuditRecord(
+                System.nanoTime(), agentId, securityToken, thinkingContext,
+                threatLevel, ruleId, action, reason);
+        totalAuditEvents.incrementAndGet();
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  事件消费
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 将所有缓冲事件刷新到消费者（如 WebSocket 处理器）。
+     * 按插入顺序返回（最旧的在前）。
      */
     public List<EventRecord> flushToConsumer() {
         long total = totalEvents.get();
@@ -86,11 +172,7 @@ public final class SemanticEtw {
     }
 
     /**
-     * Fetch the most recent N events from the ring buffer.
-     * Traverses backwards from the current cursor position.
-     *
-     * @param count the number of recent events to fetch
-     * @return list of recent events, newest last
+     * 获取最近的 N 条通用事件。
      */
     public List<EventRecord> fetchRecent(int count) {
         long total = totalEvents.get();
@@ -110,18 +192,84 @@ public final class SemanticEtw {
     }
 
     /**
-     * Clear the ring buffer.
+     * 获取最近的 N 条语义审计记录。
+     * <p>
+     * 语义审计记录包含完整的 Agent 思考上下文，
+     * 用于安全回溯分析："为什么 Agent 在那个时刻做了那个决定？"
+     */
+    public List<SemanticAuditRecord> fetchRecentAudit(int count) {
+        long total = totalAuditEvents.get();
+        int available = (int) Math.min(total, AUDIT_BUFFER_SIZE);
+        int fetchCount = Math.min(count, available);
+
+        List<SemanticAuditRecord> result = new ArrayList<>(fetchCount);
+
+        int currentCursor = auditCursor.get();
+        for (int i = fetchCount - 1; i >= 0; i--) {
+            int idx = (currentCursor - 1 - i) & (AUDIT_BUFFER_SIZE - 1);
+            SemanticAuditRecord r = auditBuffer[idx];
+            if (r != null) result.add(r);
+        }
+
+        return result;
+    }
+
+    /**
+     * 获取安全事件统计摘要。
+     * <p>
+     * 返回每种安全事件类型的计数，如：
+     * <pre>
+     * BPF_INTERCEPT: 42
+     * IMPERSONATE: 15
+     * OOM_KILL: 3
+     * JS_PROBE_BLOCK: 7
+     * </pre>
+     */
+    public Map<String, Long> getSecurityStats() {
+        Map<String, Long> stats = new LinkedHashMap<>();
+        securityStats.forEach((k, v) -> stats.put(k, v.get()));
+        return stats;
+    }
+
+    /**
+     * 获取安全事件统计的格式化字符串。
+     */
+    public String getSecurityStatsReport() {
+        Map<String, Long> stats = getSecurityStats();
+        if (stats.isEmpty()) return "No security events recorded.";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("┌─ Security Event Statistics ──────────────────────\n");
+        stats.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .forEach(e -> sb.append(String.format("│ %-25s %d%n", e.getKey() + ":", e.getValue())));
+        sb.append("└─────────────────────────────────────────────────");
+        return sb.toString();
+    }
+
+    /**
+     * 清除所有缓冲区。
      */
     public void clear() {
         for (int i = 0; i < BUFFER_SIZE; i++) {
             ringBuffer[i] = null;
         }
+        for (int i = 0; i < AUDIT_BUFFER_SIZE; i++) {
+            auditBuffer[i] = null;
+        }
         cursor.set(0);
         totalEvents.set(0);
+        auditCursor.set(0);
+        totalAuditEvents.set(0);
+        securityStats.clear();
     }
 
     public long totalEvents() {
         return totalEvents.get();
+    }
+
+    public long totalAuditEvents() {
+        return totalAuditEvents.get();
     }
 
     public int bufferSize() {
@@ -134,5 +282,48 @@ public final class SemanticEtw {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    private static String truncate(String s, int maxLen) {
+        if (s == null) return "null";
+        if (s.length() <= maxLen) return s;
+        return s.substring(0, maxLen) + "...";
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  语义审计记录
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 语义审计记录 — 包含 Agent 思考上下文的安全事件。
+     * <p>
+     * 与 {@link EventRecord} 不同，此记录专门用于安全审计，
+     * 记录了 Agent 被拦截时的完整上下文，支持事后回溯分析：
+     * "为什么 Agent 在那个时刻试图执行那个危险操作？"
+     *
+     * @param timestamp       事件时间戳（纳秒）
+     * @param agentId         触发事件的 Agent 标识
+     * @param securityToken   Agent 当时的安全令牌描述
+     * @param thinkingContext Agent 当时的思考逻辑上下文
+     * @param threatLevel     威胁等级
+     * @param ruleId          触发拦截的规则 ID
+     * @param action          被拦截的操作
+     * @param reason          拦截原因
+     */
+    public record SemanticAuditRecord(
+            long timestamp,
+            String agentId,
+            String securityToken,
+            String thinkingContext,
+            String threatLevel,
+            String ruleId,
+            String action,
+            String reason
+    ) {
+        @Override
+        public String toString() {
+            return "[AUDIT] [%s] %d | agent=%s token=%s threat=%s rule=%s action=%s reason=%s".formatted(
+                    threatLevel, timestamp, agentId, securityToken, threatLevel, ruleId, action, reason);
+        }
     }
 }

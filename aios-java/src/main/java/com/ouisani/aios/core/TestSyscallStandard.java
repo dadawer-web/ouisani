@@ -6,6 +6,7 @@ import com.ouisani.aios.core.security.ObjectManager;
 import com.ouisani.aios.core.syscall.SyscallDispatcher;
 import com.ouisani.aios.core.syscall.SyscallRequest;
 import com.ouisani.aios.core.syscall.SyscallResponse;
+import com.ouisani.aios.core.syscall.schema.LlmPayload;
 import com.ouisani.aios.core.telemetry.EventRecord;
 import com.ouisani.aios.core.telemetry.SemanticEtw;
 
@@ -59,8 +60,8 @@ public class TestSyscallStandard {
         // ── Step 2: Agent issues llm.think via Syscall ──
         System.out.println("  [Step 2] Agent 'agent_007' issuing llm.think syscall...");
 
-        SyscallRequest thinkReq = new SyscallRequest("llm.think",
-                Map.of("prompt", "请讲一个笑话"));
+        SyscallRequest thinkReq = new SyscallRequest("llm", "think",
+                new LlmPayload("请讲一个笑话", 0.7, 4096));
 
         SyscallResponse thinkResp = dispatcher.execute("agent_007", thinkReq);
 
