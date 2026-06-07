@@ -5,22 +5,31 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Signal interception utility for AIOS kernel-level interrupt handling.
+ * 信号拦截器 — AIOS 内核级中断处理工具。
+ * <p>
+ * 在 LLM 请求或 WASM 执行之前调用，检查并处理当前 Agent 任务中的待处理信号。
  *
- * <p>Called before LLM requests or WASM executions to check and act on
- * pending signals in the current agent's task.</p>
+ * <h3>OS 类比: Linux Signal Handler / Windows APC</h3>
+ * Linux 的信号处理器 (signal handler) 在进程收到信号时被异步调用，
+ * Windows 的 APC (Asynchronous Procedure Call) 在线程可 alert 时投递。
+ * SignalInterceptor 采用类似模型：在 Agent 的"可中断点"（LLM 调用前）
+ * 检查并处理信号，实现异步中断。
  *
+ * <h3>信号处理策略：</h3>
  * <ul>
- *   <li>{@link SignalType#SIGTERM} → throws {@link InterruptedException} to kill the agent.</li>
- *   <li>{@link SignalType#SIGUSR1} → returns a system interrupt prefix to inject into the prompt.</li>
- *   <li>{@link SignalType#SIGINT}  → throws {@link InterruptedException} for graceful interruption.</li>
- *   <li>{@link SignalType#SIG_CONTEXT_UPDATE} → returns context update metadata for the agent to process.</li>
+ *   <li>{@link SignalType#SIGTERM} → 抛出 {@link InterruptedException} 终止 Agent</li>
+ *   <li>{@link SignalType#SIGUSR1} → 返回系统中断前缀，注入到 Prompt 中</li>
+ *   <li>{@link SignalType#SIGINT}  → 抛出 {@link InterruptedException} 优雅中断</li>
+ *   <li>{@link SignalType#SIG_CONTEXT_UPDATE} → 由 Agent 的信号处理器自行处理</li>
  * </ul>
+ *
+ * @see SignalType
  */
 public final class SignalInterceptor {
 
     private static final Logger log = LoggerFactory.getLogger(SignalInterceptor.class);
 
+    /** SIGUSR1 注入前缀：强制 Agent 暂停当前思维并处理中断 */
     public static final String SIGUSR1_PREFIX =
             "[SYSTEM INTERRUPT: You have received a SIGUSR1 signal from the OS. "
             + "You MUST pause your current thought and handle this interrupt immediately!] ";
@@ -28,11 +37,11 @@ public final class SignalInterceptor {
     private SignalInterceptor() {}
 
     /**
-     * Check and drain all pending signals for the given agent task.
+     * 检查并排空指定 Agent 任务的所有待处理信号。
      *
-     * @param task the current agent task
-     * @return a prompt prefix if SIGUSR1 was received, otherwise null
-     * @throws InterruptedException if SIGTERM or SIGINT was received
+     * @param task 当前 Agent 任务
+     * @return 如果收到 SIGUSR1 则返回 Prompt 前缀，否则返回 null
+     * @throws InterruptedException 如果收到 SIGTERM 或 SIGINT
      */
     public static String checkAndDrain(AgentTask task) throws InterruptedException {
         if (task == null || !task.hasPendingSignals()) {
@@ -57,11 +66,11 @@ public final class SignalInterceptor {
                     sigusr1Received = true;
                 }
                 case SIG_CONTEXT_UPDATE -> {
-                    log.info("[SignalInterceptor] Agent#{} received SIG_CONTEXT_UPDATE — shared subconscious has changed",
+                    log.info("[SignalInterceptor] Agent#{} received SIG_CONTEXT_UPDATE — 共享潜意识已变更",
                             task.pid());
-                    // SIG_CONTEXT_UPDATE is handled by the agent's signal handler,
-                    // not by prompt injection. The agent should check its
-                    // SemanticMemoryBlock after receiving this signal.
+                    // SIG_CONTEXT_UPDATE 由 Agent 的信号处理器处理，
+                    // 不通过 Prompt 注入。Agent 应在收到此信号后
+                    // 检查其 SemanticMemoryBlock。
                 }
             }
         }
@@ -70,14 +79,14 @@ public final class SignalInterceptor {
     }
 
     /**
-     * Check pending signals and return a (possibly modified) prompt.
-     * If SIGUSR1 is pending, the interrupt prefix is prepended to the prompt.
-     * If SIGTERM/SIGINT is pending, throws InterruptedException.
+     * 检查待处理信号并返回（可能修改后的）Prompt。
+     * 如果 SIGUSR1 待处理，中断前缀会被添加到 Prompt 前面。
+     * 如果 SIGTERM/SIGINT 待处理，抛出 InterruptedException。
      *
-     * @param task   the current agent task
-     * @param prompt the original prompt
-     * @return the prompt, possibly with a SIGUSR1 prefix prepended
-     * @throws InterruptedException if SIGTERM or SIGINT was received
+     * @param task   当前 Agent 任务
+     * @param prompt 原始 Prompt
+     * @return Prompt，可能带有 SIGUSR1 前缀
+     * @throws InterruptedException 如果收到 SIGTERM 或 SIGINT
      */
     public static String interceptPrompt(AgentTask task, String prompt) throws InterruptedException {
         String prefix = checkAndDrain(task);
@@ -88,14 +97,13 @@ public final class SignalInterceptor {
     }
 
     /**
-     * Check if the agent has a pending SIG_CONTEXT_UPDATE signal.
+     * 检查 Agent 是否有待处理的 SIG_CONTEXT_UPDATE 信号。
      * <p>
-     * Unlike {@link #checkAndDrain(AgentTask)}, this method does NOT
-     * drain the signal queue — it only peeks. Use this in an agent's
-     * event loop to detect context updates without consuming other signals.
+     * 与 {@link #checkAndDrain(AgentTask)} 不同，此方法<b>不会</b>排空信号队列 —
+     * 只做窥探。用于 Agent 的事件循环中检测上下文更新，而不消费其他信号。
      *
-     * @param task the current agent task
-     * @return true if SIG_CONTEXT_UPDATE is pending
+     * @param task 当前 Agent 任务
+     * @return true 如果 SIG_CONTEXT_UPDATE 待处理
      */
     public static boolean hasContextUpdate(AgentTask task) {
         if (task == null || !task.hasPendingSignals()) {
@@ -110,11 +118,10 @@ public final class SignalInterceptor {
     }
 
     /**
-     * Drain all SIG_CONTEXT_UPDATE signals from the queue, leaving
-     * other signals untouched.
+     * 排空所有 SIG_CONTEXT_UPDATE 信号，保留其他信号不变。
      *
-     * @param task the current agent task
-     * @return the number of SIG_CONTEXT_UPDATE signals drained
+     * @param task 当前 Agent 任务
+     * @return 排空的 SIG_CONTEXT_UPDATE 信号数量
      */
     public static int drainContextUpdates(AgentTask task) {
         if (task == null) return 0;
@@ -124,7 +131,7 @@ public final class SignalInterceptor {
             if (signal == SignalType.SIG_CONTEXT_UPDATE) {
                 count++;
             } else {
-                // Put non-CONTEXT_UPDATE signals back
+                // 将非 CONTEXT_UPDATE 信号放回队列
                 task.sendSignal(signal);
             }
         }

@@ -10,43 +10,40 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * PM Agent — the Product Manager of the Auto Dev House.
+ * PM Agent — 自动开发屋的产品经理。
  * <p>
- * This Agent acts as a top-tier product manager. It receives a project
- * brief, generates a PRD (Product Requirements Document) using the LLM,
- * and writes it to a {@link SemanticMemoryBlock} for zero-copy sharing
- * with downstream agents (Coder, Reviewer).
+ * OS 类比：相当于内核中负责资源分配和任务编排的调度器 —
+ * 接收项目简报，使用 LLM 生成 PRD（产品需求文档），
+ * 并写入 {@link SemanticMemoryBlock} 供下游 Agent（Coder、Reviewer）零拷贝共享。
  * <p>
- * <h3>IPC Model: Shared Memory + Hardware Interrupt</h3>
- * Instead of writing long text to VFS files and forcing other agents
- * to poll, the PM agent:
+ * <h3>IPC 模型：共享内存 + 硬件中断</h3>
+ * PM Agent 不通过 VFS 文件轮询，而是：
  * <ol>
- *   <li>Writes the PRD to a SemanticMemoryBlock via {@code shmWrite()}</li>
- *   <li>Writes a ContextPointer pointing to the PRD (neural mmap)</li>
- *   <li>Sends {@code SIG_CONTEXT_UPDATE} to all agents in the project
- *       group — a hardware-level interrupt that wakes them instantly</li>
+ *   <li>通过 {@code shmWrite()} 将 PRD 写入 SemanticMemoryBlock</li>
+ *   <li>写入 ContextPointer 指向 PRD（神经 mmap）</li>
+ *   <li>向项目组所有 Agent 广播 {@code SIG_CONTEXT_UPDATE} —
+ *       硬件级中断，即时唤醒</li>
  * </ol>
  * <p>
- * This eliminates the 500ms polling loop entirely. The Coder agent
- * receives the interrupt and reads the PRD from shared memory in
- * microseconds — no VFS I/O, no text copying, no polling.
+ * 消除了 500ms 轮询循环。Coder Agent 收到中断后微秒级从共享内存读取 PRD —
+ * 无 VFS I/O、无文本拷贝、无轮询。
  * <p>
- * Lifecycle:
+ * 生命周期：
  * <ol>
- *   <li>Initialize status to "INIT" in shared memory</li>
- *   <li>Call LLM to generate PRD</li>
- *   <li>Write PRD to SemanticMemoryBlock (neural mmap)</li>
- *   <li>Write ContextPointer (PRD reference + summary)</li>
- *   <li>Update status to "PRD_READY" in shared memory</li>
- *   <li>Broadcast SIG_CONTEXT_UPDATE to project group</li>
- *   <li>Exit — job done</li>
+ *   <li>在共享内存中初始化状态为 "INIT"</li>
+ *   <li>调用 LLM 生成 PRD</li>
+ *   <li>将 PRD 写入 SemanticMemoryBlock（神经 mmap）</li>
+ *   <li>写入 ContextPointer（PRD 引用 + 摘要）</li>
+ *   <li>更新共享内存状态为 "PRD_READY"</li>
+ *   <li>广播 SIG_CONTEXT_UPDATE 到项目组</li>
+ *   <li>退出 — 任务完成</li>
  * </ol>
  */
 public class PmAgent extends AbstractAgent {
 
     private static final Logger log = LoggerFactory.getLogger(PmAgent.class);
 
-    /** The shared memory block ID for the DevHouse project. */
+    /** DevHouse 项目共享内存块 ID */
     private static final String SHM_BLOCK_ID = "devhouse_project";
 
     private static final String PRD_PROMPT = """

@@ -8,6 +8,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
+/**
+ * 宿主机源码节点 — AIOS 与宿主机文件系统的桥梁。
+ * <p>
+ * 将 VFS 路径映射到宿主机的真实物理文件路径，使 Agent 可以读写
+ * 宿主机上的实际文件。这是 AIOS "打破第四面墙"的核心机制之一。
+ *
+ * <h3>OS 类比</h3>
+ * 类比 Linux 的 bind mount（{@code mount --bind}）—
+ * 将一个目录树挂载到另一个位置，实现文件系统的透明映射。
+ */
 public non-sealed class HostSourceNode implements VfsNode {
 
     private static final Logger log = LoggerFactory.getLogger(HostSourceNode.class);

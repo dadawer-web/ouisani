@@ -10,43 +10,44 @@ import org.slf4j.LoggerFactory;
 import java.util.Map;
 
 /**
- * AIOS Core Utilities — built-in system tools analogous to GNU coreutils.
+ * AIOS 核心工具集 — 类似 GNU coreutils 的内置系统工具。
  * <p>
- * These are exposed as syscall actions with the {@code coreutils.} prefix,
- * and can be invoked by Agents through the SDK or by natural language
- * through the Intent Router.
+ * OS 类比：相当于 Linux 的 coreutils（ps/kill/whoami/uptime/free/ls），
+ * 在 AIOS 中以 {@code coreutils.} 前缀暴露为系统调用动作，
+ * Agent 可通过 SDK 或自然语言（经 Intent Router）调用。
  * <p>
- * Available commands:
+ * 可用命令：
  * <ul>
- *   <li>{@code coreutils.ps} — list all processes</li>
- *   <li>{@code coreutils.kill} — send signal to a process</li>
- *   <li>{@code coreutils.whoami} — show current agent identity</li>
- *   <li>{@code coreutils.uptime} — show system uptime</li>
- *   <li>{@code coreutils.free} — show token/memory usage</li>
- *   <li>{@code coreutils.ls} — list VFS directory</li>
+ *   <li>{@code coreutils.ps} — 列出所有进程</li>
+ *   <li>{@code coreutils.kill} — 向进程发送信号</li>
+ *   <li>{@code coreutils.whoami} — 显示当前 Agent 身份</li>
+ *   <li>{@code coreutils.uptime} — 显示系统运行时间</li>
+ *   <li>{@code coreutils.free} — 显示 token/内存使用量</li>
+ *   <li>{@code coreutils.ls} — 列出 VFS 目录</li>
  * </ul>
  */
 public final class CoreUtils {
 
     private static final Logger log = LoggerFactory.getLogger(CoreUtils.class);
 
+    /** 系统启动时间戳 */
     private static final long BOOT_TIME = System.currentTimeMillis();
 
     private CoreUtils() {}
 
-    // ── TaskScheduler reference (set during boot) ──
+    // ── TaskScheduler 引用（启动时设置） ──
     private static TaskScheduler scheduler;
 
     public static void configure(TaskScheduler taskScheduler) {
         scheduler = taskScheduler;
     }
 
-    // ── ps: list all processes ──
+    // ── ps：列出所有进程 ──
 
     /**
-     * List all active processes in a formatted table.
+     * 以格式化表格列出所有活跃进程。
      *
-     * @return formatted process table
+     * @return 格式化的进程表
      */
     public static String ps() {
         if (scheduler == null) return "[Error] TaskScheduler not configured";
@@ -82,13 +83,13 @@ public final class CoreUtils {
         return sb.toString();
     }
 
-    // ── kill: send signal to process ──
+    // ── kill：向进程发送信号 ──
 
     /**
-     * Kill a process by PID. Sends SIGTERM first, then SIGKILL.
+     * 按 PID 终止进程。先发送 SIGTERM，再发送 SIGKILL。
      *
-     * @param pidStr the PID as a string
-     * @return result message
+     * @param pidStr PID 字符串
+     * @return 结果消息
      */
     public static String kill(String pidStr) {
         if (scheduler == null) return "[Error] TaskScheduler not configured";
@@ -110,7 +111,7 @@ public final class CoreUtils {
         }
     }
 
-    // ── whoami: show current agent identity ──
+    // ── whoami：显示当前 Agent 身份 ──
 
     public static String whoami() {
         AgentTask current = TaskScheduler.CURRENT_TASK.get();
@@ -123,7 +124,7 @@ public final class CoreUtils {
         return "PID=0 Priority=REALTIME Cgroup=root";
     }
 
-    // ── uptime: show system uptime ──
+    // ── uptime：显示系统运行时间 ──
 
     public static String uptime() {
         long uptimeMs = System.currentTimeMillis() - BOOT_TIME;
@@ -135,7 +136,7 @@ public final class CoreUtils {
                 scheduler != null ? scheduler.activeCount() : 0);
     }
 
-    // ── free: show token/memory usage ──
+    // ── free：显示 token/内存使用量 ──
 
     public static String free() {
         if (scheduler == null) return "[Error] TaskScheduler not configured";
@@ -146,14 +147,14 @@ public final class CoreUtils {
                 stats.totalCompleted(), stats.totalCancelled());
     }
 
-    // ── Dispatch coreutils by action name ──
+    // ── 按动作名分派 coreutils 命令 ──
 
     /**
-     * Dispatch a coreutils action by name.
+     * 按名称分派 coreutils 动作。
      *
-     * @param subAction the sub-action (e.g. "ps", "kill")
-     * @param params    the parameters
-     * @return the result string
+     * @param subAction 子动作（如 "ps"、"kill"）
+     * @param params    参数
+     * @return 结果字符串
      */
     public static String dispatch(String subAction, Map<String, Object> params) {
         return switch (subAction) {

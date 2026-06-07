@@ -5,12 +5,11 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Application Manifest — the "package.json" of AIOS.
+ * 应用清单 — AIOS 的 "package.json"。
  * <p>
- * Describes how a generic OS application should be spawned,
- * including concurrency, token budget, VFS mounts, and entrypoint.
+ * 描述通用 OS 应用应如何被生成，包括并发数、Token 预算、VFS 挂载和入口命令。
  *
- * <h3>Example Agentfile:</h3>
+ * <h3>示例清单</h3>
  * <pre>
  * APP_NAME data_pipeline
  * SPAWN worker 50

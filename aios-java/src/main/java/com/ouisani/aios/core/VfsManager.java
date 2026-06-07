@@ -29,22 +29,38 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+/**
+ * 虚拟文件系统管理器 — AIOS 的 VFS 层，统一管理所有虚拟设备、文件和命名空间。
+ * <p>
+ * 类比 Linux VFS（Virtual File System）：将语义搜索、向量记忆、图形记忆、
+ * 摄像头、显示器、网络等异构资源抽象为统一的文件节点（VfsNode），
+ * 通过路径树（pathTree）提供 mount/resolve/read/write 等标准文件操作。
+ * <p>
+ * 支持 Agent 命名空间隔离（类比 Linux mount namespace）、
+ * VSS 快照（类比 Windows Volume Shadow Copy）、WAL 日志恢复、
+ * 远程设备动态挂载等特性。
+ */
 public final class VfsManager {
 
     private static final Logger log = LoggerFactory.getLogger(VfsManager.class);
 
+    /** Agent 根路径绑定 — 类比 Linux 的 chroot，每个 Agent 线程可绑定独立的 VFS 根 */
     public static final ThreadLocal<String> AGENT_ROOT = ThreadLocal.withInitial(() -> "/");
 
     private static final class Holder {
         static final VfsManager INSTANCE = new VfsManager();
     }
 
+    /** 单例获取 */
     public static VfsManager instance() {
         return Holder.INSTANCE;
     }
 
+    /** 读写锁 — 保护路径树的并发访问，读多写少场景 */
     private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
+    /** 路径树 — VFS 核心数据结构，绝对路径 → VfsNode 映射 */
     private final Map<String, VfsNode> pathTree = new ConcurrentHashMap<>();
+    /** Agent 命名空间映射 — agentId → VFS 根路径 */
     private final Map<Integer, String> agentNamespaces = new ConcurrentHashMap<>();
     private volatile boolean initialized = false;
     private volatile LlmProvider defaultLlmProvider;
@@ -77,6 +93,14 @@ public final class VfsManager {
         return defaultLlmProvider;
     }
 
+    /**
+     * 初始化 VFS 根文件系统 — 类比 Linux 的 mount_root_fs()。
+     * <p>
+     * 创建标准目录结构（/bin, /dev, /mem, /proc, /tmp, /containers, /var），
+     * 挂载语义设备（/dev/semantic）、向量记忆（/dev/vec_mem）、图形记忆（/dev/graph_mem）、
+     * 虚拟硬件（摄像头、显示器、音频）、网络设备、共享内存等。
+     * 最后打开 WAL 日志并执行崩溃恢复。
+     */
     public void init() {
         rwLock.writeLock().lock();
         try {
@@ -200,6 +224,15 @@ public final class VfsManager {
         }
     }
 
+    /**
+     * 解析 VFS 路径 — 类比 Linux 的 path_lookup()。
+     * <p>
+     * 根据路径和 Agent 根路径进行路径翻译和权限检查，返回对应的 VfsNode。
+     *
+     * @param path      请求的虚拟路径
+     * @param agentRoot Agent 的 VFS 根路径（用于命名空间隔离）
+     * @return 找到的 VfsNode，不存在则返回 empty
+     */
     public Optional<VfsNode> resolve(String path, String agentRoot) {
         rwLock.readLock().lock();
         try {
@@ -225,10 +258,20 @@ public final class VfsManager {
         }
     }
 
+    /** 使用当前线程的 AGENT_ROOT 解析路径 */
     public Optional<VfsNode> resolve(String path) {
         return resolve(path, AGENT_ROOT.get());
     }
 
+    /**
+     * 挂载 VFS 节点 — 类比 Linux mount() 系统调用。
+     *
+     * @param dirPath    父目录路径
+     * @param name       节点名称
+     * @param node       要挂载的 VfsNode
+     * @param callerUid  调用者 UID（用于权限检查）
+     * @return true 挂载成功，false 路径已存在
+     */
     public boolean mount(String dirPath, String name, VfsNode node, int callerUid) {
         rwLock.writeLock().lock();
         try {
@@ -282,6 +325,13 @@ public final class VfsManager {
         }
     }
 
+    /**
+     * 卸载 VFS 节点 — 类比 Linux umount() 系统调用。
+     *
+     * @param path       要卸载的路径
+     * @param callerUid  调用者 UID
+     * @return true 卸载成功，false 路径不存在
+     */
     public boolean unmount(String path, int callerUid) {
         rwLock.writeLock().lock();
         try {
@@ -352,6 +402,15 @@ public final class VfsManager {
         return shadowPath;
     }
 
+    /**
+     * 路径翻译 — 类比 Linux 的 d_path()，将相对路径结合 Agent 根路径解析为绝对路径。
+     * <p>
+     * 包含路径净化（去除 . 和 ..）和越界检查（防止路径逃逸出 Agent 的 chroot）。
+     *
+     * @param path      原始路径
+     * @param agentRoot Agent 的 VFS 根路径
+     * @return 翻译后的绝对路径，越界则返回空字符串
+     */
     public String translatePath(String path, String agentRoot) {
         if (agentRoot == null || agentRoot.equals("/") || agentRoot.isEmpty()) {
             return sanitizePath(path);
@@ -380,6 +439,15 @@ public final class VfsManager {
         return translatePath(path, AGENT_ROOT.get());
     }
 
+    /**
+     * 创建容器命名空间 — 类比 Linux 的 clone(CLONE_NEWNS)。
+     * <p>
+     * 为指定 Agent 创建独立的 VFS 子树（/containers/agent_{id}/），
+     * 包含独立的 /bin, /dev, /proc, /tmp, /dev/mem 目录。
+     *
+     * @param agentId Agent ID
+     * @return true 创建成功或已存在
+     */
     public boolean createContainerNamespace(int agentId) {
         rwLock.writeLock().lock();
         try {
@@ -416,6 +484,13 @@ public final class VfsManager {
         return agentNamespaces.containsKey(agentId);
     }
 
+    /**
+     * 销毁容器命名空间 — 类比 Linux 的 umount -a + cleanup。
+     * 移除该 Agent 的所有 VFS 节点和命名空间映射。
+     *
+     * @param agentId Agent ID
+     * @return true 销毁成功，false 命名空间不存在
+     */
     public boolean destroyContainerNamespace(int agentId) {
         rwLock.writeLock().lock();
         try {
@@ -430,6 +505,7 @@ public final class VfsManager {
         }
     }
 
+    /** 打印 VFS 目录树 — 类比 Linux 的 tree 命令 */
     public String tree() {
         return tree("/", 0, "/");
     }
@@ -464,6 +540,7 @@ public final class VfsManager {
         pathTree.put(path, new VfsNode.DirectoryNode(path));
     }
 
+    /** 路径净化 — 类比 Linux 的 canonicalize_path()，去除 . 和 ..，防止路径遍历攻击 */
     private String sanitizePath(String path) {
         if (path == null || path.isBlank()) return "/";
         String[] parts = path.split("/");
@@ -484,6 +561,7 @@ public final class VfsManager {
         return sb.toString();
     }
 
+    /** 路径越界检查 — 类比 Linux 的 chroot 边界检查，确保路径不会逃逸出 Agent 的根目录 */
     private boolean isWithinRoot(String path, String root) {
         if (root.equals("/") || root.isEmpty()) return true;
         if (path.equals(root)) return true;

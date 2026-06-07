@@ -11,38 +11,29 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * Instruction Decoder — the AIOS kernel's instruction fetch unit.
+ * 指令解码器 — AIOS 内核的"指令取指单元"。
  * <p>
- * Translates raw LLM text output into typed Java objects using a
- * <b>Dual-Track Decoding Pipeline</b> (双轨制解码管线):
- * <p>
- * <h3>Track 1: Strict Decoder (严格解码器)</h3>
- * The fast path — attempts standard JSON parsing via Jackson.
- * Handles markdown code blocks and embedded JSON extraction.
- * If the LLM follows the schema contract, this is the only track needed.
- * <p>
- * <h3>Track 2: Semantic Fuzzy Decoder (语义模糊解码器)</h3>
- * The resilient fallback — when strict parsing fails, this track
- * uses regex deep cleaning, field name fuzzy matching, and fragment
- * assembly to extract the intent from malformed or informal LLM output.
- * <p>
- * <h3>Chain of Responsibility</h3>
- * The two tracks are implemented as a chain of {@link DecodeStrategy}
- * instances. Each strategy is tried in priority order until one succeeds.
- * This makes the decode pipeline extensible — new strategies can be
- * added without modifying existing code.
- * <p>
- * <h3>OS Analogy: Trap → Fault → Panic</h3>
+ * 将 LLM 的原始文本输出翻译为类型化的 Java 对象，采用<b>双轨制解码管线</b>：
+ *
+ * <h3>轨道 1：严格解码器（Strict Decoder）</h3>
+ * 快速路径 — 使用 Jackson 进行标准 JSON 解析。
+ * 处理 Markdown 代码块和嵌入式 JSON 提取。
+ * 如果 LLM 遵循 Schema 约定，只需此轨道即可。
+ *
+ * <h3>轨道 2：语义模糊解码器（Semantic Fuzzy Decoder）</h3>
+ * 弹性回退 — 当严格解析失败时，使用正则深度清洗、字段名模糊匹配
+ * 和片段组装，从格式不规范或非正式的 LLM 输出中提取意图。
+ *
+ * <h3>责任链模式</h3>
+ * 两条轨道由 {@link DecodeStrategy} 责任链实现，按优先级顺序依次尝试，
+ * 直到某个策略成功。这使得解码管线可扩展 — 新策略无需修改现有代码。
+ *
+ * <h3>OS 类比：Trap → Fault → Panic</h3>
  * <pre>
- *   Strict parse succeeds  →  TLB hit (fast path)
- *   Strict fails, Fuzzy succeeds  →  Page fault (slow but recovered)
- *   Both fail  →  Kernel panic (InstructionDecodeException)
+ *   严格解析成功    →  TLB 命中（快速路径）
+ *   严格失败，模糊成功  →  Page Fault（慢但可恢复）
+ *   全部失败       →  Kernel Panic（InstructionDecodeException）
  * </pre>
- * <p>
- * The key insight: a "flexible kernel" doesn't mean "no rules." It means
- * the kernel tries the fast strict path first, and only falls back to
- * the slow fuzzy path when necessary — just like a real OS handles
- * page faults without compromising memory protection.
  *
  * @see DecodeStrategy
  * @see StrictDecodeStrategy
@@ -53,15 +44,15 @@ public class InstructionDecoder {
 
     private static final Logger log = LoggerFactory.getLogger(InstructionDecoder.class);
 
-    /** The ordered chain of decode strategies. */
+    /** 按优先级排序的解码策略链 */
     private static final List<DecodeStrategy> strategyChain = new ArrayList<>();
 
     static {
-        // Initialize the dual-track pipeline
+        // 初始化双轨制解码管线
         strategyChain.add(new StrictDecodeStrategy());
         strategyChain.add(new SemanticFuzzyDecodeStrategy());
 
-        // Sort by priority (lower number = higher priority)
+        // 按优先级排序（数值越小优先级越高）
         strategyChain.sort(Comparator.comparingInt(DecodeStrategy::priority));
 
         log.info("[InstructionDecoder] Dual-track decode pipeline initialized: {}",
@@ -77,21 +68,20 @@ public class InstructionDecoder {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Decode LLM output into a typed Java object using the full
-     * dual-track pipeline with self-healing.
+     * 使用双轨制管线将 LLM 输出解码为类型化的 Java 对象（含自愈重试）。
      * <p>
-     * Execution order:
+     * 执行顺序：
      * <ol>
-     *   <li>Strict Decoder (with self-healing retries)</li>
-     *   <li>Semantic Fuzzy Decoder (3-stage fuzzy pipeline)</li>
+     *   <li>严格解码器（含自愈重试）</li>
+     *   <li>语义模糊解码器（3 阶段模糊管线）</li>
      * </ol>
-     * If all strategies fail, throws {@link InstructionDecodeException}.
+     * 如果所有策略均失败，抛出 {@link InstructionDecodeException}。
      *
-     * @param llmOutput   the raw text output from the LLM
-     * @param targetClass the expected Java type
-     * @param llmProvider the LLM provider (for self-healing retries)
-     * @return the decoded object
-     * @throws InstructionDecodeException if all strategies fail
+     * @param llmOutput   LLM 的原始文本输出
+     * @param targetClass 期望的 Java 类型
+     * @param llmProvider LLM 提供者（用于自愈重试），可为 null
+     * @return 解码后的对象
+     * @throws InstructionDecodeException 所有策略均失败时抛出
      */
     public static <T> T decodeJson(String llmOutput, Class<T> targetClass, LlmProvider llmProvider) {
         log.info("[InstructionDecoder] Decoding: type={}, inputLen={}, strategies={}",
@@ -109,12 +99,11 @@ public class InstructionDecoder {
             } catch (Exception e) {
                 log.warn("[InstructionDecoder] Strategy '{}' threw exception: {}",
                         strategy.name(), e.getMessage());
-                // Continue to next strategy — don't let one strategy's exception
-                // crash the entire pipeline
+                // 继续尝试下一个策略 — 不让单个策略的异常导致整个管线崩溃
             }
         }
 
-        // All strategies exhausted — kernel panic
+        // 所有策略已耗尽 — 内核恐慌
         String fatalMsg = "All decode strategies failed for type " + targetClass.getSimpleName()
                 + ". Tried: " + strategyChain.stream().map(DecodeStrategy::name).toList();
         log.error("[InstructionDecoder] FATAL: {}", fatalMsg);
@@ -123,15 +112,13 @@ public class InstructionDecoder {
     }
 
     /**
-     * Decode without self-healing — tries each strategy once.
-     * <p>
-     * Useful when the caller doesn't have an LlmProvider available
-     * for self-healing retries.
+     * 不含自愈的解码 — 每个策略只尝试一次。
+     * 适用于调用方没有 LlmProvider 可用于自愈重试的场景。
      *
-     * @param llmOutput   the raw text output from the LLM
-     * @param targetClass the expected Java type
-     * @return the decoded object
-     * @throws InstructionDecodeException if all strategies fail
+     * @param llmOutput   LLM 的原始文本输出
+     * @param targetClass 期望的 Java 类型
+     * @return 解码后的对象
+     * @throws InstructionDecodeException 所有策略均失败时抛出
      */
     public static <T> T decodeJson(String llmOutput, Class<T> targetClass) {
         return decodeJson(llmOutput, targetClass, null);
@@ -142,11 +129,10 @@ public class InstructionDecoder {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Register a custom decode strategy into the pipeline.
-     * <p>
-     * Strategies are sorted by priority after registration.
+     * 注册自定义解码策略到管线中。
+     * 注册后策略会按优先级重新排序。
      *
-     * @param strategy the strategy to add
+     * @param strategy 要添加的策略
      */
     public static void registerStrategy(DecodeStrategy strategy) {
         strategyChain.add(strategy);
@@ -157,10 +143,10 @@ public class InstructionDecoder {
     }
 
     /**
-     * Remove a strategy by name.
+     * 按名称移除策略。
      *
-     * @param name the strategy name to remove
-     * @return true if a strategy was removed
+     * @param name 要移除的策略名称
+     * @return 是否成功移除
      */
     public static boolean removeStrategy(String name) {
         boolean removed = strategyChain.removeIf(s -> s.name().equals(name));
@@ -171,9 +157,7 @@ public class InstructionDecoder {
         return removed;
     }
 
-    /**
-     * Get the current pipeline configuration.
-     */
+    /** 获取当前管线配置的策略名称列表 */
     public static List<String> getPipelineNames() {
         return strategyChain.stream().map(DecodeStrategy::name).toList();
     }

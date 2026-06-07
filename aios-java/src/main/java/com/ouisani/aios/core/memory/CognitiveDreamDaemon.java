@@ -18,42 +18,38 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Cognitive Dream Daemon — the AIOS kernel's subconscious mind.
+ * 认知梦境守护进程 — AIOS 内核的潜意识。
  * <p>
- * In a traditional OS, the idle task (PID 0) simply halts the CPU
- * to save power. In AIOS, the idle task <b>dreams</b>.
- * <p>
- * <h3>Biological Inspiration: Sleep & Memory Consolidation</h3>
- * During human sleep, the hippocampus replays the day's experiences
- * and transfers important memories to the neocortex for long-term
- * storage. This process — called <b>memory consolidation</b> — is
- * what transforms fragile short-term memories into stable long-term
- * knowledge.
- * <p>
- * The CognitiveDreamDaemon implements this exact mechanism:
+ * 在传统 OS 中，空闲任务（PID 0）只是让 CPU 休眠以省电。
+ * 在 AIOS 中，空闲任务会<b>做梦</b>。
+ *
+ * <h3>生物学灵感：睡眠与记忆巩固</h3>
+ * 人类睡眠时，海马体会重播当天的经历，将重要记忆转移到
+ * 新皮层进行长期存储。这个过程称为<b>记忆巩固</b>，它将
+ * 脆弱的短期记忆转化为稳定的长期知识。
+ *
+ * <h3>AIOS 实现</h3>
+ * CognitiveDreamDaemon 实现了完全相同的机制：
  * <ol>
- *   <li><b>Scan</b>: Identifies short-term memories in the SemanticCache
- *       that are decaying (low retention score per the Ebbinghaus curve)</li>
- *   <li><b>Consolidate</b>: Uses a low-cost LLM call to summarize and
- *       extract causal relationships from these fragments</li>
- *   <li><b>Persist</b>: Writes the consolidated experience as an embedding
- *       into the VFS VectorNode at {@code /var/db/memory}</li>
- *   <li><b>Evict</b>: Releases the original cache entries, freeing
- *       cognitive capacity for new experiences</li>
+ *   <li><b>扫描</b>：识别语义缓存中正在衰减的短期记忆（艾宾浩斯曲线）</li>
+ *   <li><b>巩固</b>：使用低成本 LLM 调用总结和提取因果关系</li>
+ *   <li><b>持久化</b>：将巩固后的经验以向量形式写入 VFS 的 VectorNode</li>
+ *   <li><b>驱逐</b>：释放原始缓存条目，为新体验腾出认知空间</li>
  * </ol>
- * <p>
- * <h3>Spontaneous Ideas</h3>
- * During consolidation, if the daemon discovers a contradiction,
- * unresolved problem, or novel insight, it fires a
- * {@code spontaneous_idea} event via the EventBus — an asynchronous
- * interrupt that can wake a sleeping Agent to act on the insight.
- * This is the AIOS equivalent of a "eureka moment" during sleep.
- * <p>
- * <h3>Scheduling</h3>
- * The daemon runs at {@code ProcessPriority.IDLE} — it only executes
- * when no HIGH or NORMAL priority agents are active. The
- * {@link com.ouisani.aios.core.TaskScheduler TaskScheduler} triggers
- * this daemon when it detects system idle state.
+ *
+ * <h3>自发灵感</h3>
+ * 巩固过程中，如果发现矛盾、未解决问题或新颖洞见，
+ * 通过 EventBus 触发 {@code spontaneous_idea} 事件 —
+ * 类比睡眠中的"灵光一现"。
+ *
+ * <h3>OS 类比</h3>
+ * <table>
+ *   <tr><th>OS/生物学</th><th>AIOS</th><th>说明</th></tr>
+ *   <tr><td>空闲任务 (PID 0)</td><td>CognitiveDreamDaemon</td><td>系统空闲时运行</td></tr>
+ *   <tr><td>海马体重播</td><td>consolidateMemories()</td><td>短期→长期记忆</td></tr>
+ *   <tr><td>新皮层存储</td><td>/var/db/memory (VectorNode)</td><td>持久化向量存储</td></tr>
+ *   <tr><td>灵光一现</td><td>spontaneous_idea 事件</td><td>潜意识发现</td></tr>
+ * </table>
  *
  * @see SemanticCacheManager
  * @see BionicCognitiveStrategy
@@ -76,19 +72,19 @@ public final class CognitiveDreamDaemon {
 
     // ── Configuration ──
 
-    /** How often to check for idle state and trigger a dream cycle (seconds). */
+    /** 梦境周期检查间隔（秒） */
     private static final long DREAM_CYCLE_INTERVAL_SEC = 30;
 
-    /** Minimum number of decaying entries to trigger consolidation. */
+    /** 触发巩固的最少衰减条目数 */
     private static final int MIN_DECAYING_ENTRIES = 2;
 
-    /** Retention threshold below which a cache entry is considered "decaying". */
+    /** 保留分数阈值 — 低于此值的缓存条目被视为"正在衰减" */
     private static final double RETENTION_THRESHOLD = 0.3;
 
-    /** VFS path for persistent memory storage. */
+    /** 持久化记忆的 VFS 路径 */
     private static final String MEMORY_DB_PATH = "/var/db/memory";
 
-    /** LLM prompt for memory consolidation. */
+    /** 记忆巩固的 LLM 提示词模板 */
     private static final String CONSOLIDATION_PROMPT =
             "你是一个认知科学家的潜意识。以下是一些零散的短期记忆碎片。"
             + "请提炼出1-3条核心经验或因果关系，每条不超过50字。"
@@ -115,18 +111,14 @@ public final class CognitiveDreamDaemon {
     //  Lifecycle
     // ════════════════════════════════════════════════════════════════
 
-    /**
-     * Configure the daemon with an LLM provider for consolidation.
-     */
+    /** 配置 LLM Provider — 用于记忆巩固时的摘要生成。 */
     public void configure(LlmProvider llmProvider) {
         this.llmProvider = llmProvider;
         log.info("[DreamDaemon] Configured with LlmProvider: {}",
                 llmProvider != null ? llmProvider.name() : "null");
     }
 
-    /**
-     * Start the dream daemon's periodic cycle.
-     */
+    /** 启动梦境守护进程的周期性循环。 */
     public void start() {
         if (!running.compareAndSet(false, true)) {
             return; // already running
@@ -149,9 +141,7 @@ public final class CognitiveDreamDaemon {
         System.out.println("  \u001B[35m[DreamDaemon] Cognitive dream daemon started. The system now dreams.\u001B[0m");
     }
 
-    /**
-     * Stop the dream daemon.
-     */
+    /** 停止梦境守护进程。 */
     public void stop() {
         if (!running.compareAndSet(true, false)) {
             return;
@@ -186,12 +176,10 @@ public final class CognitiveDreamDaemon {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Execute one dream cycle: scan → consolidate → persist → evict.
+     * 执行一次梦境周期：扫描 → 巩固 → 持久化 → 驱逐。
      * <p>
-     * This is the AIOS equivalent of a single REM sleep cycle.
-     * The daemon scans the SemanticCache for decaying memories,
-     * consolidates them via LLM, persists the result, and releases
-     * the original entries.
+     * 类比一次 REM 睡眠周期：扫描语义缓存中的衰减记忆，
+     * 通过 LLM 巩固，持久化结果，释放原始条目。
      */
     private void dreamCycle() {
         if (!running.get() || dreaming.get()) return;
@@ -258,10 +246,7 @@ public final class CognitiveDreamDaemon {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Scan the SemanticCache for entries whose retention score
-     * (per the Ebbinghaus forgetting curve) has fallen below the
-     * threshold — these are the "fading memories" that need
-     * consolidation before they're lost forever.
+     * 扫描语义缓存中保留分数低于阈值的条目 — 这些是"正在消退的记忆"。
      */
     private List<SemanticCacheManager.CacheEntry> scanDecayingMemories(SemanticCacheManager cacheMgr) {
         List<SemanticCacheManager.CacheEntry> decaying = new ArrayList<>();
@@ -287,15 +272,10 @@ public final class CognitiveDreamDaemon {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Consolidate decaying memories by asking the LLM to summarize
-     * and extract causal relationships.
+     * 通过 LLM 巩固衰减记忆 — 类比海马体在慢波睡眠中的重播。
      * <p>
-     * This is the neural equivalent of hippocampal replay during
-     * slow-wave sleep: the brain reactivates recent experiences,
-     * extracts their gist, and transfers them to the neocortex.
-     * <p>
-     * We use a low-cost LLM call (or the fast_model if available)
-     * to keep the cognitive overhead minimal.
+     * 将零散的短期记忆碎片交给 LLM 提炼核心经验和因果关系，
+     * 使用低成本 LLM 调用以保持认知开销最小。
      */
     private String consolidateMemories(List<SemanticCacheManager.CacheEntry> entries) {
         if (llmProvider == null) {
@@ -335,13 +315,9 @@ public final class CognitiveDreamDaemon {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Persist the consolidated experience into the VFS VectorNode
-     * at {@code /var/db/memory}.
+     * 将巩固后的经验持久化到 VFS VectorNode ({@code /var/db/memory})。
      * <p>
-     * This is the neural equivalent of transferring a memory from
-     * the hippocampus (short-term) to the neocortex (long-term).
-     * The VectorNode stores both the text and its embedding, enabling
-     * future semantic retrieval.
+     * 类比将记忆从海马体（短期）转移到新皮层（长期）。
      */
     private void persistConsolidatedMemory(String consolidated) {
         VfsManager vfs = VfsManager.instance();
@@ -376,11 +352,7 @@ public final class CognitiveDreamDaemon {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Remove the consolidated entries from the SemanticCache.
-     * <p>
-     * After consolidation, the original short-term memories are no
-     * longer needed — their essence has been captured in the
-     * long-term VectorNode. Freeing them makes room for new experiences.
+     * 驱逐已巩固的缓存条目 — 释放认知空间。
      */
     private void evictConsolidatedEntries(SemanticCacheManager cacheMgr,
                                           List<SemanticCacheManager.CacheEntry> entries) {
@@ -400,13 +372,9 @@ public final class CognitiveDreamDaemon {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Analyze the consolidated memory for contradictions, unresolved
-     * problems, or novel insights. If found, fire a
-     * {@code spontaneous_idea} event via the EventBus.
-     * <p>
-     * This is the AIOS equivalent of a "eureka moment" during sleep —
-     * the subconscious mind discovers something important and wakes
-     * the conscious mind to act on it.
+     * 分析巩固后的记忆，检测矛盾、未解决问题或新颖洞见。
+     * 如果发现，通过 EventBus 触发 {@code spontaneous_idea} 事件 —
+     * 类比睡眠中的"灵光一现"。
      */
     private void checkForSpontaneousIdeas(String consolidated) {
         if (consolidated == null || consolidated.isBlank()) return;
@@ -463,17 +431,13 @@ public final class CognitiveDreamDaemon {
     //  Public API: Manual Trigger & Diagnostics
     // ════════════════════════════════════════════════════════════════
 
-    /**
-     * Manually trigger a dream cycle (for testing or admin use).
-     */
+    /** 手动触发一次梦境周期（用于测试或管理操作）。 */
     public void triggerDreamCycle() {
         log.info("[DreamDaemon] Manual dream cycle triggered");
         dreamCycle();
     }
 
-    /**
-     * Get daemon statistics.
-     */
+    /** 获取守护进程统计数据。 */
     public Map<String, Object> stats() {
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put("running", running.get());

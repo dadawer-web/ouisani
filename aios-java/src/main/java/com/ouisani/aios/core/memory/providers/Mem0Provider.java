@@ -11,30 +11,30 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 
 /**
- * Mem0 cloud memory driver — production-grade HTTP client that talks
- * directly to the Mem0 vector database API.
+ * Mem0 云端记忆驱动 — 生产级 HTTP 客户端，直接对接 Mem0 向量数据库 API。
  * <p>
- * This is NOT a mock. Every method issues a real network request to
- * {@code https://api.mem0.ai/v1/memories/} using Java 11+ native
- * {@link HttpClient}. The API key is read from the environment variable
- * {@code MEM0_API_KEY} at construction time.
- * <p>
- * <h3>API Contract:</h3>
+ * 这不是 Mock。每个方法都发出真实的网络请求到
+ * {@code https://api.mem0.ai/v1/memories/}，使用 Java 11+ 原生
+ * {@link HttpClient}。API 密钥从环境变量 {@code MEM0_API_KEY} 读取。
+ *
+ * <h3>API 契约</h3>
  * <ul>
- *   <li><b>store</b> → {@code POST /v1/memories/} with JSON payload</li>
- *   <li><b>retrieve</b> → {@code POST /v1/memories/search/} with vector search payload</li>
- *   <li><b>clear</b> → {@code DELETE /v1/memories/} filtered by user_id</li>
+ *   <li><b>store</b> → {@code POST /v1/memories/} JSON 载荷</li>
+ *   <li><b>retrieve</b> → {@code POST /v1/memories/search/} 向量搜索载荷</li>
+ *   <li><b>clear</b> → {@code DELETE /v1/memories/} 按 user_id 过滤</li>
  * </ul>
+ *
+ * @see MemoryProvider
  */
 public class Mem0Provider implements MemoryProvider {
 
     private static final Logger log = LoggerFactory.getLogger(Mem0Provider.class);
 
-    // ── Mem0 API Endpoints ──
+    // ── Mem0 API 端点 ──
     private static final String API_URL = "https://api.mem0.ai/v1/memories/";
     private static final String SEARCH_URL = "https://api.mem0.ai/v1/memories/search/";
 
-    // ── ANSI color codes for terminal output ──
+    // ── ANSI 终端颜色码 ──
     private static final String ANSI_GREEN = "\u001B[32m";
     private static final String ANSI_RED = "\u001B[31m";
     private static final String ANSI_RESET = "\u001B[0m";
@@ -214,17 +214,10 @@ public class Mem0Provider implements MemoryProvider {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Extract the most relevant text content from the Mem0 search response.
+     * 从 Mem0 搜索响应中提取最相关的文本内容。
      * <p>
-     * Mem0 search returns a JSON array of memory objects, each containing
-     * a {@code "memory"} field with the text content. We concatenate all
-     * results into a single string.
-     * <pre>
-     * [
-     *   {"id": "...", "memory": "relevant text here", "score": 0.95, ...},
-     *   {"id": "...", "memory": "another relevant fact", "score": 0.82, ...}
-     * ]
-     * </pre>
+     * Mem0 搜索返回 JSON 数组，每个对象包含 {@code "memory"} 字段。
+     * 手动解析 JSON 以避免引入第三方依赖。
      */
     private String extractSearchResults(String responseBody) {
         if (responseBody == null || responseBody.isEmpty() || responseBody.equals("[]")) {
@@ -266,9 +259,7 @@ public class Mem0Provider implements MemoryProvider {
         return result.toString();
     }
 
-    /**
-     * Find the closing quote of a JSON string value, handling escaped quotes.
-     */
+    /** 查找 JSON 字符串值的闭合引号，处理转义引号。 */
     private int findClosingQuote(String json, int fromIndex) {
         int i = fromIndex;
         while (i < json.length()) {

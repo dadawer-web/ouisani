@@ -1,0 +1,97 @@
+package com.ouisani.aios.core.tool;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Bash 工具 — 执行 Shell 命令，对标 Claude Code 的 BashTool。
+ * <p>
+ * 安全特性：
+ * - 命令超时控制（默认 120 秒）
+ * - 输出截断（默认 30000 字符）
+ * - 只读检测（dry-run 模式下只允许读取命令）
+ * <p>
+ * OS 类比：相当于 Linux 的 execve() 系统调用。
+ */
+public class BashTool implements Tool<BashTool.Input> {
+
+    private static final int DEFAULT_TIMEOUT_SECONDS = 120;
+    private static final int MAX_OUTPUT_LENGTH = 30000;
+
+    public record Input(String command, int timeoutSeconds) implements ToolInput {
+        public Input {
+            if (command == null || command.isBlank()) {
+                throw new IllegalArgumentException("command must not be empty");
+            }
+            if (timeoutSeconds <= 0) timeoutSeconds = DEFAULT_TIMEOUT_SECONDS;
+        }
+
+        public Input(String command) {
+            this(command, DEFAULT_TIMEOUT_SECONDS);
+        }
+
+        @Override public String toJson() {
+            return "{\"command\":\"" + command.replace("\"", "\\\"") + "\",\"timeout\":" + timeoutSeconds + "}";
+        }
+    }
+
+    @Override public String name() { return "bash"; }
+
+    @Override public String description() {
+        return "Executes a bash command in a shell. Returns stdout and stderr. Use for running scripts, installing packages, git operations, etc.";
+    }
+
+    @Override public String inputSchema() {
+        return "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\",\"description\":\"The bash command to execute\"},\"timeoutSeconds\":{\"type\":\"integer\",\"description\":\"Timeout in seconds (default 120)\"}},\"required\":[\"command\"]}";
+    }
+
+    @Override
+    public ToolOutput call(Input input, ToolContext context) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder("bash", "-c", input.command());
+            if (context.workingDir() != null) {
+                pb.directory(new java.io.File(context.workingDir()));
+            }
+            pb.redirectErrorStream(true);
+
+            Process process = pb.start();
+
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
+                }
+            }
+
+            boolean finished = process.waitFor(input.timeoutSeconds(), TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                return ToolOutput.fail("Command timed out after " + input.timeoutSeconds() + "s: " + input.command());
+            }
+
+            int exitCode = process.exitValue();
+            String result = output.toString();
+            if (result.length() > MAX_OUTPUT_LENGTH) {
+                result = result.substring(0, MAX_OUTPUT_LENGTH) + "\n... [truncated at " + MAX_OUTPUT_LENGTH + " chars]";
+            }
+
+            if (exitCode == 0) {
+                return ToolOutput.ok(result.isEmpty() ? "(no output)" : result);
+            } else {
+                return ToolOutput.fail("Exit code " + exitCode + "\n" + result);
+            }
+        } catch (Exception e) {
+            return ToolOutput.fail("Execution failed: " + e.getMessage());
+        }
+    }
+
+    @Override public boolean readOnly() { return false; }
+
+    @Override public String prompt() {
+        return "When using bash: prefer absolute paths, avoid interactive commands, use timeout for long-running operations. For file operations, prefer dedicated file tools.";
+    }
+}

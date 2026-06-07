@@ -10,30 +10,33 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * AIOS Package Manager (AiosApt) — installs and hot-loads WASM plugins
- * from a simulated remote registry into the local plugin directory.
+ * AIOS 包管理器（AiosApt）— 从模拟远程仓库安装并热加载 WASM 插件到本地插件目录。
  * <p>
- * Usage:
+ * OS 类比：相当于 apt-get / yum — 从远程仓库下载软件包并安装到本地系统。
+ * 在 AIOS 中，"软件包"是 WASM 插件，"安装"意味着下载字节码并热加载到 PluginManager。
+ * <p>
+ * 使用示例：
  * <pre>
- *   AiosApt.install("math_tool");     // downloads & registers tool.math_tool
- *   AiosApt.install("translator");    // downloads & registers tool.translator
+ *   AiosApt.install("math_tool");     // 下载并注册 tool.math_tool
+ *   AiosApt.install("translator");    // 下载并注册 tool.translator
  * </pre>
  */
 public final class AiosApt {
 
     private static final Logger log = LoggerFactory.getLogger(AiosApt.class);
 
+    /** 插件本地安装目录 */
     private static final String PLUGIN_DIR = "/opt/aios/plugins";
+    /** 远程插件仓库 URL */
     private static final String REGISTRY_URL = "https://registry.aios.dev/plugins";
 
     private AiosApt() {}
 
     /**
-     * Install a plugin by name. Simulates downloading a .wasm file
-     * from the remote registry, saving it locally, and hot-loading
-     * it into the PluginManager.
+     * 按名称安装插件。模拟从远程仓库下载 .wasm 文件，
+     * 保存到本地，并热加载到 PluginManager。
      *
-     * @param pluginUrl the plugin name or URL (e.g. "math_tool")
+     * @param pluginUrl 插件名称或 URL（如 "math_tool"）
      */
     public static void install(String pluginUrl) {
         if (pluginUrl == null || pluginUrl.isBlank()) {
@@ -84,7 +87,7 @@ public final class AiosApt {
     }
 
     /**
-     * Remove a plugin by name.
+     * 按名称卸载插件。
      */
     public static void remove(String packageName) {
         String wasmFileName = packageName + ".wasm";
@@ -101,7 +104,7 @@ public final class AiosApt {
     }
 
     /**
-     * List all installed plugins.
+     * 列出所有已安装的插件。
      */
     public static String list() {
         var plugins = PluginManager.getInstance().registeredPlugins();
@@ -117,8 +120,7 @@ public final class AiosApt {
     }
 
     /**
-     * Simulate downloading a WASM plugin from a remote registry.
-     * Generates a minimal valid WASM module.
+     * 模拟从远程仓库下载 WASM 插件。生成一个最小有效 WASM 模块。
      */
     private static byte[] simulateDownload(String packageName) {
         byte[] wasmHeader = new byte[]{

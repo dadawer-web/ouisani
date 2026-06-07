@@ -32,6 +32,33 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * AIOS 系统调用网关服务器 — 基于 Javalin 的 HTTP/WebSocket 服务器，
+ * 提供内核系统调用的网络入口。
+ * <p>
+ * OS 类比：相当于内核的 syscall 接口 + /proc + /dev 的网络暴露层 —
+ * 外部程序通过 HTTP POST 发起系统调用，通过 WebSocket 访问设备节点，
+ * 通过 SSE 订阅内核事件流。
+ * <p>
+ * 主要端点：
+ * <ul>
+ *   <li>POST /syscall/spawn — Agent 生成端点</li>
+ *   <li>POST /syscall/exec — 通用系统调用执行端点</li>
+ *   <li>SSE  /kernel/stream — 实时内核事件总线</li>
+ *   <li>WS   /ws/monitor — 仪表盘指标 WebSocket</li>
+ *   <li>WS   /ws/dev/{name} — 全双工 VFS 桥接</li>
+ *   <li>WS   /ws/remote/{id} — 远程设备自动挂载</li>
+ *   <li>WS   /ws/display — 语义显示服务器（渲染推送）</li>
+ *   <li>WS   /ws/gui/action — GUI 输入事件</li>
+ *   <li>SSE  /mcp/sse — MCP 协议 SSE 通道</li>
+ *   <li>POST /mcp/message — MCP JSON-RPC 消息端点</li>
+ *   <li>POST /snapshot/create — 创建进程快照</li>
+ *   <li>POST /snapshot/restore — 从快照恢复进程</li>
+ *   <li>POST /migration/checkpoint — 准备热迁移</li>
+ *   <li>POST /migration/restore — 接收迁移的 Agent</li>
+ *   <li>WS   /ws/migration — 热迁移 WebSocket</li>
+ * </ul>
+ */
 public class SyscallServer {
 
     private static final Logger log = LoggerFactory.getLogger(SyscallServer.class);
@@ -640,6 +667,12 @@ public class SyscallServer {
 
         // ── App Gateway: bridge external UIs to application stdin/stdout ──
         AppGateway.attachTo(app);
+
+        // ── Template Manager: inject BaseAgent.py into VFS ──
+        com.ouisani.aios.user.apps.omnifactory.TemplateManager.initTemplates();
+
+        // ── Tool Registry: register all builtin tools (Claude Code capability) ──
+        com.ouisani.aios.core.tool.ToolRegistry.registerBuiltinTools();
 
         app.start(port);
 

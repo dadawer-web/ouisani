@@ -9,32 +9,27 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
- * Semantic Memory Block — a structured shared memory segment that goes
- * beyond simple key-value pairs to support high-dimensional vectors
- * and context pointers for cross-agent "subconscious" communication.
+ * 语义内存块 — 超越简单键值对的结构化共享内存段，
+ * 支持高维向量和上下文指针，用于跨 Agent 的"潜意识"通信。
  * <p>
- * In a traditional OS, shared memory is just raw bytes. In AIOS, we
- * elevate this to a <b>semantic</b> memory block that can store:
+ * 传统 OS 的共享内存只是原始字节。AIOS 将其提升为<b>语义</b>内存块，
+ * 可以存储：
  * <ul>
- *   <li><b>String data</b> — traditional key-value pairs (like POSIX shm)</li>
- *   <li><b>Context Pointers</b> — references to LLM conversation contexts,
- *       enabling one agent to point another to relevant context without
- *       copying the entire conversation</li>
- *   <li><b>Vector Embeddings</b> — high-dimensional float arrays that
- *       represent semantic meaning, enabling "subconscious" knowledge
- *       transfer between agents without explicit text exchange</li>
+ *   <li><b>字符串数据</b> — 传统键值对（类似 POSIX shm）</li>
+ *   <li><b>上下文指针</b> — 指向 LLM 对话上下文的引用，
+ *       使一个 Agent 可以将另一个 Agent 指向相关上下文，而无需复制整个对话</li>
+ *   <li><b>向量嵌入</b> — 高维浮点数组，表示语义含义，
+ *       实现 Agent 间的"潜意识"知识传递，无需显式文本交换</li>
  * </ul>
- * <p>
- * <h3>Analogy: mmap() for Neural Memory</h3>
- * Just as {@code mmap()} maps a file into a process's address space
- * for zero-copy sharing, a {@code SemanticMemoryBlock} maps neural
- * representations into an agent's "cognitive address space" for
- * zero-copy subconscious sharing.
- * <p>
- * <h3>Versioning</h3>
- * Each write increments a version counter. Readers can check the
- * version to detect changes without reading the entire block — this
- * is the foundation of the SIG_CONTEXT_UPDATE interrupt mechanism.
+ *
+ * <h3>OS 类比: mmap() 与神经记忆</h3>
+ * 就像 {@code mmap()} 将文件映射到进程地址空间实现零拷贝共享，
+ * {@code SemanticMemoryBlock} 将神经表示映射到 Agent 的"认知地址空间"，
+ * 实现零拷贝的潜意识共享。
+ *
+ * <h3>版本控制</h3>
+ * 每次写入递增版本计数器。读者可以通过比较版本号检测变更，
+ * 而无需读取整个块 — 这是 SIG_CONTEXT_UPDATE 中断机制的基础。
  *
  * @see SharedMemoryManager
  * @see SignalType#SIG_CONTEXT_UPDATE
@@ -43,31 +38,31 @@ public final class SemanticMemoryBlock {
 
     private static final Logger log = LoggerFactory.getLogger(SemanticMemoryBlock.class);
 
-    // ── Block Identity ──
+    // ── 块标识 ──
 
     private final String blockId;
     private final long createdAt;
     private volatile long lastModifiedAt;
 
-    // ── Version Counter (for change detection) ──
+    // ── 版本计数器（用于变更检测） ──
 
     private final AtomicLong version = new AtomicLong(0);
 
-    // ── Data Stores ──
+    // ── 数据存储 ──
 
-    /** Traditional key-value string data (POSIX shm style). */
+    /** 传统键值字符串数据（POSIX shm 风格） */
     private final ConcurrentHashMap<String, String> stringData = new ConcurrentHashMap<>();
 
-    /** Context pointers — references to LLM conversation contexts. */
+    /** 上下文指针 — 指向 LLM 对话上下文的引用 */
     private final ConcurrentHashMap<String, ContextPointer> contextPointers = new ConcurrentHashMap<>();
 
-    /** Vector embeddings — high-dimensional semantic representations. */
+    /** 向量嵌入 — 高维语义表示 */
     private final ConcurrentHashMap<String, float[]> vectorData = new ConcurrentHashMap<>();
 
-    /** Metadata — block-level tags (owner, project, status, etc.). */
+    /** 元数据 — 块级标签（owner, project, status 等） */
     private final ConcurrentHashMap<String, String> metadata = new ConcurrentHashMap<>();
 
-    // ── Access Control ──
+    // ── 访问控制 ──
 
     private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
     private volatile int ownerPid = -1;
@@ -85,12 +80,10 @@ public final class SemanticMemoryBlock {
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  String Data (Traditional SHM)
+    //  字符串数据（传统 SHM）
     // ════════════════════════════════════════════════════════════════
 
-    /**
-     * Write a string key-value pair (analogous to shm_write).
-     */
+    /** 写入字符串键值对（类比 shm_write） */
     public void putString(String key, String value) {
         rwLock.writeLock().lock();
         try {
@@ -101,9 +94,7 @@ public final class SemanticMemoryBlock {
         }
     }
 
-    /**
-     * Read a string value by key (analogous to shm_read).
-     */
+    /** 读取字符串值（类比 shm_read） */
     public String getString(String key) {
         rwLock.readLock().lock();
         try {
@@ -113,9 +104,7 @@ public final class SemanticMemoryBlock {
         }
     }
 
-    /**
-     * Bulk write multiple string key-value pairs.
-     */
+    /** 批量写入多个字符串键值对 */
     public void putStrings(Map<String, String> entries) {
         rwLock.writeLock().lock();
         try {
@@ -126,30 +115,25 @@ public final class SemanticMemoryBlock {
         }
     }
 
-    /**
-     * Get all string keys.
-     */
+    /** 获取所有字符串键 */
     public Set<String> stringKeys() {
         return Collections.unmodifiableSet(stringData.keySet());
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Context Pointers (Neural mmap)
+    //  上下文指针（神经 mmap）
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Write a context pointer — a reference to an LLM conversation
-     * context that another agent can dereference.
+     * 写入上下文指针 — 指向 LLM 对话上下文的引用，供其他 Agent 解引用。
      * <p>
-     * This is the neural equivalent of {@code mmap()}: instead of
-     * copying the entire conversation, the PM agent writes a pointer
-     * to its context, and the Coder agent can dereference it to
-     * access the full context on demand.
+     * 类比 {@code mmap()}：PM Agent 不复制整个对话，而是写入指向其上下文的指针，
+     * Coder Agent 可以按需解引用获取完整上下文。
      *
-     * @param key           the pointer name (e.g., "prd_context")
-     * @param contextRef    a reference identifier (e.g., a VFS path or UUID)
-     * @param summary       a brief summary of the context (for quick scanning)
-     * @param embeddingHash a hash of the context's embedding (for similarity checks)
+     * @param key           指针名称（如 "prd_context"）
+     * @param contextRef    引用标识（如 VFS 路径或 UUID）
+     * @param summary       上下文摘要（用于快速浏览）
+     * @param embeddingHash 上下文嵌入的哈希值（用于相似性检查）
      */
     public void putContextPointer(String key, String contextRef, String summary, long embeddingHash) {
         rwLock.writeLock().lock();
@@ -161,9 +145,7 @@ public final class SemanticMemoryBlock {
         }
     }
 
-    /**
-     * Read a context pointer by key.
-     */
+    /** 读取上下文指针 */
     public ContextPointer getContextPointer(String key) {
         rwLock.readLock().lock();
         try {
@@ -173,37 +155,30 @@ public final class SemanticMemoryBlock {
         }
     }
 
-    /**
-     * Get all context pointer keys.
-     */
+    /** 获取所有上下文指针键 */
     public Set<String> contextPointerKeys() {
         return Collections.unmodifiableSet(contextPointers.keySet());
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Vector Embeddings (Subconscious Transfer)
+    //  向量嵌入（潜意识传递）
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Write a vector embedding — a high-dimensional float array
-     * representing semantic meaning.
+     * 写入向量嵌入 — 表示语义含义的高维浮点数组。
      * <p>
-     * This enables "subconscious" knowledge transfer: the PM agent
-     * writes its understanding of the product requirements as a vector,
-     * and the Coder agent can read this vector to align its code
-     * generation strategy without ever seeing the raw text.
+     * 实现"潜意识"知识传递：PM Agent 将对产品需求的理解写入向量，
+     * Coder Agent 读取此向量来对齐代码生成策略，而无需看到原始文本。
      * <p>
-     * Think of it as the neural equivalent of shared memory for
-     * spatial representations — like how the hippocampus and neocortex
-     * share compressed memory traces during sleep consolidation.
+     * 类比海马体和新皮层在睡眠巩固期间共享压缩记忆痕迹的方式。
      *
-     * @param key      the vector name (e.g., "prd_embedding")
-     * @param embedding the float array (typically 768 or 1536 dimensions)
+     * @param key      向量名称（如 "prd_embedding"）
+     * @param embedding 浮点数组（通常 768 或 1536 维）
      */
     public void putVector(String key, float[] embedding) {
         rwLock.writeLock().lock();
         try {
-            vectorData.put(key, embedding.clone()); // defensive copy
+            vectorData.put(key, embedding.clone()); // 防御性拷贝
             touch();
         } finally {
             rwLock.writeLock().unlock();
@@ -211,9 +186,9 @@ public final class SemanticMemoryBlock {
     }
 
     /**
-     * Read a vector embedding by key.
+     * 读取向量嵌入。
      *
-     * @return a defensive copy of the embedding, or null if not found
+     * @return 防御性拷贝的嵌入数组，若不存在则返回 null
      */
     public float[] getVector(String key) {
         rwLock.readLock().lock();
@@ -225,15 +200,13 @@ public final class SemanticMemoryBlock {
         }
     }
 
-    /**
-     * Get all vector keys.
-     */
+    /** 获取所有向量键 */
     public Set<String> vectorKeys() {
         return Collections.unmodifiableSet(vectorData.keySet());
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Metadata
+    //  元数据
     // ════════════════════════════════════════════════════════════════
 
     public void setMetadata(String key, String value) { metadata.put(key, value); }
@@ -241,29 +214,26 @@ public final class SemanticMemoryBlock {
     public Map<String, String> allMetadata() { return Collections.unmodifiableMap(metadata); }
 
     // ════════════════════════════════════════════════════════════════
-    //  Version & Change Detection
+    //  版本与变更检测
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Get the current version number. Incremented on every write.
+     * 获取当前版本号。每次写入递增。
      * <p>
-     * Agents can compare versions to detect changes without reading
-     * the entire block — this is the foundation of the
-     * SIG_CONTEXT_UPDATE interrupt mechanism.
+     * Agent 可以通过比较版本号检测变更，而无需读取整个块 —
+     * 这是 SIG_CONTEXT_UPDATE 中断机制的基础。
      */
     public long version() {
         return version.get();
     }
 
-    /**
-     * Check if the block has been updated since a given version.
-     */
+    /** 检查块是否在给定版本之后被更新过 */
     public boolean hasChangedSince(long lastSeenVersion) {
         return version.get() > lastSeenVersion;
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Diagnostics
+    //  诊断信息
     // ════════════════════════════════════════════════════════════════
 
     public String blockId() { return blockId; }
@@ -275,9 +245,7 @@ public final class SemanticMemoryBlock {
     public int contextPointerCount() { return contextPointers.size(); }
     public int vectorCount() { return vectorData.size(); }
 
-    /**
-     * Dump the block's string data as a JSON-like string.
-     */
+    /** 将块的字符串数据导出为 JSON 格式 */
     public String dump() {
         rwLock.readLock().lock();
         try {
@@ -315,7 +283,9 @@ public final class SemanticMemoryBlock {
         }
     }
 
-    // ── Internal ──
+    // ── 内部方法 ──
+
+    /** 递增版本号并更新修改时间 */
 
     private void touch() {
         this.version.incrementAndGet();
@@ -328,22 +298,20 @@ public final class SemanticMemoryBlock {
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Context Pointer Record
+    //  上下文指针记录
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * A context pointer — a lightweight reference to an LLM conversation
-     * context stored elsewhere (e.g., in VFS or the Vector Memory).
+     * 上下文指针 — 指向存储在其他位置（如 VFS 或向量记忆）的 LLM 对话上下文的轻量引用。
      * <p>
-     * Instead of copying the entire context between agents, we pass
-     * a pointer that the receiving agent can dereference on demand.
-     * This is the neural equivalent of a memory pointer in C:
-     * the address is cheap to copy, the data is accessed only when needed.
+     * 不在 Agent 之间复制整个上下文，而是传递一个指针，
+     * 接收 Agent 可以按需解引用。类比 C 语言的内存指针：
+     * 地址复制很廉价，数据只在需要时才访问。
      *
-     * @param contextRef    the reference (VFS path, UUID, etc.)
-     * @param summary       a brief summary of the context
-     * @param embeddingHash a hash of the context's embedding for quick comparison
-     * @param timestamp     when this pointer was created
+     * @param contextRef    引用标识（VFS 路径、UUID 等）
+     * @param summary       上下文摘要
+     * @param embeddingHash 上下文嵌入的哈希值，用于快速比较
+     * @param timestamp     指针创建时间
      */
     public record ContextPointer(
             String contextRef,

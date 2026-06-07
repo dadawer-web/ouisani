@@ -6,6 +6,16 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * VFS 节点接口 — AIOS 虚拟文件系统中所有文件/设备/目录的统一抽象。
+ * <p>
+ * 类比 Linux VFS 的 inode：每个 VfsNode 代表一个虚拟文件系统对象，
+ * 提供统一的 read/write/path/permissions 接口。
+ * 通过 sealed interface 限制实现类型，确保只有预定义的节点类型可以存在。
+ * <p>
+ * 内置实现：FileNode（普通文件）、DirectoryNode（目录）、ExecutableNode（可执行文件）；
+ * 外部扩展实现：SemanticNode、VectorNode、CameraNode 等特殊设备节点。
+ */
 public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
         VfsNode.ExecutableNode, com.ouisani.aios.vfs.PipeNode,
         com.ouisani.aios.vfs.SemanticNode, com.ouisani.aios.vfs.WebSocketNode,
@@ -23,6 +33,7 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
 
     Logger log = LoggerFactory.getLogger(VfsNode.class);
 
+    /** VFS 节点类型枚举 — 类比 Linux inode 的文件类型（S_IFREG, S_IFDIR 等） */
     enum VfsNodeType {
         FILE, DIRECTORY, EXECUTABLE, DEVICE, PIPE, WASM, VECTOR,
         GRAPH, CAMERA, WEBHOOK, DISPLAY, AUDIO, SEMANTIC, REMOTE_DEVICE
@@ -58,24 +69,42 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
         return new com.ouisani.aios.vfs.ShadowCopyNode(frozenPath, this.nodeType(), frozenContent, this.ownerUid());
     }
 
+    /**
+     * 读权限检查 — 类比 Linux 的 inode_permission() + MAY_READ。
+     * <p>
+     * 权限模型采用 Unix 风格三位权限（owner/group/other）：
+     * UID 0（root）始终通过；owner 检查 0400 位；other 检查 0004 位。
+     *
+     * @param callerUid 调用者 UID
+     * @return true 有读权限
+     */
     default boolean checkRead(int callerUid) {
         if (callerUid == 0) return true;
         if (callerUid == ownerUid()) return (permissions() & 0400) != 0;
         return (permissions() & 0004) != 0;
     }
 
+    /**
+     * 写权限检查 — 类比 Linux 的 inode_permission() + MAY_WRITE。
+     * owner 检查 0200 位，other 检查 0002 位。
+     */
     default boolean checkWrite(int callerUid) {
         if (callerUid == 0) return true;
         if (callerUid == ownerUid()) return (permissions() & 0200) != 0;
         return (permissions() & 0002) != 0;
     }
 
+    /**
+     * 执行权限检查 — 类比 Linux 的 inode_permission() + MAY_EXEC。
+     * owner 检查 0100 位，other 检查 0001 位。
+     */
     default boolean checkExecute(int callerUid) {
         if (callerUid == 0) return true;
         if (callerUid == ownerUid()) return (permissions() & 0100) != 0;
         return (permissions() & 0001) != 0;
     }
 
+    /** 普通文件节点 — 类比 Linux 的常规文件（S_IFREG），默认权限 0644 */
     record FileNode(String path, int ownerUid, int permissions) implements VfsNode {
 
         public FileNode(String path) {
@@ -118,6 +147,7 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
         }
     }
 
+    /** 目录节点 — 类比 Linux 的目录文件（S_IFDIR），默认权限 0755，不可写入 */
     non-sealed class DirectoryNode implements VfsNode {
 
         private final String path;
@@ -193,6 +223,7 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
         }
     }
 
+    /** 可执行文件节点 — 类比 Linux 的可执行文件（S_IXUSR），read 返回源码，execute 执行逻辑 */
     non-sealed class ExecutableNode implements VfsNode {
 
         private final String path;

@@ -8,29 +8,35 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Rate-limiting syscall filter — token-bucket algorithm.
+ * 限速系统调用过滤器 — 令牌桶算法。
  * <p>
- * Limits each non-privileged Agent to at most {@code maxPermitsPerSecond}
- * syscalls per second. REALTIME and HIGH priority agents are exempt
- * (kernel agents should never be throttled).
+ * 限制每个非特权 Agent 每秒最多发起 {@code maxPermitsPerSecond} 次系统调用。
+ * REALTIME 和 HIGH 优先级 Agent 豁免限速（内核 Agent 不应被节流）。
  *
- * <h3>Token Bucket Algorithm:</h3>
+ * <h3>OS 类比: Linux Seccomp 速率限制 + tc 令牌桶</h3>
+ * Linux 的流量控制 (tc) 使用令牌桶过滤器 (Token Bucket Filter) 限制网络带宽，
+ * Seccomp 可以限制系统调用频率。RateLimitSyscallFilter 将两者融合：
+ * 用令牌桶算法限制 Agent 的系统调用频率，防止资源滥用。
+ *
+ * <h3>令牌桶算法：</h3>
  * <ul>
- *   <li>Each agent gets its own bucket of tokens.</li>
- *   <li>Tokens refill at a steady rate (maxPermitsPerSecond / refillIntervalMs per tick).</li>
- *   <li>Each syscall consumes one token.</li>
- *   <li>If no tokens remain, the syscall is rejected with a SecurityException.</li>
+ *   <li>每个 Agent 拥有独立的令牌桶</li>
+ *   <li>令牌以恒定速率补充（maxPermitsPerSecond / refillIntervalMs 每次补充）</li>
+ *   <li>每次系统调用消耗一个令牌</li>
+ *   <li>令牌耗尽时，系统调用被拒绝并抛出 SecurityException</li>
  * </ul>
+ *
+ * @see SyscallFilter
  */
 public class RateLimitSyscallFilter implements SyscallFilter {
 
     private static final Logger log = LoggerFactory.getLogger(RateLimitSyscallFilter.class);
 
-    /** Default: 50 syscalls per second per agent. */
+    /** 默认值：每个 Agent 每秒 50 次系统调用 */
     private static final int DEFAULT_MAX_PERMITS = 50;
-    /** Refill interval in milliseconds. */
+    /** 令牌补充间隔（毫秒） */
     private static final long REFILL_INTERVAL_MS = 100;
-    /** Maximum burst size (tokens cannot exceed this). */
+    /** 最大突发量（令牌数不超过此值） */
     private static final int MAX_BURST = 60;
 
     private final int maxPermitsPerSecond;
@@ -48,7 +54,7 @@ public class RateLimitSyscallFilter implements SyscallFilter {
 
     @Override
     public void preFilter(String agentId, SyscallRequest request) throws SecurityException {
-        // Kernel and system agents are exempt from rate limiting
+        // 内核和系统 Agent 豁免限速
         if (isPrivilegedAgent(agentId)) {
             return;
         }
@@ -65,19 +71,17 @@ public class RateLimitSyscallFilter implements SyscallFilter {
     }
 
     /**
-     * Kernel agents (sys_*) and root CLI are exempt from rate limiting.
+     * 内核 Agent（sys_*）和 root_cli 豁免限速。
      */
     private boolean isPrivilegedAgent(String agentId) {
         return agentId != null
                 && (agentId.startsWith("sys_") || "root_cli".equals(agentId) || "kernel".equals(agentId));
     }
 
-    /**
-     * Simple token bucket implementation.
-     */
+    /** 简单令牌桶实现 */
     static class TokenBucket {
         private final int maxTokens;
-        private final int refillPerTick; // tokens added per REFILL_INTERVAL_MS
+        private final int refillPerTick; // 每次 REFILL_INTERVAL_MS 补充的令牌数
         private final AtomicLong tokens;
         private volatile long lastRefillTime;
 

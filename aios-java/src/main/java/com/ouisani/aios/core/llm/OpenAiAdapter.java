@@ -18,20 +18,53 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
 
+/**
+ * OpenAI API 适配器 — AIOS 的"设备驱动实现"。
+ * <p>
+ * 类比操作系统中的具体设备驱动：正如 ext4 驱动实现了 VFS 接口来操作磁盘，
+ * OpenAiAdapter 实现了 {@link LlmProvider} 接口来访问 OpenAI 的 API。
+ * 上层（如 {@link LlmRouter}）只依赖 LlmProvider 接口，不感知底层是 OpenAI 还是其他 LLM 服务。
+ *
+ * <h3>OS 类比</h3>
+ * <table>
+ *   <tr><th>OS 概念</th><th>AIOS 概念</th><th>说明</th></tr>
+ *   <tr><td>设备驱动</td><td>OpenAiAdapter</td><td>具体硬件/模型的驱动实现</td></tr>
+ *   <tr><td>VFS 接口</td><td>LlmProvider</td><td>统一的抽象接口</td></tr>
+ *   <tr><td>中断注入</td><td>SignalInterceptor</td><td>在 I/O 前检查挂起信号</td></tr>
+ * </table>
+ *
+ * @see LlmProvider
+ * @see LlmRouter
+ */
 public class OpenAiAdapter implements LlmProvider {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAiAdapter.class);
 
+    /** Chat Completion API 的基础 URL */
     private final String baseUrl;
+    /** API 密钥 */
     private final String apiKey;
+    /** 模型名称（如 gpt-4o, gpt-4o-mini） */
     private final String model;
+    /** 请求超时时间（秒） */
     private final int timeoutSeconds;
     private final Gson gson;
 
+    /** Embedding API 的独立密钥（可与 Chat API 使用不同密钥） */
     private final String embeddingApiKey;
+    /** Embedding API 的基础 URL */
     private final String embeddingBaseUrl;
+    /** Embedding 模型名称 */
     private final String embeddingModel;
 
+    /**
+     * 完整构造器。
+     *
+     * @param apiKey         Chat API 密钥
+     * @param baseUrl        Chat API 基础 URL
+     * @param model          模型名称
+     * @param timeoutSeconds 请求超时时间（秒）
+     */
     public OpenAiAdapter(String apiKey, String baseUrl, String model, int timeoutSeconds) {
         this.apiKey = apiKey;
         this.baseUrl = normalizeBaseUrl(baseUrl);
@@ -51,18 +84,19 @@ public class OpenAiAdapter implements LlmProvider {
                 this.embeddingApiKey != null && !this.embeddingApiKey.isBlank());
     }
 
+    /** 简化构造器，默认超时 120 秒 */
     public OpenAiAdapter(String apiKey, String baseUrl, String model) {
         this(apiKey, baseUrl, model, 120);
     }
 
+    /** 最简构造器，默认使用 OpenAI 官方地址和 gpt-4o-mini 模型 */
     public OpenAiAdapter(String apiKey) {
         this(apiKey, "https://api.openai.com", "gpt-4o-mini");
     }
 
     /**
-     * Create a fresh HttpClient for each request.
-     * This avoids the "selector manager closed" issue when running on virtual threads,
-     * where a shared HttpClient's selector can be prematurely shut down.
+     * 为每次请求创建新的 HttpClient。
+     * 避免在虚拟线程环境下共享 HttpClient 导致的 "selector manager closed" 问题。
      */
     private HttpClient createHttpClient() {
         return HttpClient.newBuilder()
@@ -70,6 +104,10 @@ public class OpenAiAdapter implements LlmProvider {
                 .build();
     }
 
+    /**
+     * 调用 Embedding API 将文本转换为向量。
+     * 如果 Embedding API 不可用或调用失败，降级为本地模拟向量。
+     */
     @Override
     public float[] embed(String text) {
         if (embeddingApiKey == null || embeddingApiKey.isBlank()) {
@@ -112,6 +150,7 @@ public class OpenAiAdapter implements LlmProvider {
         }
     }
 
+    /** 解析 Embedding API 的 JSON 响应，提取向量数组 */
     private float[] parseEmbeddingResponse(String responseBody) {
         JsonObject json = JsonParser.parseString(responseBody).getAsJsonObject();
         JsonArray embeddingArray = json.getAsJsonArray("data")
@@ -127,6 +166,7 @@ public class OpenAiAdapter implements LlmProvider {
         return result;
     }
 
+    /** 本地模拟 Embedding 生成 — 使用确定性伪随机算法 */
     private float[] mockEmbedLocal(String text) {
         int dimensions = 1536;
         float[] vector = new float[dimensions];
@@ -144,12 +184,21 @@ public class OpenAiAdapter implements LlmProvider {
         return "OpenAI-" + model;
     }
 
+    /**
+     * 向 LLM 发送推理请求（含系统提示词）。
+     * 在发送前会检查是否有挂起的信号（SIGUSR1），如有则注入中断前缀。
+     */
     @Override
     public String think(String prompt, String systemPrompt) {
         List<ChatMessage> messages = List.of(ChatMessage.user(prompt));
         return thinkWithHistory(messages, systemPrompt);
     }
 
+    /**
+     * 基于多轮对话历史向 LLM 发送推理请求。
+     * <p>
+     * 流程：信号拦截 → 构建请求体 → HTTP 调用 → 解析响应 → 遥测记录
+     */
     @Override
     public String thinkWithHistory(List<ChatMessage> messages, String systemPrompt) {
         if (apiKey == null || apiKey.isBlank()) {
@@ -158,13 +207,13 @@ public class OpenAiAdapter implements LlmProvider {
             return error;
         }
 
-        // Signal interception: check pending signals before issuing the real LLM request
+        // 信号拦截：在发出真实 LLM 请求前检查挂起的信号
         AgentTask currentTask = TaskScheduler.CURRENT_TASK.get();
         if (currentTask != null) {
             try {
                 String prefix = SignalInterceptor.checkAndDrain(currentTask);
                 if (prefix != null) {
-                    // SIGUSR1 received: inject interrupt prefix into the first user message
+                    // 收到 SIGUSR1：将中断前缀注入到第一条用户消息中
                     List<ChatMessage> modified = new java.util.ArrayList<>(messages);
                     for (int i = 0; i < modified.size(); i++) {
                         ChatMessage msg = modified.get(i);
@@ -249,6 +298,10 @@ public class OpenAiAdapter implements LlmProvider {
         }
     }
 
+    /**
+     * 检查 API 是否可用（密钥已配置且服务可达）。
+     * 通过 GET /models 端点验证连通性。
+     */
     @Override
     public boolean isAvailable() {
         if (apiKey == null || apiKey.isBlank()) {
@@ -282,6 +335,7 @@ public class OpenAiAdapter implements LlmProvider {
         return apiKey != null && !apiKey.isBlank();
     }
 
+    /** 解析 Chat Completion API 的 JSON 响应，提取助手回复内容 */
     private String parseResponse(String responseBody) {
         try {
             JsonObject json = JsonParser.parseString(responseBody).getAsJsonObject();
@@ -299,6 +353,7 @@ public class OpenAiAdapter implements LlmProvider {
         }
     }
 
+    /** 规范化基础 URL：去除尾部斜杠，空值回退到 OpenAI 官方地址 */
     private static String normalizeBaseUrl(String url) {
         if (url == null || url.isBlank()) {
             return "https://api.openai.com";

@@ -4,6 +4,16 @@ import com.ouisani.aios.core.VfsNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * 音频节点 — AIOS 的语音合成（TTS）设备。
+ * <p>
+ * 挂载在 {@code /dev/host/audio}，这是一个只写设备节点。
+ * Agent 向此节点写入文本，系统通过 TTS 引擎将其转换为语音播放。
+ *
+ * <h3>OS 类比</h3>
+ * 类比 Linux 的 {@code /dev/dsp} 或 {@code /dev/audio} —
+ * 向音频设备写入 PCM 数据即可播放声音。
+ */
 public non-sealed class AudioNode implements VfsNode {
 
     private static final Logger log = LoggerFactory.getLogger(AudioNode.class);

@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  background: #0a0a0f;
+  color: #e4e4e7;
+  overflow: hidden;
+}
+
+/* React Flow 深色模式覆盖 */
+.react-flow__edge-path {
+  stroke: #00f0ff;
+  stroke-width: 2;
+}
+
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke: #00f0ff;
+}
+
+.react-flow__connection-line {
+  stroke: #8b5cf6;
+  stroke-width: 2;
+  stroke-dasharray: 5;
+}
+
+.react-flow__attribution {
+  display: none !important;
+}

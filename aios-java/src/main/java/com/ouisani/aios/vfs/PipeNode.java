@@ -7,6 +7,22 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * 管道节点 — AIOS 的进程间通信管道。
+ * <p>
+ * 类比 Linux 的 pipe() 系统调用，提供阻塞式的生产者-消费者队列。
+ * 一个 Agent 写入（生产），另一个 Agent 读取（消费），
+ * 实现进程间的流式数据传输。
+ *
+ * <h3>OS 类比</h3>
+ * <table>
+ *   <tr><th>Linux Pipe</th><th>AIOS PipeNode</th><th>说明</th></tr>
+ *   <tr><td>pipe()</td><td>PipeNode()</td><td>创建管道</td></tr>
+ *   <tr><td>write(fd, data)</td><td>write(data)</td><td>写入（阻塞当缓冲区满）</td></tr>
+ *   <tr><td>read(fd)</td><td>read()</td><td>读取（阻塞当缓冲区空）</td></tr>
+ *   <tr><td>管道容量</td><td>capacity</td><td>缓冲区大小</td></tr>
+ * </table>
+ */
 public non-sealed class PipeNode implements VfsNode {
 
     private static final Logger log = LoggerFactory.getLogger(PipeNode.class);
@@ -88,6 +104,7 @@ public non-sealed class PipeNode implements VfsNode {
         }
     }
 
+    /** 阻塞式写入数据到管道缓冲区 */
     public void put(String data) throws InterruptedException {
         log.trace("PipeNode.put: path={}, bufferSize={}, dataLen={}", path, buffer.size(), data.length());
         buffer.put(data);
@@ -97,6 +114,7 @@ public non-sealed class PipeNode implements VfsNode {
         }
     }
 
+    /** 阻塞式从管道缓冲区读取数据 */
     public String take() throws InterruptedException {
         String data = buffer.take();
         totalRead.incrementAndGet();
@@ -104,6 +122,7 @@ public non-sealed class PipeNode implements VfsNode {
         return data;
     }
 
+    /** 非阻塞式从管道缓冲区读取数据，无数据时返回 null */
     public String poll() {
         String data = buffer.poll();
         if (data != null) {
@@ -140,6 +159,7 @@ public non-sealed class PipeNode implements VfsNode {
                         totalWritten.get(), totalRead.get());
     }
 
+    /** 管道统计信息 */
     public record PipeStats(String path, int bufferSize, int remainingCapacity,
                             long totalWritten, long totalRead) {
     }

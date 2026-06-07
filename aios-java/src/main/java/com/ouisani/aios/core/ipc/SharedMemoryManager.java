@@ -9,27 +9,24 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Shared Memory Segment Manager (SHM IPC) for AIOS.
+ * 共享内存段管理器 (SHM IPC) — AIOS 的进程间共享内存。
  * <p>
- * Manages two types of shared memory segments:
+ * 管理两种类型的共享内存段：
  * <ol>
- *   <li><b>Legacy segments</b> — simple {@code Map<String, String>} key-value
- *       stores, compatible with the original VFS-based SHM interface.</li>
- *   <li><b>Semantic blocks</b> — structured {@link SemanticMemoryBlock} segments
- *       that support string data, context pointers, and vector embeddings
- *       for cross-agent "subconscious" communication.</li>
+ *   <li><b>传统段</b> — 简单的 {@code Map<String, String>} 键值存储，
+ *       兼容原始的基于 VFS 的 SHM 接口。</li>
+ *   <li><b>语义块</b> — 结构化的 {@link SemanticMemoryBlock} 段，
+ *       支持字符串数据、上下文指针和向量嵌入，
+ *       用于跨 Agent 的"潜意识"通信。</li>
  * </ol>
+ *
+ * <h3>OS 类比: POSIX Shared Memory + mmap()</h3>
+ * 当 Agent A 向 SemanticMemoryBlock 写入上下文指针或向量嵌入时，
+ * 相当于执行 {@code mmap()}：将其认知状态的一部分映射到共享地址空间。
+ * Agent B 可以直接读取该区域，无需消息传递 — 数据已在它的"地址空间"中。
  * <p>
- * <h3>Architecture: mmap() for Neural Memory</h3>
- * When Agent A writes a context pointer or vector embedding into a
- * SemanticMemoryBlock, it's performing the neural equivalent of
- * {@code mmap()}: mapping a region of its cognitive state into a
- * shared address space. Agent B can then read this region without
- * any message passing — the data is already in its "address space".
- * <p>
- * The only notification needed is a lightweight interrupt signal
- * ({@link SignalType#SIG_CONTEXT_UPDATE}), which is the neural
- * equivalent of a hardware interrupt — near-zero overhead, instant delivery.
+ * 唯一需要的通知是轻量级中断信号
+ * ({@link SignalType#SIG_CONTEXT_UPDATE})，相当于硬件中断 — 开销极低，即时送达。
  *
  * @see SemanticMemoryBlock
  * @see SignalType#SIG_CONTEXT_UPDATE
@@ -46,18 +43,18 @@ public final class SharedMemoryManager {
         return Holder.INSTANCE;
     }
 
-    // ── Legacy String Segments ──
+    // ── 传统字符串段 ──
 
     private final ConcurrentHashMap<String, ConcurrentHashMap<String, String>> shmSegments = new ConcurrentHashMap<>();
 
-    // ── Semantic Memory Blocks ──
+    // ── 语义内存块 ──
 
     private final ConcurrentHashMap<String, SemanticMemoryBlock> semanticBlocks = new ConcurrentHashMap<>();
 
     private SharedMemoryManager() {}
 
     // ════════════════════════════════════════════════════════════════
-    //  Legacy String Segment API (backward compatible)
+    //  传统字符串段 API（向后兼容）
     // ════════════════════════════════════════════════════════════════
 
     public ConcurrentHashMap<String, String> getOrCreateSegment(String segmentId) {
@@ -118,18 +115,17 @@ public final class SharedMemoryManager {
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Semantic Memory Block API
+    //  语义内存块 API
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Create or retrieve a SemanticMemoryBlock.
+     * 创建或获取语义内存块。
      * <p>
-     * This is the neural equivalent of {@code shm_open() + mmap()}:
-     * it creates a named shared memory region that multiple agents
-     * can access for zero-copy subconscious communication.
+     * 类比 {@code shm_open() + mmap()}：创建一个命名的共享内存区域，
+     * 多个 Agent 可以访问，实现零拷贝的潜意识通信。
      *
-     * @param blockId the block identifier (e.g., "devhouse_project_alpha")
-     * @return the SemanticMemoryBlock
+     * @param blockId 块标识（如 "devhouse_project_alpha"）
+     * @return SemanticMemoryBlock
      */
     public SemanticMemoryBlock getOrCreateSemanticBlock(String blockId) {
         return semanticBlocks.computeIfAbsent(blockId, id -> {
@@ -140,22 +136,12 @@ public final class SharedMemoryManager {
         });
     }
 
-    /**
-     * Get an existing SemanticMemoryBlock.
-     *
-     * @param blockId the block identifier
-     * @return the block, or null if not found
-     */
+    /** 获取已有的语义内存块，不存在则返回 null */
     public SemanticMemoryBlock getSemanticBlock(String blockId) {
         return semanticBlocks.get(blockId);
     }
 
-    /**
-     * Destroy a SemanticMemoryBlock.
-     *
-     * @param blockId the block identifier
-     * @return true if the block was removed
-     */
+    /** 销毁语义内存块 */
     public boolean destroySemanticBlock(String blockId) {
         SemanticMemoryBlock removed = semanticBlocks.remove(blockId);
         if (removed != null) {
@@ -167,35 +153,30 @@ public final class SharedMemoryManager {
         return false;
     }
 
-    /**
-     * List all semantic block IDs.
-     */
+    /** 列出所有语义块 ID */
     public Set<String> listSemanticBlocks() {
         return Collections.unmodifiableSet(semanticBlocks.keySet());
     }
 
-    /**
-     * Get the number of active semantic blocks.
-     */
+    /** 获取活跃语义块数量 */
     public int semanticBlockCount() {
         return semanticBlocks.size();
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Convenience: Write to Semantic Block + Return Version
+    //  便捷方法：写入语义块并返回版本号
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Write a string value to a semantic block and return the new version.
+     * 向语义块写入字符串值并返回新版本号。
      * <p>
-     * The caller can use the returned version to include in a
-     * {@link SignalType#SIG_CONTEXT_UPDATE} signal, so the receiving
-     * agent knows which version to expect.
+     * 调用者可将返回的版本号包含在 {@link SignalType#SIG_CONTEXT_UPDATE} 信号中，
+     * 以便接收 Agent 知道应期望哪个版本。
      *
-     * @param blockId the block identifier
-     * @param key     the key
-     * @param value   the value
-     * @return the new version number after the write
+     * @param blockId 块标识
+     * @param key     键
+     * @param value   值
+     * @return 写入后的新版本号
      */
     public long putSemanticString(String blockId, String key, String value) {
         SemanticMemoryBlock block = getOrCreateSemanticBlock(blockId);
@@ -205,17 +186,13 @@ public final class SharedMemoryManager {
         return block.version();
     }
 
-    /**
-     * Read a string value from a semantic block.
-     */
+    /** 从语义块读取字符串值 */
     public String getSemanticString(String blockId, String key) {
         SemanticMemoryBlock block = semanticBlocks.get(blockId);
         return block != null ? block.getString(key) : null;
     }
 
-    /**
-     * Write a vector embedding to a semantic block and return the new version.
-     */
+    /** 向语义块写入向量嵌入并返回新版本号 */
     public long putSemanticVector(String blockId, String key, float[] embedding) {
         SemanticMemoryBlock block = getOrCreateSemanticBlock(blockId);
         block.putVector(key, embedding);
@@ -224,17 +201,13 @@ public final class SharedMemoryManager {
         return block.version();
     }
 
-    /**
-     * Read a vector embedding from a semantic block.
-     */
+    /** 从语义块读取向量嵌入 */
     public float[] getSemanticVector(String blockId, String key) {
         SemanticMemoryBlock block = semanticBlocks.get(blockId);
         return block != null ? block.getVector(key) : null;
     }
 
-    /**
-     * Write a context pointer to a semantic block and return the new version.
-     */
+    /** 向语义块写入上下文指针并返回新版本号 */
     public long putContextPointer(String blockId, String key, String contextRef, String summary, long embeddingHash) {
         SemanticMemoryBlock block = getOrCreateSemanticBlock(blockId);
         block.putContextPointer(key, contextRef, summary, embeddingHash);

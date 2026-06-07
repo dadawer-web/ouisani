@@ -1,19 +1,17 @@
 package com.ouisani.aios.vfs;
 
 /**
- * Thrown when an Agent attempts to read from or write to a remote device
- * that has been disconnected from the AIOS kernel.
+ * 设备离线异常 — 当 Agent 尝试读写已断开连接的远程设备时抛出。
  * <p>
- * This is the VFS equivalent of a hardware interrupt — the device that
- * was mounted at {@code /dev/remote/{deviceId}} is no longer reachable,
- * and any pending or future I/O operations on that node must fail
- * immediately rather than block indefinitely.
+ * 这是 VFS 层面的硬件中断等价物 — 挂载在 {@code /dev/remote/{deviceId}}
+ * 的设备不再可达，所有待处理或未来的 I/O 操作必须立即失败，
+ * 而非无限阻塞。
  * <p>
- * The {@link SyscallDispatcher} catches this exception in the
- * {@code routeStorage} path and converts it into a
- * {@link com.ouisani.aios.core.syscall.SyscallResponse#fail(String)},
- * so the Agent's LLM can see the error and attempt self-repair
- * (e.g., retry, switch to a different device, or degrade gracefully).
+ * {@link com.ouisani.aios.core.syscall.SyscallDispatcher} 在
+ * {@code routeStorage} 路径中捕获此异常，将其转换为
+ * {@link com.ouisani.aios.core.syscall.SyscallResponse#fail(String)}，
+ * 使 Agent 的 LLM 能看到错误并尝试自修复
+ * （如重试、切换到其他设备、或优雅降级）。
  */
 public class DeviceOfflineException extends RuntimeException {
 

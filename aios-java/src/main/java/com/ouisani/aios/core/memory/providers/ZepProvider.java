@@ -7,20 +7,20 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Zep cloud memory provider — integrates with the Zep long-term memory
- * server for structured, knowledge-graph-backed agent memory.
+ * Zep 云端记忆后端 — 集成 Zep 长期记忆服务器。
  * <p>
- * Zep provides fact extraction, knowledge graph construction, and
- * temporal memory management with automatic summarization.
+ * Zep 提供事实提取、知识图谱构建和带自动摘要的时序记忆管理。
  * <p>
- * <b>Status:</b> HTTP integration pending. Currently operates in
- * mock mode with local in-memory storage.
+ * <b>当前状态：</b>HTTP 集成待完成，目前以 Mock 模式运行，
+ * 使用本地内存存储。未来将对接 Zep REST API。
+ *
+ * @see MemoryProvider
  */
 public class ZepProvider implements MemoryProvider {
 
     private static final Logger log = LoggerFactory.getLogger(ZepProvider.class);
 
-    /** Local mock store: agentId → list of memory entries. */
+    /** 本地 Mock 存储：agentId → 记忆条目列表 */
     private final ConcurrentHashMap<String, List<String>> mockStore = new ConcurrentHashMap<>();
 
     // TODO: Configure Zep API endpoint and API key via SemanticRegistry

@@ -9,14 +9,50 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * 知识图谱节点 — AIOS 的实体关系图存储引擎。
+ * <p>
+ * 挂载在 VFS 中作为图索引卷，存储从文本中抽取的实体-关系三元组。
+ * 支持基于 BFS 的子图遍历查询，用于 SemanticNode 的相控阵读取 Phase 1。
+ *
+ * <h3>数据结构</h3>
+ * <pre>
+ *   adjacencyList: 邻接表
+ *   ┌─────────────┬──────────────────────────────────────┐
+ *   │ Entity      │ Edges                                │
+ *   ├─────────────┼──────────────────────────────────────┤
+ *   │ "GitHub"    │ [→(owns→"Repo"), →(uses→"Git")]      │
+ *   │ "Repo"      │ [→(contains→"Code")]                 │
+ *   └─────────────┴──────────────────────────────────────┘
+ *   allEntities: 全局实体集合（用于快速查找）
+ * </pre>
+ *
+ * <h3>三元组格式</h3>
+ * <pre>
+ *   [实体A|关系|实体B]  →  addEdge("实体A", "关系", "实体B")
+ * </pre>
+ *
+ * <h3>OS 类比</h3>
+ * <table>
+ *   <tr><th>图数据库</th><th>AIOS GraphNode</th><th>说明</th></tr>
+ *   <tr><td>Neo4j Node</td><td>allEntities</td><td>实体（节点）集合</td></tr>
+ *   <tr><td>Neo4j Relationship</td><td>adjacencyList</td><td>关系（边）邻接表</td></tr>
+ *   <tr><td>Cypher MATCH</td><td>querySubgraph()</td><td>BFS 子图遍历</td></tr>
+ * </table>
+ *
+ * @see SemanticNode
+ */
 public non-sealed class GraphNode implements VfsNode {
 
+    /** 三元组正则模式：[实体A|关系|实体B] */
     private static final Pattern TRIPLET_PATTERN =
             Pattern.compile("\\[([^|\\]]+)\\s*\\|\\s*([^|\\]]+)\\s*\\|\\s*([^\\]]+)]");
 
     private final String path;
     private final LlmProvider llmProvider;
+    /** 邻接表：实体 → 该实体出发的所有边 */
     final Map<String, Set<Edge>> adjacencyList;
+    /** 全局实体集合 */
     final Set<String> allEntities;
     private int ownerUid;
     private int permissions;
@@ -95,6 +131,12 @@ public non-sealed class GraphNode implements VfsNode {
         return sb.toString();
     }
 
+    /**
+     * 写入文本 — 通过 LLM 抽取三元组并存入图谱。
+     *
+     * @param payload 待抽取的文本内容
+     * @return 是否成功抽取到至少一个三元组
+     */
     @Override
     public boolean write(String payload) {
         if (payload == null || payload.isBlank()) return false;
@@ -121,6 +163,12 @@ public non-sealed class GraphNode implements VfsNode {
         return count > 0;
     }
 
+    /**
+     * 解析三元组文本并存入图谱。
+     *
+     * @param text 包含三元组的文本，格式为 [实体A|关系|实体B]
+     * @return 成功解析并存入的三元组数量
+     */
     int parseAndStoreTriplets(String text) {
         Matcher matcher = TRIPLET_PATTERN.matcher(text);
         int count = 0;
@@ -137,6 +185,13 @@ public non-sealed class GraphNode implements VfsNode {
         return count;
     }
 
+    /**
+     * 添加一条边到图谱中。
+     *
+     * @param src      源实体
+     * @param relation 关系名称
+     * @param dst      目标实体
+     */
     public void addEdge(String src, String relation, String dst) {
         allEntities.add(src);
         allEntities.add(dst);
@@ -144,6 +199,13 @@ public non-sealed class GraphNode implements VfsNode {
                 .add(new Edge(relation, dst));
     }
 
+    /**
+     * BFS 子图遍历查询 — 从指定实体出发，按深度遍历关联子图。
+     *
+     * @param rootEntity 起始实体名称
+     * @param depth      遍历深度
+     * @return JSON 格式的子图遍历结果
+     */
     public String querySubgraph(String rootEntity, int depth) {
         if (!allEntities.contains(rootEntity)) {
             return "{\"error\":\"Entity '" + rootEntity + "' not found in graph\"}";
@@ -203,16 +265,19 @@ public non-sealed class GraphNode implements VfsNode {
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "");
     }
 
+    /** 图中的边：关系 + 目标实体 */
     record Edge(String relation, String target) {}
 
+    /** BFS 遍历路径条目 */
     record PathEntry(String src, String rel, String dst, int depth) {}
 
+    /** BFS 队列节点 */
     record BfsNode(String entity, int depth) {}
 
     /**
-     * Create a frozen shadow copy of this GraphNode.
-     * Deep-copies the adjacency list and entity set so the snapshot is independent.
-     * The returned node is read-only (write always returns false).
+     * 创建当前图谱的冻结快照（Shadow Copy）。
+     * 深拷贝邻接表和实体集合，确保快照独立于原始节点。
+     * 返回的节点为只读（write 始终返回 false）。
      */
     @Override
     public VfsNode createShadowCopy() {

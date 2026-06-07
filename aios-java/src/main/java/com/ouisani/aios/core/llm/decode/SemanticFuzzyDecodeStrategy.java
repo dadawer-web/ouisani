@@ -10,36 +10,29 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Semantic Fuzzy Decode Strategy — the resilient fallback when strict
- * JSON parsing fails.
+ * 语义模糊解码策略 — 严格 JSON 解析失败时的弹性回退。
  * <p>
- * When the LLM produces output that doesn't conform to the expected JSON
- * schema (e.g., wrapping the JSON in natural language, using informal
- * field names, or producing partially valid structures), this strategy
- * uses a multi-stage fuzzy parsing pipeline to extract the intent:
- * <p>
- * <h3>Stage 1: Regex Deep Clean</h3>
- * Strip markdown artifacts, extract embedded JSON fragments, and
- * normalize common LLM output patterns (e.g., "好的，我现在调用
- * sys_write 写入数据：{...}" → extract the {...} part).
- * <p>
- * <h3>Stage 2: Field Name Fuzzy Match</h3>
- * If the JSON structure is valid but uses non-standard field names
- * (e.g., "cmd" instead of "action", "content" instead of "prompt"),
- * this stage maps them to the expected schema fields using a
- * pre-defined synonym table.
- * <p>
- * <h3>Stage 3: Fragment Assembly</h3>
- * If no coherent JSON block can be found, attempt to extract individual
- * key-value pairs from the text using regex patterns and assemble them
- * into a valid JSON object.
- * <p>
- * <h3>OS Analogy: Page Fault Handler</h3>
- * In a real OS, when the TLB misses and the page table walk also fails,
- * the kernel falls back to the page fault handler — a slower but more
- * capable mechanism that can handle swap-in, COW, and other complex
- * scenarios. The Semantic Fuzzy Decode Strategy is the page fault
- * handler of our instruction decode pipeline: slower, but resilient.
+ * 当 LLM 产生的输出不符合预期的 JSON Schema（如用自然语言包裹 JSON、
+ * 使用非标准字段名、产生部分有效的结构）时，此策略通过多阶段模糊解析
+ * 管线提取意图：
+ *
+ * <h3>阶段 1：正则深度清洗</h3>
+ * 剥离 Markdown 伪影，提取嵌入式 JSON 片段，规范化常见的 LLM 输出模式
+ * （如 "好的，我现在调用 sys_write 写入数据：{...}" → 提取 {...} 部分）。
+ *
+ * <h3>阶段 2：字段名模糊匹配</h3>
+ * 如果 JSON 结构有效但使用了非标准字段名（如 "cmd" 而非 "action"，
+ * "content" 而非 "prompt"），此阶段通过预定义的同义词表将它们映射到
+ * 期望的 Schema 字段。
+ *
+ * <h3>阶段 3：片段组装</h3>
+ * 如果找不到完整的 JSON 块，尝试用正则模式从文本中提取单个键值对，
+ * 并组装成有效的 JSON 对象。
+ *
+ * <h3>OS 类比：Page Fault 处理器</h3>
+ * 真实 OS 中，当 TLB 未命中且页表遍历也失败时，内核回退到 Page Fault 处理器 —
+ * 更慢但能力更强的机制，可以处理换入、COW 等复杂场景。
+ * 语义模糊解码策略就是指令解码管线的 Page Fault 处理器：更慢，但更健壮。
  *
  * @see DecodeStrategy
  * @see StrictDecodeStrategy
@@ -50,7 +43,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-    // ── Field Name Synonym Table ──
+    // ── 字段名同义词表 ──
 
     private static final Map<String, List<String>> FIELD_SYNONYMS = Map.ofEntries(
             Map.entry("action", List.of("cmd", "command", "operation", "syscall", "call", "指令", "操作")),
@@ -65,7 +58,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
             Map.entry("parameters", List.of("params", "args", "arguments", "参数"))
     );
 
-    // ── Regex Patterns for Fragment Extraction ──
+    // ── 片段提取的正则模式 ──
 
     private static final Pattern JSON_OBJECT_PATTERN = Pattern.compile("\\{[^{}]*\\}");
     private static final Pattern KEY_VALUE_PATTERN = Pattern.compile(
@@ -81,9 +74,17 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
 
     @Override
     public int priority() {
-        return 50; // lower priority than Strict — only used as fallback
+        return 50; // 低于 Strict — 仅作为回退使用
     }
 
+    /**
+     * 执行三阶段模糊解码管线。
+     *
+     * @param llmOutput   LLM 原始输出
+     * @param targetClass 目标类型
+     * @param llmProvider LLM 提供者（此策略未使用）
+     * @return 解码结果，失败返回 null
+     */
     @Override
     public <T> T decode(String llmOutput, Class<T> targetClass, LlmProvider llmProvider) {
         if (llmOutput == null || llmOutput.isBlank()) {
@@ -93,7 +94,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
         log.info("[Fuzzy] Activating semantic fuzzy decoder for type={}", targetClass.getSimpleName());
         System.out.println("  \u001B[33m[Fuzzy Decoder] Strict parse failed. Engaging semantic fuzzy pipeline...\u001B[0m");
 
-        // Stage 1: Deep regex clean
+        // 阶段 1：正则深度清洗
         T result = attemptDeepClean(llmOutput, targetClass);
         if (result != null) {
             log.info("[Fuzzy] Stage 1 (deep clean) succeeded for type={}", targetClass.getSimpleName());
@@ -101,7 +102,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
             return result;
         }
 
-        // Stage 2: Field name fuzzy match
+        // 阶段 2：字段名模糊匹配
         result = attemptFieldFuzzyMatch(llmOutput, targetClass);
         if (result != null) {
             log.info("[Fuzzy] Stage 2 (field fuzzy match) succeeded for type={}", targetClass.getSimpleName());
@@ -109,7 +110,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
             return result;
         }
 
-        // Stage 3: Fragment assembly
+        // 阶段 3：片段组装
         result = attemptFragmentAssembly(llmOutput, targetClass);
         if (result != null) {
             log.info("[Fuzzy] Stage 3 (fragment assembly) succeeded for type={}", targetClass.getSimpleName());
@@ -127,10 +128,9 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Stage 1: Aggressively clean the LLM output and try to extract
-     * a valid JSON block.
+     * 阶段 1：激进清洗 LLM 输出并尝试提取有效的 JSON 块。
      * <p>
-     * Handles patterns like:
+     * 处理的模式如：
      * <ul>
      *   <li>"好的，我现在调用 sys_write 写入数据：{...}"</li>
      *   <li>"The result is:\n```json\n{...}\n```"</li>
@@ -140,15 +140,15 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
     private <T> T attemptDeepClean(String output, Class<T> targetClass) {
         String cleaned = output.trim();
 
-        // Strip common LLM preamble patterns
+        // 剥离常见的 LLM 前导文本
         cleaned = stripPreamble(cleaned);
 
-        // Try the strict extractor on the cleaned text
+        // 在清洗后的文本上尝试严格提取器
         String json = StrictDecodeStrategy.extractJson(cleaned);
         T result = tryParseJson(json, targetClass);
         if (result != null) return result;
 
-        // Try finding innermost JSON object
+        // 尝试查找最内层的 JSON 对象
         Matcher m = JSON_OBJECT_PATTERN.matcher(cleaned);
         while (m.find()) {
             String candidate = m.group();
@@ -159,11 +159,9 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
         return null;
     }
 
-    /**
-     * Strip common LLM preamble text before the actual JSON.
-     */
+    /** 剥离 JSON 前的常见 LLM 前导文本 */
     private String stripPreamble(String text) {
-        // Remove common Chinese preamble patterns
+        // 移除常见的中文前导模式
         String[] preamblePatterns = {
                 "好的[，,].*?[：:]\\s*",
                 "以下是.*?[：:]\\s*",
@@ -176,7 +174,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
             cleaned = cleaned.replaceFirst("(?s)" + pattern, "");
         }
 
-        // Remove common English preamble patterns
+        // 移除常见的英文前导模式
         cleaned = cleaned.replaceFirst("(?i)^.*?(?=\\{)", "");
         if (cleaned.isEmpty()) cleaned = text;
 
@@ -188,17 +186,16 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Stage 2: If the JSON is structurally valid but uses non-standard
-     * field names, try to map them to the expected schema.
+     * 阶段 2：如果 JSON 结构有效但使用了非标准字段名，尝试映射到期望的 Schema。
      * <p>
-     * For example, if the LLM outputs {@code {"cmd": "vfs.read", "file": "/dev/camera0"}},
-     * this stage maps "cmd" → "action" and "file" → "path".
+     * 例如 LLM 输出 {@code {"cmd": "vfs.read", "file": "/dev/camera0"}}，
+     * 此阶段将 "cmd" → "action"、"file" → "path" 进行映射。
      */
     private <T> T attemptFieldFuzzyMatch(String output, Class<T> targetClass) {
         String json = StrictDecodeStrategy.extractJson(output);
         if (json == null || json.isBlank()) return null;
 
-        // Try to parse as a generic Map first
+        // 先尝试解析为通用 Map
         Map<String, Object> rawMap;
         try {
             rawMap = OBJECT_MAPPER.readValue(json, Map.class);
@@ -206,7 +203,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
             return null;
         }
 
-        // Apply synonym mapping
+        // 应用同义词映射
         Map<String, Object> mapped = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : rawMap.entrySet()) {
             String key = entry.getKey();
@@ -214,12 +211,12 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
             if (!mapped.containsKey(mappedKey)) {
                 mapped.put(mappedKey, entry.getValue());
             } else {
-                // If the mapped key already exists, keep the original key as well
+                // 如果映射后的键已存在，保留原始键以避免覆盖
                 mapped.put(key, entry.getValue());
             }
         }
 
-        // Try to deserialize the mapped object
+        // 尝试反序列化映射后的对象
         try {
             String remappedJson = OBJECT_MAPPER.writeValueAsString(mapped);
             return OBJECT_MAPPER.readValue(remappedJson, targetClass);
@@ -229,18 +226,16 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
         }
     }
 
-    /**
-     * Resolve a non-standard field name to the canonical schema field name.
-     */
+    /** 将非标准字段名解析为规范的 Schema 字段名 */
     private String resolveFieldName(String key) {
         String lowerKey = key.toLowerCase().replace("-", "_").replace(" ", "_");
 
-        // Direct match
+        // 直接匹配
         if (FIELD_SYNONYMS.containsKey(lowerKey)) {
             return lowerKey;
         }
 
-        // Synonym match
+        // 同义词匹配
         for (Map.Entry<String, List<String>> entry : FIELD_SYNONYMS.entrySet()) {
             for (String synonym : entry.getValue()) {
                 if (synonym.equalsIgnoreCase(lowerKey)
@@ -251,7 +246,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
             }
         }
 
-        return key; // no mapping found — keep original
+        return key; // 未找到映射 — 保留原始键
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -259,16 +254,14 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Stage 3: Last resort — extract individual key-value pairs from
-     * the text using regex and assemble them into a JSON object.
+     * 阶段 3：最后手段 — 用正则从文本中提取单个键值对并组装为 JSON 对象。
      * <p>
-     * This handles the most pathological cases where the LLM produces
-     * something like:
+     * 处理最极端的情况，如 LLM 输出：
      * <pre>
      *   action: vfs.read
      *   path: /dev/camera0
      * </pre>
-     * or even:
+     * 甚至：
      * <pre>
      *   我要调用 vfs.read，路径是 /dev/camera0
      * </pre>
@@ -276,7 +269,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
     private <T> T attemptFragmentAssembly(String output, Class<T> targetClass) {
         Map<String, Object> assembled = new LinkedHashMap<>();
 
-        // Extract JSON-style key-value pairs
+        // 提取 JSON 风格的键值对
         Matcher kvMatcher = KEY_VALUE_PATTERN.matcher(output);
         while (kvMatcher.find()) {
             String key = resolveFieldName(kvMatcher.group(1));
@@ -301,7 +294,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
             }
         }
 
-        // Extract action from common patterns if not found
+        // 如果未找到 action，从常见模式中提取
         if (!assembled.containsKey("action")) {
             String action = extractActionFromText(output);
             if (action != null) {
@@ -309,7 +302,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
             }
         }
 
-        // Extract path from common patterns if not found
+        // 如果未找到 path，从常见模式中提取
         if (!assembled.containsKey("path")) {
             String path = extractPathFromText(output);
             if (path != null) {
@@ -321,7 +314,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
             return null;
         }
 
-        // Try to deserialize the assembled map
+        // 尝试反序列化组装后的 Map
         try {
             String assembledJson = OBJECT_MAPPER.writeValueAsString(assembled);
             log.debug("[Fuzzy] Assembled JSON: {}", assembledJson);
@@ -333,9 +326,9 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
     }
 
     /**
-     * Extract an action string from natural language text.
+     * 从自然语言文本中提取 action 字符串。
      * <p>
-     * Matches patterns like:
+     * 匹配模式如：
      * - "调用 vfs.read" → "vfs.read"
      * - "执行 llm.think" → "llm.think"
      * - "action is bin.ps" → "bin.ps"
@@ -349,12 +342,12 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
             return m.group(1);
         }
 
-        // Try to find any dotted action pattern (e.g., "vfs.read")
+        // 尝试查找任何点分格式的 action 模式（如 "vfs.read"）
         Pattern dottedPattern = Pattern.compile("\\b([a-z]+\\.[a-z_]+)\\b");
         m = dottedPattern.matcher(text);
         if (m.find()) {
             String candidate = m.group(1);
-            // Validate against known namespaces
+            // 验证是否属于已知的命名空间
             if (candidate.startsWith("vfs.") || candidate.startsWith("llm.")
                     || candidate.startsWith("bin.") || candidate.startsWith("handle.")
                     || candidate.startsWith("apt.") || candidate.startsWith("tool.")
@@ -367,9 +360,9 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
     }
 
     /**
-     * Extract a VFS path from natural language text.
+     * 从自然语言文本中提取 VFS 路径。
      * <p>
-     * Matches patterns like:
+     * 匹配模式如：
      * - "/dev/camera0"
      * - "/proc/agents"
      * - "路径是 /dev/shm/blackboard"
@@ -381,7 +374,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
             return m.group(1);
         }
 
-        // Fallback: find any /dev/... or /proc/... path
+        // 回退：查找任何 /dev/... 或 /proc/... 路径
         Pattern vfsPath = Pattern.compile("(/[a-z]+/\\S+?)[\\s,，.\"]");
         m = vfsPath.matcher(text);
         if (m.find()) {
@@ -391,7 +384,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
         return null;
     }
 
-    // ── Utility ──
+    // ── 工具方法 ──
 
     private <T> T tryParseJson(String json, Class<T> targetClass) {
         try {

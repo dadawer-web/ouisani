@@ -14,21 +14,19 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Consumer;
 
 /**
- * Abstract base class for AIOS Agents — implements Runnable for
- * TaskScheduler compatibility.
+ * Agent 抽象基类 — 实现 Runnable 以兼容 TaskScheduler。
  * <p>
- * Developers only need to extend this class and implement the lifecycle
- * methods to build a fully functional Agent. No raw Syscall knowledge
- * required.
- * <p>
- * Fields:
+ * 开发者只需继承此类并实现生命周期方法，即可构建一个完整的 Agent。
+ * 无需了解底层 Syscall 细节。
+ *
+ * <h3>核心字段</h3>
  * <ul>
- *   <li>{@code agentId} — unique Agent identifier (e.g. "sys_init_1")</li>
- *   <li>{@code priority} — scheduling priority (default: NORMAL)</li>
- *   <li>{@code tokenBudget} — token quota for this Agent</li>
+ *   <li>{@code agentId} — 唯一 Agent 标识（如 "sys_init_1"）</li>
+ *   <li>{@code priority} — 调度优先级（默认：NORMAL）</li>
+ *   <li>{@code tokenBudget} — Token 配额</li>
  * </ul>
- * <p>
- * Example:
+ *
+ * <h3>使用示例</h3>
  * <pre>
  * public class MyAgent extends AbstractAgent {
  *     public MyAgent() {
@@ -38,12 +36,12 @@ import java.util.function.Consumer;
  *     {@literal @}Override
  *     protected void onStart() {
  *         String screen = sdk.readFile(agentId, "/dev/gui/dom");
- *         String answer = sdk.think(agentId, "Analyze this: " + screen);
+ *         String answer = sdk.think(agentId, "分析这个: " + screen);
  *     }
  *
  *     {@literal @}Override
  *     protected void onMessage(String msg) {
- *         sdk.think(agentId, "Got: " + msg);
+ *         sdk.think(agentId, "收到: " + msg);
  *     }
  * }
  * </pre>
@@ -52,19 +50,19 @@ public abstract class AbstractAgent implements Runnable {
 
     private static final Logger log = LoggerFactory.getLogger(AbstractAgent.class);
 
-    /** The SDK instance — subclasses use this to interact with the AIOS kernel. */
+    /** SDK 实例 — 子类通过它与 AIOS 内核交互 */
     protected final AiosSdk sdk = AiosSdk.getInstance();
 
-    /** Unique Agent identifier. */
+    /** 唯一 Agent 标识 */
     protected final String agentId;
 
-    /** Scheduling priority. */
+    /** 调度优先级 */
     protected final ProcessPriority priority;
 
-    /** Token budget for this Agent. */
+    /** Token 配额 */
     protected final int tokenBudget;
 
-    /** Internal message queue for the message loop. */
+    /** 消息循环的内部消息队列 */
     private final ConcurrentLinkedQueue<String> messageQueue = new ConcurrentLinkedQueue<>();
 
     private volatile boolean running = false;
@@ -81,22 +79,18 @@ public abstract class AbstractAgent implements Runnable {
     // ── Lifecycle (abstract) ──
 
     /**
-     * Called when the Agent starts. Implement this to define
-     * the Agent's initialization logic.
+     * Agent 启动时调用。实现此方法定义 Agent 的初始化逻辑。
      */
     protected abstract void onStart();
 
     /**
-     * Called when the Agent receives a message (from another Agent,
-     * the Intent Router, or the message queue).
+     * Agent 收到消息时调用（来自其他 Agent、IntentRouter 或消息队列）。
      *
-     * @param msg the incoming message
+     * @param msg 收到的消息
      */
     protected abstract void onMessage(String msg);
 
-    /**
-     * Stop this Agent gracefully.
-     */
+    /** 优雅停止此 Agent */
     public void exit() {
         running = false;
         log.info("[Agent:{}] Exiting", agentId);
@@ -106,8 +100,7 @@ public abstract class AbstractAgent implements Runnable {
     // ── Runnable implementation ──
 
     /**
-     * The Agent's main thread entry point. Calls onStart() and then
-     * enters a simple message loop.
+     * Agent 主线程入口。调用 onStart() 后进入消息循环。
      */
     @Override
     public void run() {
@@ -149,8 +142,8 @@ public abstract class AbstractAgent implements Runnable {
     // ── Message passing ──
 
     /**
-     * Send a message to this Agent's queue. Will be processed
-     * by {@link #onMessage(String)} in the message loop.
+     * 向此 Agent 的消息队列发送消息。消息将在消息循环中由
+     * {@link #onMessage(String)} 处理。
      */
     public void sendMessage(String msg) {
         messageQueue.add(msg);
@@ -159,9 +152,7 @@ public abstract class AbstractAgent implements Runnable {
 
     // ── Spawn on TaskScheduler ──
 
-    /**
-     * Spawn this Agent as a virtual thread on the TaskScheduler.
-     */
+    /** 在 TaskScheduler 上以虚拟线程方式生成此 Agent */
     public void spawn(TaskScheduler scheduler) {
         AgentTask task = new AgentTask(
                 scheduler.nextPid(),
@@ -203,26 +194,12 @@ public abstract class AbstractAgent implements Runnable {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Render a UI component tree to the Semantic Display Server.
+     * 渲染 UI 组件树到语义显示服务器。
      * <p>
-     * This is the high-level equivalent of writing to the framebuffer:
-     * the Agent constructs a Virtual DOM tree, and the kernel pushes
-     * it to all connected frontends via WebSocket.
-     * <p>
-     * Example:
-     * <pre>
-     * renderUI(Map.of(
-     *     "id", "root",
-     *     "type", "container",
-     *     "props", Map.of("direction", "column"),
-     *     "children", List.of(
-     *         Map.of("id", "title", "type", "text", "props", Map.of("value", "Hello AIOS", "style", "heading")),
-     *         Map.of("id", "btn_ok", "type", "button", "props", Map.of("label", "OK", "variant", "primary"))
-     *     )
-     * ));
-     * </pre>
+     * 这是写入帧缓冲区的高级等价操作：Agent 构建一个 Virtual DOM 树，
+     * 内核通过 WebSocket 将其推送到所有已连接的前端。
      *
-     * @param component the root component of the Virtual DOM tree
+     * @param component Virtual DOM 树的根组件
      */
     protected void renderUI(Map<String, Object> component) {
         String json = componentToJson(component);
@@ -232,11 +209,11 @@ public abstract class AbstractAgent implements Runnable {
     }
 
     /**
-     * Apply an incremental patch to the current UI.
+     * 对当前 UI 应用增量补丁。
      * <p>
-     * Like dirty-rect rendering: only update the changed components.
+     * 类似脏矩形渲染：只更新变化的组件。
      *
-     * @param patch the patch operations
+     * @param patch 补丁操作
      */
     protected void patchUI(Map<String, Object> patch) {
         String json = componentToJson(patch);
@@ -244,9 +221,7 @@ public abstract class AbstractAgent implements Runnable {
         sdk.writeFile(agentId, "/dev/gui/dom", payload);
     }
 
-    /**
-     * Clear the UI rendered by this agent.
-     */
+    /** 清除此 Agent 渲染的 UI */
     protected void clearUI() {
         String payload = "{\"type\":\"render\",\"agentId\":\"" + agentId + "\",\"dom\":{\"id\":\"root\",\"type\":\"container\",\"props\":{},\"children\":[]}}";
         sdk.writeFile(agentId, "/dev/gui/dom", payload);

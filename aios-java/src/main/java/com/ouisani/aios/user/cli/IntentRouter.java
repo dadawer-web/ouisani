@@ -14,17 +14,16 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Intent Router — translates natural language into AIOS system calls.
+ * 意图路由器 — 将自然语言翻译为 AIOS 系统调用。
  * <p>
- * Uses an LLM with a strict system prompt to parse user intent into
- * a structured {@link SyscallRequest}, then dispatches it through
- * the {@link SyscallDispatcher}.
+ * 使用 LLM 配合严格系统提示词，将用户意图解析为结构化的
+ * {@link SyscallRequest}，然后通过 {@link SyscallDispatcher} 分发执行。
  *
- * <h3>Supported intent mappings:</h3>
+ * <h3>支持的意图映射</h3>
  * <ul>
- *   <li>"read the camera" → {@code {"action":"vfs.read","path":"/dev/camera0"}}</li>
- *   <li>"ask the AI about X" → {@code {"action":"llm.think","prompt":"X"}}</li>
- *   <li>"write hello to shared memory" → {@code {"action":"vfs.write","path":"/dev/shm/blackboard","payload":"..."}}</li>
+ *   <li>"读取摄像头" → {@code {"action":"vfs.read","path":"/dev/camera0"}}</li>
+ *   <li>"问 AI 关于 X" → {@code {"action":"llm.think","prompt":"X"}}</li>
+ *   <li>"写 hello 到共享内存" → {@code {"action":"vfs.write","path":"/dev/shm/blackboard","payload":"..."}}</li>
  * </ul>
  */
 public final class IntentRouter {
@@ -108,10 +107,10 @@ public final class IntentRouter {
     }
 
     /**
-     * Translate natural language into a syscall and execute it.
+     * 将自然语言翻译为系统调用并执行。
      *
-     * @param userInput the user's natural language input
-     * @return the syscall response, or null on failure
+     * @param userInput 用户的自然语言输入
+     * @return 系统调用响应，失败时返回 null
      */
     public SyscallResponse executeNaturalLanguage(String userInput) {
         if (llmProvider == null || dispatcher == null) {
@@ -180,8 +179,8 @@ public final class IntentRouter {
     }
 
     /**
-     * Intermediate DTO for LLM JSON output parsing.
-     * All fields optional — only the relevant ones will be populated.
+     * LLM JSON 输出解析的中间 DTO。
+     * 所有字段可选 — 只填充相关的字段。
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class IntentDto {

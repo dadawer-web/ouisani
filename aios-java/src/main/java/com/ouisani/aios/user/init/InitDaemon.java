@@ -347,7 +347,7 @@ public class InitDaemon extends AbstractAgent {
     }
 
     /**
-     * Spawn InitDaemon as PID 1 on the given TaskScheduler.
+     * 以 PID 1 身份在指定 TaskScheduler 上生成 InitDaemon。
      */
     public static InitDaemon spawnAsPid1(TaskScheduler scheduler, GraalWasmSandbox sandbox) {
         return spawnAsPid1(scheduler, sandbox, null);

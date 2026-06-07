@@ -9,6 +9,17 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
+/**
+ * AIOS 事件总线 — 内核级发布/订阅事件系统。
+ * <p>
+ * OS 类比：相当于 Linux 的 netlink + udev 事件机制 —
+ * 内核组件通过 {@link #broadcast} 发布事件，外部 SSE 客户端和内部订阅者
+ * 通过 {@link #subscribe} 接收事件。支持两种消费者：
+ * <ul>
+ *   <li>SSE 客户端（通过 /kernel/stream 端点连接的外部浏览器）</li>
+ *   <li>内部订阅者（通过 Consumer 回调注册的内核组件）</li>
+ * </ul>
+ */
 public class EventBus {
 
     private static final Logger log = LoggerFactory.getLogger(EventBus.class);

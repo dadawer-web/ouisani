@@ -7,23 +7,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Strict Decode Strategy — the first line of defense in the decode chain.
+ * 严格解码策略 — 解码链的第一道防线。
  * <p>
- * This strategy attempts to parse the LLM output as well-formed JSON
- * using Jackson's {@link ObjectMapper}. It handles common LLM output
- * artifacts (markdown code blocks, surrounding text) by extracting
- * the JSON block before parsing.
- * <p>
- * <h3>OS Analogy: int 0x80 — the Standard System Call Interface</h3>
- * Just as a user-space program issues a system call via the standard
- * {@code int 0x80} interrupt with strictly defined register conventions,
- * the Strict Decode Strategy expects the LLM to follow the JSON schema
- * contract precisely. If the LLM complies, this is the fastest path.
- * <p>
- * <h3>Self-Healing</h3>
- * If the initial parse fails, this strategy can ask the LLM to fix
- * its own output (up to {@code MAX_RETRIES} times) before giving up.
- * This is analogous to a kernel retrying a failed I/O operation.
+ * 使用 Jackson 的 {@link ObjectMapper} 将 LLM 输出解析为标准 JSON。
+ * 处理常见的 LLM 输出伪影（Markdown 代码块、周围文本），在解析前先提取 JSON 块。
+ *
+ * <h3>OS 类比：int 0x80 — 标准系统调用接口</h3>
+ * 正如用户态程序通过标准 {@code int 0x80} 中断和严格的寄存器约定发起系统调用，
+ * 严格解码策略期望 LLM 精确遵循 JSON Schema 约定。如果 LLM 遵守约定，这是最快的路径。
+ *
+ * <h3>自愈机制</h3>
+ * 如果首次解析失败，此策略可要求 LLM 修复自己的输出（最多 {@code MAX_RETRIES} 次）。
+ * 类比内核重试失败的 I/O 操作。
  *
  * @see DecodeStrategy
  * @see SemanticFuzzyDecodeStrategy
@@ -33,6 +28,7 @@ public final class StrictDecodeStrategy implements DecodeStrategy {
     private static final Logger log = LoggerFactory.getLogger(StrictDecodeStrategy.class);
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    /** 自愈最大重试次数 */
     private static final int MAX_RETRIES = 3;
 
     @Override
@@ -42,19 +38,27 @@ public final class StrictDecodeStrategy implements DecodeStrategy {
 
     @Override
     public int priority() {
-        return 10; // highest priority — try strict first
+        return 10; // 最高优先级 — 优先尝试严格解析
     }
 
+    /**
+     * 执行严格解码：先直接解析，失败后进入自愈循环。
+     *
+     * @param llmOutput   LLM 原始输出
+     * @param targetClass 目标类型
+     * @param llmProvider LLM 提供者（用于自愈重试），可为 null
+     * @return 解码结果，失败返回 null
+     */
     @Override
     public <T> T decode(String llmOutput, Class<T> targetClass, LlmProvider llmProvider) {
-        // First attempt: direct parse
+        // 首次尝试：直接解析
         T result = tryParse(llmOutput, targetClass);
         if (result != null) {
             log.debug("[Strict] First-pass decode successful: type={}", targetClass.getSimpleName());
             return result;
         }
 
-        // Self-healing loop: ask the LLM to fix its own invalid JSON
+        // 自愈循环：要求 LLM 修复自己的无效 JSON
         if (llmProvider == null) {
             log.debug("[Strict] No LlmProvider for self-healing, giving up");
             return null;
@@ -91,13 +95,14 @@ public final class StrictDecodeStrategy implements DecodeStrategy {
         }
 
         log.debug("[Strict] All {} self-healing attempts exhausted for type={}", MAX_RETRIES, targetClass.getSimpleName());
-        return null; // signal failure — let the next strategy in the chain try
+        return null; // 信号失败 — 让链中下一个策略尝试
     }
 
     // ════════════════════════════════════════════════════════════════
     //  JSON Extraction & Parsing
     // ════════════════════════════════════════════════════════════════
 
+    /** 最近一次解析错误信息，用于自愈提示 */
     private static volatile String lastParseError = "";
 
     static String getLastError() {
@@ -116,8 +121,9 @@ public final class StrictDecodeStrategy implements DecodeStrategy {
     }
 
     /**
-     * Extract JSON from LLM output that may be wrapped in markdown
-     * code blocks or surrounded by natural language text.
+     * 从 LLM 输出中提取 JSON 块。
+     * 处理 Markdown 代码块包裹和自然语言文本包围的情况。
+     * 提取顺序：```json 块 → ``` 块 → 括号匹配 → 原文返回
      */
     static String extractJson(String output) {
         if (output == null || output.isBlank()) {
@@ -126,7 +132,7 @@ public final class StrictDecodeStrategy implements DecodeStrategy {
 
         String trimmed = output.trim();
 
-        // Try ```json ... ``` code block
+        // 尝试 ```json ... ``` 代码块
         int jsonBlockStart = trimmed.indexOf("```json");
         if (jsonBlockStart != -1) {
             int contentStart = trimmed.indexOf('\n', jsonBlockStart) + 1;
@@ -136,7 +142,7 @@ public final class StrictDecodeStrategy implements DecodeStrategy {
             }
         }
 
-        // Try ``` ... ``` code block
+        // 尝试 ``` ... ``` 代码块
         int codeBlockStart = trimmed.indexOf("```");
         if (codeBlockStart != -1) {
             int contentStart = trimmed.indexOf('\n', codeBlockStart) + 1;
@@ -146,7 +152,7 @@ public final class StrictDecodeStrategy implements DecodeStrategy {
             }
         }
 
-        // Try { ... } or [ ... ] bracket matching
+        // 尝试 { ... } 或 [ ... ] 括号匹配
         int objStart = trimmed.indexOf('{');
         int arrStart = trimmed.indexOf('[');
         if (objStart != -1 || arrStart != -1) {

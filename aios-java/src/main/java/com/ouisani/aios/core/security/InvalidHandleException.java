@@ -1,8 +1,13 @@
 package com.ouisani.aios.core.security;
 
 /**
- * Thrown when an agent attempts to use an invalid or closed handle
- * to access a VFS node through the Object Manager.
+ * 无效句柄异常 — Agent 尝试使用无效或已关闭的句柄访问 VFS 节点时抛出。
+ *
+ * <h3>OS 类比: Windows ERROR_INVALID_HANDLE / Linux EBADF</h3>
+ * Windows 返回 ERROR_INVALID_HANDLE (6)，Linux 返回 EBADF (9)。
+ * AIOS 抛出此异常，表示 Agent 使用的句柄不存在或已被关闭。
+ *
+ * @see com.ouisani.aios.core.security.ObjectManager
  */
 public class InvalidHandleException extends RuntimeException {
 

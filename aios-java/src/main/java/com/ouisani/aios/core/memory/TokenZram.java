@@ -13,6 +13,31 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
+/**
+ * Token ZRAM — AIOS 的内存压缩引擎。
+ * <p>
+ * 类比 Linux 的 ZRAM（压缩内存设备）：当物理内存不足时，
+ * Linux 将内存页压缩后存入 ZRAM 设备，以 CPU 时间换取内存空间。
+ * AIOS 的 TokenZram 做同样的事情，但操作对象是 Token 而非字节：
+ * <ul>
+ *   <li>将 Agent 上下文中的"冷数据"（较早的对话历史）压缩</li>
+ *   <li>压缩方式：LLM 摘要压缩（高质量）或截断压缩（快速回退）</li>
+ *   <li>压缩后退还 Token 配额到 Cgroup</li>
+ *   <li>如果压缩后仍超限，触发 kswapd 将数据换出到磁盘</li>
+ * </ul>
+ *
+ * <h3>OS 类比</h3>
+ * <table>
+ *   <tr><th>Linux</th><th>AIOS TokenZram</th><th>说明</th></tr>
+ *   <tr><td>ZRAM 设备</td><td>TokenZram</td><td>内存压缩存储</td></tr>
+ *   <tr><td>页面压缩</td><td>compressMemory()</td><td>压缩冷数据</td></tr>
+ *   <tr><td>kswapd</td><td>swapOutToDisk()</td><td>压缩后仍超限则换出</td></tr>
+ *   <tr><td>SWAP_THRESHOLD</td><td>SWAP_THRESHOLD_RATIO</td><td>触发换出的水位线</td></tr>
+ * </table>
+ *
+ * @see SomWindowController
+ * @see SwapManager
+ */
 public class TokenZram {
 
     private static final Logger log = LoggerFactory.getLogger(TokenZram.class);
@@ -45,6 +70,16 @@ public class TokenZram {
         this.llmProvider = provider;
     }
 
+    /**
+     * 压缩 Agent 的上下文记忆 — 类比 Linux ZRAM 的页面压缩。
+     * <p>
+     * 将 Agent 上下文历史的前半部分（冷数据）压缩为摘要，
+     * 退还节省的 Token 到 Cgroup。如果压缩后 Cgroup 仍超限，
+     * 则触发 kswapd 将数据换出到磁盘。
+     *
+     * @param task   当前 Agent 任务
+     * @param cgroup Cgroup 节点（Token 配额信息）
+     */
     public void compressMemory(AgentTask task, CgroupNode cgroup) {
         List<String> history = task.contextHistory();
         if (history.size() < 2) {
@@ -179,6 +214,7 @@ public class TokenZram {
         }
     }
 
+    /** 截断压缩 — 不依赖 LLM 的快速压缩回退方案。保留首尾各100字符。 */
     private String truncateCompress(String text) {
         if (text.length() <= 200) return text;
         return text.substring(0, 100) + "...[TRUNCATED]..." + text.substring(text.length() - 100);

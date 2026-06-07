@@ -17,17 +17,17 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Auto Dev House — the Big Bang entry point.
+ * Auto Dev House — 自动开发屋的启动入口（Big Bang）。
  * <p>
- * Bootstraps the AIOS kernel (VfsManager + TaskScheduler), mounts the
- * /devhouse workspace, and spawns all three agents as virtual threads:
+ * OS 类比：相当于 Linux 的 init 进程 — 引导 AIOS 内核（VfsManager + TaskScheduler），
+ * 挂载 /devhouse 工作区，然后以虚拟线程生成三个 Agent：
  * <ul>
- *   <li>{@link ReviewerAgent} — REALTIME priority, chief architect / QA</li>
- *   <li>{@link CoderAgent} — NORMAL priority, code monkey</li>
- *   <li>{@link PmAgent} — HIGH priority, product manager</li>
+ *   <li>{@link ReviewerAgent} — REALTIME 优先级，首席架构师 / QA</li>
+ *   <li>{@link CoderAgent} — NORMAL 优先级，程序员</li>
+ *   <li>{@link PmAgent} — HIGH 优先级，产品经理</li>
  * </ul>
  * <p>
- * The pipeline flows: PM → Coder → Reviewer, coordinated via VFS status files.
+ * 流水线流程：PM → Coder → Reviewer，通过 VFS 状态文件协调。
  */
 public class AutoDevHouseDemo {
 
@@ -105,7 +105,7 @@ public class AutoDevHouseDemo {
     }
 
     /**
-     * Simple .env file loader — reads KEY=VALUE lines, ignores comments and blanks.
+     * 简单 .env 文件加载器 — 读取 KEY=VALUE 行，忽略注释和空行。
      */
     private static Map<String, String> loadDotEnv(Path dotEnvPath) {
         Map<String, String> env = new HashMap<>();

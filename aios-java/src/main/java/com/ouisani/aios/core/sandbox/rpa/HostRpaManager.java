@@ -12,27 +12,33 @@ import java.io.ByteArrayOutputStream;
 import java.util.Base64;
 
 /**
- * Host RPA Manager — gives AIOS physical control over the host machine.
+ * 宿主 RPA 管理器 — 赋予 AIOS 对宿主机的物理控制能力。
  * <p>
- * Wraps {@link java.awt.Robot} to provide two fundamental capabilities:
+ * 封装 {@link java.awt.Robot}，提供两大基础能力：
  * <ul>
- *   <li><b>Vision</b> — full-screen screenshot capture, returned as Base64 JPEG</li>
- *   <li><b>Actuators</b> — mouse movement, clicking, and keyboard typing</li>
+ *   <li><b>视觉</b> — 全屏截图捕获，返回 Base64 编码的 JPEG</li>
+ *   <li><b>执行器</b> — 鼠标移动、点击和键盘输入</li>
  * </ul>
  * <p>
- * This is the bridge between AIOS's digital intelligence and the physical
- * world. When an Agent issues an RPA syscall, the kernel delegates here
- * to execute real GUI operations on the host desktop.
+ * 这是 AIOS 数字智能与物理世界之间的桥梁。当 Agent 发起 RPA 系统调用时，
+ * 内核委托此管理器在宿主桌面执行真实的 GUI 操作。
  * <p>
- * <b>Safety note:</b> All actuator methods include a configurable pre-delay
- * to prevent runaway automation. In production, the Seccomp filter chain
- * should gate access to this subsystem.
+ * <b>安全提示：</b>所有执行器方法包含可配置的前置延迟以防止失控自动化。
+ * 生产环境中，Seccomp 过滤链应控制对此子系统的访问。
+ *
+ * <h3>OS 类比</h3>
+ * <table>
+ *   <tr><th>概念</th><th>AIOS HostRpaManager</th><th>说明</th></tr>
+ *   <tr><td>设备驱动</td><td>HostRpaManager</td><td>内核→硬件的桥梁</td></tr>
+ *   <tr><td>GPU 帧缓冲</td><td>takeScreenshotBase64()</td><td>屏幕捕获</td></tr>
+ *   <tr><td>输入设备</td><td>mouse / keyboard</td><td>鼠标/键盘控制</td></tr>
+ * </table>
  */
 public final class HostRpaManager {
 
     private static final Logger log = LoggerFactory.getLogger(HostRpaManager.class);
 
-    /** Default delay (ms) between actuator operations to prevent race conditions. */
+    /** 执行器操作间的默认延迟（毫秒），防止竞态条件。 */
     private static final int DEFAULT_ACTUATOR_DELAY_MS = 50;
 
     private static final class Holder {
@@ -70,9 +76,7 @@ public final class HostRpaManager {
         }
     }
 
-    /**
-     * Check whether the RPA subsystem is available.
-     */
+    /** 检查 RPA 子系统是否可用。 */
     public boolean isAvailable() {
         return initialized && robot != null;
     }
@@ -82,13 +86,10 @@ public final class HostRpaManager {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Capture a full-screen screenshot and return it as a Base64-encoded JPEG.
-     * <p>
-     * This is the "eye" of AIOS — the Agent can issue a vision syscall
-     * to see what's currently on the host display.
+     * 全屏截图并返回 Base64 编码的 JPEG — AIOS 的"眼睛"。
      *
-     * @return Base64-encoded JPEG string of the current screen
-     * @throws IllegalStateException if the Robot is not initialized
+     * @return 当前屏幕的 Base64 编码 JPEG 字符串
+     * @throws IllegalStateException 如果 Robot 未初始化
      */
     public String takeScreenshotBase64() {
         ensureAvailable();
@@ -113,13 +114,13 @@ public final class HostRpaManager {
     }
 
     /**
-     * Capture a screenshot of a specific screen region.
+     * 截取指定区域的屏幕截图。
      *
-     * @param x      region x
-     * @param y      region y
-     * @param width  region width
-     * @param height region height
-     * @return Base64-encoded JPEG string of the captured region
+     * @param x      区域 x 坐标
+     * @param y      区域 y 坐标
+     * @param width  区域宽度
+     * @param height 区域高度
+     * @return 截取区域的 Base64 编码 JPEG 字符串
      */
     public String takeScreenshotBase64(int x, int y, int width, int height) {
         ensureAvailable();
@@ -143,9 +144,7 @@ public final class HostRpaManager {
         }
     }
 
-    /**
-     * Get the host screen dimensions.
-     */
+    /** 获取宿主机屏幕尺寸。 */
     public Dimension getScreenSize() {
         return screenSize;
     }
@@ -155,10 +154,10 @@ public final class HostRpaManager {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Move the mouse cursor to the specified screen coordinates.
+     * 将鼠标移动到指定屏幕坐标。
      *
-     * @param x screen x coordinate
-     * @param y screen y coordinate
+     * @param x 屏幕 x 坐标
+     * @param y 屏幕 y 坐标
      */
     public void mouseMove(int x, int y) {
         ensureAvailable();
@@ -172,9 +171,7 @@ public final class HostRpaManager {
         log.debug("[RPA Actuator] mouseMove: ({}, {})", x, y);
     }
 
-    /**
-     * Perform a left mouse button click at the current cursor position.
-     */
+    /** 在当前光标位置执行鼠标左键点击。 */
     public void mouseClick() {
         ensureAvailable();
 
@@ -183,9 +180,7 @@ public final class HostRpaManager {
         log.debug("[RPA Actuator] mouseClick (left)");
     }
 
-    /**
-     * Perform a right mouse button click at the current cursor position.
-     */
+    /** 在当前光标位置执行鼠标右键点击。 */
     public void mouseRightClick() {
         ensureAvailable();
 
@@ -195,12 +190,10 @@ public final class HostRpaManager {
     }
 
     /**
-     * Perform a mouse click at the specified coordinates.
-     * <p>
-     * Convenience method combining {@link #mouseMove(int, int)} and {@link #mouseClick()}.
+     * 在指定坐标执行鼠标点击 — 组合 mouseMove + mouseClick 的便捷方法。
      *
-     * @param x screen x coordinate
-     * @param y screen y coordinate
+     * @param x 屏幕 x 坐标
+     * @param y 屏幕 y 坐标
      */
     public void mouseClickAt(int x, int y) {
         mouseMove(x, y);
@@ -209,9 +202,9 @@ public final class HostRpaManager {
     }
 
     /**
-     * Perform a mouse scroll operation.
+     * 执行鼠标滚轮操作。
      *
-     * @param amount number of scroll notches (negative = up, positive = down)
+     * @param amount 滚动格数（负值=向上，正值=向下）
      */
     public void mouseScroll(int amount) {
         ensureAvailable();
@@ -225,17 +218,13 @@ public final class HostRpaManager {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Simulate typing a string of text via the keyboard.
+     * 通过键盘模拟输入一段文本。
      * <p>
-     * For each character, the method attempts to resolve the extended
-     * key code via {@link KeyEvent#getExtendedKeyCodeForChar(int)}.
-     * Characters that cannot be mapped to a key code are skipped with
-     * a debug log warning.
-     * <p>
-     * For uppercase letters and symbols requiring Shift, the method
-     * automatically presses and releases Shift around the key event.
+     * 对每个字符尝试通过 {@link KeyEvent#getExtendedKeyCodeForChar(int)}
+     * 解析扩展键码。无法映射的字符将被跳过。
+     * 大写字母和需要 Shift 的符号会自动按下/释放 Shift 键。
      *
-     * @param text the text to type
+     * @param text 要输入的文本
      */
     public void keyboardType(String text) {
         ensureAvailable();
@@ -302,9 +291,9 @@ public final class HostRpaManager {
     }
 
     /**
-     * Press and release a single key by its VK code.
+     * 按下并释放单个按键。
      *
-     * @param keyCode the KeyEvent.VK_* constant
+     * @param keyCode KeyEvent.VK_* 常量
      */
     public void keyPress(int keyCode) {
         ensureAvailable();
@@ -314,10 +303,10 @@ public final class HostRpaManager {
     }
 
     /**
-     * Press a key combination (e.g., Ctrl+C).
+     * 按下组合键（如 Ctrl+C）。
      *
-     * @param modifiers modifier keys (bitwise OR of InputEvent.*_DOWN_MASK)
-     * @param keyCode   the KeyEvent.VK_* constant
+     * @param modifiers 修饰键（InputEvent.*_DOWN_MASK 的位或组合）
+     * @param keyCode   KeyEvent.VK_* 常量
      */
     public void keyCombo(int modifiers, int keyCode) {
         ensureAvailable();
@@ -367,9 +356,7 @@ public final class HostRpaManager {
     }
 
     /**
-     * Determine if a character requires the Shift key to be held.
-     * <p>
-     * Covers common symbols that need Shift on standard US keyboard layouts.
+     * 判断字符是否需要按住 Shift 键 — 覆盖标准美式键盘布局中需要 Shift 的常见符号。
      */
     private boolean isShiftRequired(char c) {
         return switch (c) {

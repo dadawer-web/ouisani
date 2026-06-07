@@ -16,14 +16,14 @@ import org.slf4j.LoggerFactory;
 import java.util.Map;
 
 /**
- * AIOS Application Installation & Scheduling Engine.
+ * AIOS 应用安装与调度引擎。
  * <p>
- * Parses an {@link AppManifest} from text, mounts VFS directories,
- * allocates token budgets via Cgroup, and spawns {@code spawnCount}
- * virtual threads — each running a {@link GenericAppAgent} that can
- * execute code inside a Docker sandbox if the entrypoint requires it.
- *
- * <h3>Usage:</h3>
+ * OS 类比：相当于 systemd 的 {@code systemctl start} + Docker 的 {@code docker run} —
+ * 解析应用清单、挂载 VFS 目录、通过 Cgroup 分配 token 预算，
+ * 然后生成 {@code spawnCount} 个虚拟线程，每个运行一个 {@link GenericAppAgent}，
+ * 可在 Docker 沙箱中执行代码。
+ * <p>
+ * 使用方式：
  * <pre>
  * AiosAppManager.configure(scheduler);
  * AiosAppManager.installAndRun(manifestText);
@@ -40,9 +40,9 @@ public class AiosAppManager {
     }
 
     /**
-     * Install and run a generic OS application from its manifest text.
+     * 安装并运行通用 OS 应用（从清单文本解析）。
      *
-     * @param appManifestContent the raw manifest text (APP_NAME, SPAWN, BUDGET, MOUNT, ENTRYPOINT)
+     * @param appManifestContent 原始清单文本（APP_NAME, SPAWN, BUDGET, MOUNT, ENTRYPOINT）
      */
     public static void installAndRun(String appManifestContent) {
         if (scheduler == null) {
@@ -84,11 +84,10 @@ public class AiosAppManager {
     }
 
     /**
-     * Generic application Agent — dynamically created per manifest worker.
+     * 通用应用 Agent — 根据清单动态创建的工作线程。
      * <p>
-     * If the entrypoint contains "docker" or "python", it delegates execution
-     * to {@link DockerSandboxProvider} for real sandboxed code execution.
-     * Otherwise, it uses the LLM to "think" through the entrypoint command.
+     * 如果入口点包含 "docker" 或 "python"，则委托给 {@link DockerSandboxProvider}
+     * 进行真实沙箱代码执行；否则使用 LLM "思考"入口点命令。
      */
     static class GenericAppAgent extends AbstractAgent {
 
@@ -145,8 +144,8 @@ public class AiosAppManager {
         }
 
         /**
-         * Extract a Python script stub from the entrypoint.
-         * In production, this would read the actual script file from VFS.
+         * 从入口点提取 Python 脚本占位符。
+         * 生产环境中会从 VFS 读取实际脚本文件。
          */
         private String extractScript(String lowerEntrypoint) {
             // If entrypoint is like "python3 /app/main.py", generate a placeholder

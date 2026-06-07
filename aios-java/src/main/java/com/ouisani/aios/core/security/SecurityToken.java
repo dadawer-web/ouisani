@@ -11,35 +11,43 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Windows-style Security Token for AIOS.
+ * 安全令牌 — AIOS 的 Windows 风格访问令牌。
  * <p>
- * Each token carries an owner ID, a numeric privilege level (0=highest, 3=lowest),
- * and a set of capability strings. Tokens are attached to {@link AgentTask}s as
- * their primary token, and can be temporarily impersonated via
- * {@link ImpersonationContext#runAs} for privilege escalation in a controlled scope.
+ * 每个令牌携带所有者 ID、数值特权级别（0=最高, 3=最低）和一组权能字符串。
+ * 令牌作为主令牌绑定到 {@link AgentTask}，也可通过
+ * {@link ImpersonationContext#runAs} 在受控范围内临时冒充。
  *
- * <h3>Privilege Levels:</h3>
+ * <h3>特权级别：</h3>
  * <ul>
- *   <li>0 — Kernel (REALTIME): all capabilities, bypasses all checks</li>
- *   <li>1 — System: most capabilities, can access secrets</li>
- *   <li>2 — User: standard capabilities</li>
- *   <li>3 — Restricted: minimal capabilities</li>
+ *   <li>0 — 内核级 (REALTIME)：拥有所有权限，绕过所有检查</li>
+ *   <li>1 — 系统级：大部分权限，可访问密钥</li>
+ *   <li>2 — 用户级：标准权限</li>
+ *   <li>3 — 受限级：最低权限</li>
  * </ul>
  *
- * <h3>Standard Capabilities:</h3>
+ * <h3>OS 类比: Windows Access Token + Linux Capabilities</h3>
+ * Windows 的访问令牌 (Access Token) 携带 SID 和特权列表，
+ * Linux 的 Capabilities 将 root 权限拆分为细粒度权能。
+ * SecurityToken 融合两者：数值级别控制粗粒度访问，
+ * 权能字符串控制细粒度操作。
+ *
+ * <h3>标准权能：</h3>
  * <ul>
- *   <li>{@code SE_REALTIME} — bypass cgroup limits</li>
- *   <li>{@code SE_SECRET_ACCESS} — access paths containing "secret"</li>
- *   <li>{@code SE_REGISTRY_WRITE} — modify the semantic registry</li>
- *   <li>{@code SE_HANDLE_OPEN} — open VFS handles</li>
- *   <li>{@code SE_ALL} — all capabilities (god mode)</li>
+ *   <li>{@code SE_REALTIME} — 绕过 cgroup 限制</li>
+ *   <li>{@code SE_SECRET_ACCESS} — 访问包含 "secret" 的路径</li>
+ *   <li>{@code SE_REGISTRY_WRITE} — 修改语义注册表</li>
+ *   <li>{@code SE_HANDLE_OPEN} — 打开 VFS 句柄</li>
+ *   <li>{@code SE_ALL} — 所有权限（上帝模式）</li>
  * </ul>
+ *
+ * @see ImpersonationContext
+ * @see BpfManager
  */
 public final class SecurityToken {
 
     private static final Logger log = LoggerFactory.getLogger(SecurityToken.class);
 
-    // ── Standard Capability Constants ──
+    // ── 标准权能常量 ──
     public static final String SE_REALTIME = "SE_REALTIME";
     public static final String SE_SECRET_ACCESS = "SE_SECRET_ACCESS";
     public static final String SE_REGISTRY_WRITE = "SE_REGISTRY_WRITE";
@@ -47,7 +55,7 @@ public final class SecurityToken {
     public static final String SE_ALL = "SE_ALL";
 
     private final String ownerId;
-    private final int privilegeLevel; // 0=highest (kernel), 3=lowest (restricted)
+    private final int privilegeLevel; // 0=最高(内核), 3=最低(受限)
     private final Set<String> capabilities;
 
     public SecurityToken(String ownerId, int privilegeLevel, Set<String> capabilities) {
@@ -70,46 +78,37 @@ public final class SecurityToken {
         return capabilities;
     }
 
+    /** 检查此令牌是否拥有指定权能（SE_ALL 可绕过所有检查） */
     public boolean hasCapability(String capability) {
         return capabilities.contains(SE_ALL) || capabilities.contains(capability);
     }
 
-    /** Check if this token's privilege level is at or below the given threshold. */
+    /** 检查此令牌的特权级别是否不超过给定阈值 */
     public boolean isPrivilegeLevelAtMost(int maxLevel) {
         return privilegeLevel <= maxLevel;
     }
 
-    /**
-     * Create a token for a REALTIME (kernel-level) agent with all capabilities.
-     */
+    /** 创建内核级令牌 — 拥有所有权限 */
     public static SecurityToken kernelToken(String ownerId) {
         return new SecurityToken(ownerId, 0, Set.of(SE_ALL));
     }
 
-    /**
-     * Create a token for a system-level agent.
-     */
+    /** 创建系统级令牌 */
     public static SecurityToken systemToken(String ownerId) {
         return new SecurityToken(ownerId, 1, Set.of(SE_HANDLE_OPEN, SE_SECRET_ACCESS, SE_REGISTRY_WRITE));
     }
 
-    /**
-     * Create a token for a normal user agent with standard capabilities.
-     */
+    /** 创建用户级令牌 — 标准权限 */
     public static SecurityToken userToken(String ownerId) {
         return new SecurityToken(ownerId, 2, Set.of(SE_HANDLE_OPEN));
     }
 
-    /**
-     * Create a restricted token with minimal capabilities.
-     */
+    /** 创建受限令牌 — 最低权限 */
     public static SecurityToken restrictedToken(String ownerId) {
         return new SecurityToken(ownerId, 3, Set.of());
     }
 
-    /**
-     * Create a token based on the agent's process priority.
-     */
+    /** 根据 Agent 的进程优先级创建令牌 */
     public static SecurityToken forAgent(AgentTask task) {
         if (task.processPriority() == ProcessPriority.REALTIME) {
             return kernelToken("agent_" + task.pid());
@@ -118,19 +117,19 @@ public final class SecurityToken {
     }
 
     /**
-     * Get the effective security token for the current thread.
-     * Checks impersonation context first, then falls back to the current task's primary token.
+     * 获取当前线程的有效安全令牌。
+     * 优先检查冒充上下文，然后回退到当前任务的主令牌。
      *
-     * @return the effective SecurityToken, or null if none is available
+     * @return 有效的 SecurityToken，若无则返回 null
      */
     public static SecurityToken getEffective() {
-        // Priority 1: Impersonation context
+        // 优先级 1: 冒充上下文
         SecurityToken impersonated = ImpersonationContext.CURRENT_TOKEN.get();
         if (impersonated != null) {
             return impersonated;
         }
 
-        // Priority 2: Current task's primary token
+        // 优先级 2: 当前任务的主令牌
         AgentTask currentTask = TaskScheduler.CURRENT_TASK.get();
         if (currentTask != null) {
             return currentTask.primaryToken();
@@ -139,9 +138,7 @@ public final class SecurityToken {
         return null;
     }
 
-    /**
-     * Check if the current effective token has a specific capability.
-     */
+    /** 检查当前有效令牌是否拥有指定权能 */
     public static boolean effectiveHasCapability(String capability) {
         SecurityToken token = getEffective();
         return token != null && token.hasCapability(capability);

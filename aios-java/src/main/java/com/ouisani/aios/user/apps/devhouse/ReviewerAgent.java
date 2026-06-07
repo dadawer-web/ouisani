@@ -12,26 +12,29 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Reviewer Agent — the chief architect / QA of the Auto Dev House.
+ * Reviewer Agent — 自动开发屋的首席架构师 / QA。
  * <p>
- * This Agent holds the highest privilege (REALTIME) and acts as the
- * final gatekeeper. Instead of polling the VFS, it uses the
- * <b>"shared memory + hardware interrupt"</b> IPC model:
+ * OS 类比：相当于内核中最高优先级的审计进程 — 拥有 REALTIME 优先级，
+ * 作为最终把关者。使用"共享内存 + 硬件中断"IPC 模型：
  * <ol>
- *   <li>Waits for SIG_CONTEXT_UPDATE from the Coder agent</li>
- *   <li>Reads code and build log from the SemanticMemoryBlock</li>
- *   <li>Calls LLM for a sharp review</li>
- *   <li>Writes the final report to SHM + VFS</li>
- *   <li>Updates status to FINISHED</li>
+ *   <li>等待 Coder Agent 发来的 SIG_CONTEXT_UPDATE 信号</li>
+ *   <li>从 SemanticMemoryBlock 读取代码和构建日志</li>
+ *   <li>调用 LLM 进行犀利评审</li>
+ *   <li>将最终报告写入 SHM + VFS</li>
+ *   <li>更新状态为 FINISHED</li>
  * </ol>
  */
 public class ReviewerAgent extends AbstractAgent {
 
     private static final Logger log = LoggerFactory.getLogger(ReviewerAgent.class);
 
+    /** DevHouse 项目共享内存块 ID */
     private static final String SHM_BLOCK_ID = "devhouse_project";
+    /** 信号等待超时时间（毫秒） */
     private static final long SIGNAL_WAIT_TIMEOUT_MS = 120_000;
+    /** 回退轮询间隔（毫秒） */
     private static final int FALLBACK_POLL_INTERVAL_MS = 2000;
+    /** 回退最大轮询次数 */
     private static final int FALLBACK_MAX_POLLS = 60;
 
     public ReviewerAgent() {

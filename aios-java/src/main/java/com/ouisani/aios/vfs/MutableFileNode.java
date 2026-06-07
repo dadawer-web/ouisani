@@ -7,12 +7,15 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * A mutable VFS file node that actually stores content in memory.
+ * 可变文件节点 — 在内存中实际存储内容的 VFS 文件节点。
  * <p>
- * Unlike the immutable {@link VfsNode.FileNode} record (which discards writes
- * and always reads empty), this node persists data via an {@link AtomicReference},
- * making it suitable for agent-to-agent coordination through VFS status files,
- * PRD documents, code artifacts, and build logs.
+ * 与不可变的 {@link VfsNode.FileNode}（丢弃写入、始终读取空内容）不同，
+ * 此节点通过 {@link AtomicReference} 持久化数据，适用于 Agent 间通过
+ * VFS 状态文件进行协调、PRD 文档、代码产物和构建日志等场景。
+ *
+ * <h3>OS 类比</h3>
+ * 类比 Linux 的 tmpfs 或 ramfs — 数据存储在内存中，
+ * 读写速度快但进程退出后数据丢失。
  */
 public non-sealed class MutableFileNode implements VfsNode {
 

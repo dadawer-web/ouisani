@@ -211,7 +211,7 @@ public class TestFullSystemBoot {
     }
 
     /**
-     * Simple .env file loader — reads KEY=VALUE lines, ignores comments and blanks.
+     * 简单的 .env 文件加载器 — 读取 KEY=VALUE 行，忽略注释和空行。
      */
     private static Map<String, String> loadDotEnv(Path dotEnvPath) {
         Map<String, String> env = new HashMap<>();

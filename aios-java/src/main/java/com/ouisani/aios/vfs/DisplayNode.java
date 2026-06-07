@@ -3,6 +3,16 @@ package com.ouisani.aios.vfs;
 import com.ouisani.aios.core.VfsNode;
 import com.ouisani.aios.core.network.EventBus;
 
+/**
+ * 显示节点 — AIOS 的简单显示输出设备。
+ * <p>
+ * 这是一个只写设备节点，Agent 向此节点写入的内容会通过 EventBus
+ * 广播 {@code "ui_render"} 事件到所有前端。适用于简单的文本/JSON 渲染。
+ *
+ * <h3>OS 类比</h3>
+ * 类比 Linux 的 {@code /dev/fb0}（帧缓冲区）—
+ * 向显示设备写入像素数据即可在屏幕上显示。
+ */
 public non-sealed class DisplayNode implements VfsNode {
 
     private final String path;

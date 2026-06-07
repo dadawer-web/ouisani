@@ -1,101 +1,98 @@
 package com.ouisani.aios.core.ipc;
 
 /**
- * Semantic POSIX signal types for AIOS Agent processes.
+ * 语义 POSIX 信号类型 — AIOS Agent 进程的硬件中断级 IPC 机制。
  * <p>
- * Signals are the hardware-interrupt-level IPC mechanism in AIOS.
- * They are near-zero-overhead, non-blocking, and can interrupt
- * an Agent's current operation without polling.
- * <p>
- * <b>Signal Hierarchy:</b>
+ * 信号是 AIOS 中开销极低、非阻塞的 IPC 机制，可以中断 Agent 的当前操作
+ * 而无需轮询。
+ *
+ * <h3>OS 类比: POSIX Signals</h3>
+ * Linux 的信号 (signal) 是进程间通信的最底层机制：
+ * SIGKILL 终止进程、SIGINT 中断操作、SIGUSR1 用户自定义。
+ * AIOS 的信号将此模型提升到语义级别，增加了 SIG_CONTEXT_UPDATE（共享潜意识更新）、
+ * SIGIO（UI 交互事件）、SIG_TICK（系统时钟节拍）等 AIOS 专属信号。
+ *
+ * <h3>信号层级：</h3>
  * <ul>
- *   <li>{@link #SIGTERM} — Kill: force-terminate the agent</li>
- *   <li>{@link #SIGINT}  — Interrupt: graceful interruption</li>
- *   <li>{@link #SIGUSR1} — User signal: inject system interrupt into LLM prompt</li>
- *   <li>{@link #SIG_CONTEXT_UPDATE} — Subconscious update: shared context has changed</li>
+ *   <li>{@link #SIGTERM} — 终止：强制终止 Agent</li>
+ *   <li>{@link #SIGINT}  — 中断：优雅中断当前操作</li>
+ *   <li>{@link #SIGUSR1} — 用户信号：向 LLM Prompt 注入系统中断</li>
+ *   <li>{@link #SIG_CONTEXT_UPDATE} — 潜意识更新：共享上下文已变更</li>
  * </ul>
+ *
+ * <h3>SIG_CONTEXT_UPDATE: 神经中断</h3>
+ * 这是 AIOS "共享内存 + 硬件中断" IPC 模型的基石。当 Agent A 写入
+ * SemanticMemoryBlock 后，向 Agent B 发送 SIG_CONTEXT_UPDATE。
+ * Agent B 的信号处理器读取更新的 Block — <b>零轮询、零消息传递、零文本复制</b>。
  * <p>
- * <h3>SIG_CONTEXT_UPDATE: The Neural Interrupt</h3>
- * This signal is the cornerstone of AIOS's "shared memory + hardware
- * interrupt" IPC model. When Agent A writes to a SemanticMemoryBlock,
- * it sends SIG_CONTEXT_UPDATE to Agent B. Agent B's signal handler
- * reads the updated block — <b>zero polling, zero message passing,
- * zero text copying</b>.
- * <p>
- * This is the neural equivalent of a cache coherence interrupt in
- * a multi-core CPU: when one core modifies a cache line, the other
- * cores receive an invalidation signal and can reload the data.
+ * 这类似于多核 CPU 的缓存一致性中断：当一个核心修改了缓存行，
+ * 其他核心收到失效信号并重新加载数据。
+ *
+ * @see SignalInterceptor
+ * @see SharedMemoryManager
  */
 public enum SignalType {
 
-    /** Terminate: force-kill the agent (throws InterruptedException). */
+    /** 终止：强制终止 Agent（抛出 InterruptedException） */
     SIGTERM,
 
-    /** Interrupt: graceful interruption of the current operation. */
+    /** 中断：优雅中断当前操作 */
     SIGINT,
 
-    /** User-defined signal 1: injects a system interrupt into the next prompt. */
+    /** 用户信号 1：向下一个 Prompt 注入系统中断 */
     SIGUSR1,
 
     /**
-     * Context Update: the shared subconscious has been modified.
+     * 上下文更新：共享潜意识已被修改。
      * <p>
-     * Sent by a writer agent (e.g., PmAgent) after updating a
-     * SemanticMemoryBlock. The receiving agent (e.g., CoderAgent)
-     * should read the updated block from SharedMemoryManager
-     * without polling or message passing.
+     * 由写入 Agent（如 PmAgent）在更新 SemanticMemoryBlock 后发送。
+     * 接收 Agent（如 CoderAgent）应从 SharedMemoryManager 读取更新的 Block，
+     * 无需轮询或消息传递。
      * <p>
-     * The signal carries metadata about which block was updated
-     * and the new version number, stored in the AgentTask's
-     * signal metadata map.
+     * 信号携带元数据（哪个 Block 被更新、新版本号），
+     * 存储在 AgentTask 的信号元数据 Map 中。
      */
     SIG_CONTEXT_UPDATE,
 
     /**
-     * I/O Possible: a UI interaction event is pending.
+     * I/O 就绪：有 UI 交互事件待处理。
      * <p>
-     * Sent by {@link com.ouisani.aios.vfs.GuiActionNode} when a user
-     * clicks a button or types into an input on the frontend dashboard.
-     * The Agent should read the pending action from
-     * {@code /dev/gui/action} to handle the user interaction.
+     * 由 {@link com.ouisani.aios.vfs.GuiActionNode} 在用户点击按钮或输入时发送。
+     * Agent 应从 {@code /dev/gui/action} 读取待处理的操作。
      * <p>
-     * This is the AIOS equivalent of POSIX SIGIO: the kernel notifies
-     * a process that I/O is possible on a file descriptor without
-     * requiring the process to poll.
+     * 类比 POSIX SIGIO：内核通知进程某个文件描述符上有 I/O 可用，
+     * 无需进程轮询。
      */
     SIGIO,
 
     /**
-     * System Tick: the hardware clock crystal has fired a tick interrupt.
+     * 系统节拍：硬件时钟晶振触发的节拍中断。
      * <p>
-     * Sent by {@link com.ouisani.aios.core.tick.SystemTickGenerator} on each
-     * clock cycle (default: every 60 seconds). This is the AIOS equivalent
-     * of ARM's SysTick timer or x86's LAPIC timer interrupt — the heartbeat
-     * that drives all time-dependent kernel subsystems:
+     * 由 {@link com.ouisani.aios.core.tick.SystemTickGenerator} 在每个时钟周期
+     * （默认 60 秒）触发。类比 ARM 的 SysTick 定时器或 x86 的 LAPIC 定时器中断 —
+     * 驱动所有时间相关的内核子系统的心跳：
      * <ul>
-     *   <li>Memory decay — SemanticCacheManager applies Ebbinghaus curve decay</li>
-     *   <li>Scheduler preemption — time slice accounting</li>
-     *   <li>Tick sleep wakeup — agents sleeping on a tick count are woken</li>
+     *   <li>记忆衰减 — SemanticCacheManager 应用艾宾浩斯曲线衰减</li>
+     *   <li>调度器抢占 — 时间片记账</li>
+     *   <li>节拍睡眠唤醒 — 等待节拍数的 Agent 被唤醒</li>
      * </ul>
      * <p>
-     * Unlike other signals which are directed at a specific PID, SIG_TICK
-     * is a <b>broadcast</b> signal — it is sent to ALL active agents and
-     * published on the EventBus as a "sig_tick" event.
+     * 与其他信号不同，SIG_TICK 是<b>广播</b>信号 — 发送给所有活跃 Agent，
+     * 并在 EventBus 上发布为 "sig_tick" 事件。
      *
      * @see com.ouisani.aios.core.tick.SystemTickGenerator
      */
     SIG_TICK,
 
     /**
-     * Alarm: a previously registered timer has expired.
+     * 闹钟：之前注册的定时器已到期。
      * <p>
-     * Sent by the {@link com.ouisani.aios.core.tick.TickSleepRegistry} when
-     * an agent's sleep timer expires. This is the AIOS equivalent of POSIX
-     * SIGALRM / alarm() — the agent called {@code sys_nanosleep(tickCount)}
-     * and the requested number of ticks has elapsed.
+     * 由 {@link com.ouisani.aios.core.tick.TickSleepRegistry} 在 Agent 的
+     * 睡眠定时器到期时发送。类比 POSIX SIGALRM / alarm() — Agent 调用了
+     * {@code sys_nanosleep(tickCount)}，请求的节拍数已过。
      * <p>
-     * Unlike {@link #SIG_TICK} which is broadcast to all agents, SIG_ALRM
-     * is <b>directed</b> at a specific PID — only the sleeping agent receives it.
+     * 与 {@link #SIG_TICK}（广播）不同，SIG_ALRM 是<b>定向</b>信号 —
+     * 只有正在睡眠的 Agent 才会收到。
      *
      * @see com.ouisani.aios.core.tick.TickSleepRegistry
      */

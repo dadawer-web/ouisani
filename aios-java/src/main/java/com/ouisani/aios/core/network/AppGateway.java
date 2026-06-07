@@ -3,24 +3,31 @@ package com.ouisani.aios.core.network;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.syscall.SyscallDispatcher;
 import com.ouisani.aios.core.syscall.SyscallRequest;
+import com.ouisani.aios.user.apps.omnifactory.OmniMotherAgent;
+import com.ouisani.aios.user.apps.omnifactory.WorkflowManifest;
+import com.ouisani.aios.user.apps.omnifactory.WorkflowNode;
+import com.ouisani.aios.user.sdk.AiosSdk;
 import io.javalin.Javalin;
 import io.javalin.websocket.WsContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * Application Network Gateway — bridges external UIs to AIOS application stdin/stdout.
+ * 应用网络网关 — 将外部 UI 桥接到 AIOS 应用的标准输入/输出。
  * <p>
- * Creates a dynamic WebSocket route: {@code /api/app/{app_name}/stream}
+ * OS 类比：相当于 Unix 的管道重定向 + inetd —
+ * 创建动态 WebSocket 路由 {@code /api/app/{app_name}/stream}：
  * <ul>
- *   <li><b>Input bridge:</b> WebSocket messages → VFS write to {@code /proc/apps/{appName}/stdin}</li>
- *   <li><b>Output bridge:</b> EventBus subscription {@code app_stdout_{appName}} → WebSocket push</li>
+ *   <li><b>输入桥接：</b>WebSocket 消息 → VFS 写入 {@code /proc/apps/{appName}/stdin}</li>
+ *   <li><b>输出桥接：</b>EventBus 订阅 {@code app_stdout_{appName}} → WebSocket 推送</li>
  * </ul>
  *
- * <h3>Example (frontend):</h3>
+ * <h3>前端示例：</h3>
  * <pre>
  * const ws = new WebSocket("ws://localhost:8080/api/app/data_pipeline/stream?token=AIOS-SUPER-SECRET-KEY");
  * ws.onmessage = (e) => console.log("App output:", e.data);
@@ -31,8 +38,11 @@ public class AppGateway {
 
     private static final Logger log = LoggerFactory.getLogger(AppGateway.class);
 
-    /** Track connected clients per app for cleanup. */
+    /** 跟踪每个应用的已连接客户端，用于清理 */
     private static final ConcurrentHashMap<String, Set<WsContext>> appClients = new ConcurrentHashMap<>();
+
+    /** 可视化大屏观察者 — 接收内核自愈告警等高优先级信号 */
+    private static final Set<WsContext> dashboardObservers = ConcurrentHashMap.newKeySet();
 
     public static void attachTo(Javalin app) {
         app.ws("/api/app/{app_name}/stream", ws -> {
@@ -110,5 +120,384 @@ public class AppGateway {
 
         log.info("[Gateway] App Gateway attached: /api/app/{app_name}/stream");
         System.out.println("  ✓ [Gateway] App Gateway attached: /api/app/{app_name}/stream");
+
+        // ════════════════════════════════════════════════════════════════
+        //  Dashboard Alert WebSocket — 内核自愈告警实时推送通道
+        // ════════════════════════════════════════════════════════════════
+        app.ws("/api/dashboard/alerts", ws -> {
+            ws.onConnect(ctx -> {
+                String token = ctx.queryParam("token");
+                if (!AuthManager.instance().verifyToken(token)) {
+                    log.warn("[Gateway] Unauthorized dashboard WebSocket connection attempt");
+                    ctx.session.close();
+                    return;
+                }
+                dashboardObservers.add(ctx);
+                log.info("[Gateway] Dashboard observer connected");
+                System.out.println("  📡 [Gateway] Dashboard observer connected");
+            });
+
+            ws.onClose(ctx -> {
+                dashboardObservers.remove(ctx);
+                log.info("[Gateway] Dashboard observer disconnected");
+            });
+
+            ws.onError(ctx -> {
+                dashboardObservers.remove(ctx);
+                log.warn("[Gateway] Dashboard WebSocket error: {}",
+                        ctx.error() != null ? ctx.error().getMessage() : "unknown");
+            });
+        });
+
+        // 订阅内核自愈告警频道 → 广播给所有大屏观察者
+        EventBus.instance().subscribe("sys.human_intervention_required", AppGateway::broadcastToDashboards);
+
+        log.info("[Gateway] System Alert Channel opened. Ready to push high-priority rescue signals to dashboard.");
+        System.out.println("[Gateway] System Alert Channel opened. Ready to push high-priority rescue signals to dashboard.");
+
+        // ════════════════════════════════════════════════════════════════
+        //  God Hand Protocol — 前端参数热补丁控制通道
+        // ════════════════════════════════════════════════════════════════
+        app.ws("/api/app/god_hand/control", ws -> {
+            ws.onConnect(ctx -> {
+                String token = ctx.queryParam("token");
+                if (!AuthManager.instance().verifyToken(token)) {
+                    log.warn("[Gateway] Unauthorized God Hand WebSocket connection attempt");
+                    ctx.session.close();
+                    return;
+                }
+                log.info("[Gateway] God Hand control channel connected");
+                System.out.println("[Gateway] God Hand control channel connected");
+            });
+
+            ws.onMessage(ctx -> {
+                String message = ctx.message();
+                try {
+                    String action = extractJsonField(message, "action");
+                    if ("HOT_PATCH_PARAM".equals(action)) {
+                        String targetNode = extractJsonField(message, "targetNode");
+                        String paramsJson = extractJsonObject(message, "params");
+
+                        if (targetNode == null || targetNode.isBlank()) {
+                            log.warn("[Gateway] HOT_PATCH_PARAM missing targetNode");
+                            return;
+                        }
+
+                        // 1. 将新参数覆盖写入 VFS 配置文件
+                        String configPath = "/factory/configs/" + targetNode + ".json";
+                        AiosSdk.getInstance().writeFile("god_hand", configPath,
+                                paramsJson != null ? paramsJson : "{}");
+
+                        // 2. 向 EventBus 广播参数变更通知
+                        EventBus.instance().broadcast("sys.control." + targetNode, "CONFIG_UPDATED");
+
+                        System.out.printf("[Gateway] God Hand: HOT_PATCH_PARAM → %s. Config written to %s. EventBus notified.%n",
+                                targetNode, configPath);
+                        log.info("[Gateway] God Hand: HOT_PATCH_PARAM for node '{}'. Config: {}", targetNode, configPath);
+                    }
+                } catch (Exception e) {
+                    log.warn("[Gateway] Failed to process God Hand message: {}", e.getMessage());
+                }
+            });
+
+            ws.onClose(ctx -> {
+                log.info("[Gateway] God Hand control channel disconnected");
+            });
+
+            ws.onError(ctx -> {
+                log.warn("[Gateway] God Hand WebSocket error: {}",
+                        ctx.error() != null ? ctx.error().getMessage() : "unknown");
+            });
+        });
+
+        log.info("[Gateway] God Hand Protocol attached: /api/app/god_hand/control");
+        System.out.println("[Gateway] God Hand Protocol attached: /api/app/god_hand/control");
+
+        // ════════════════════════════════════════════════════════════════
+        //  God Hand Protocol V2 — /api/workflow/control 热机干涉通道
+        // ════════════════════════════════════════════════════════════════
+        app.ws("/api/workflow/control", ws -> {
+            ws.onConnect(ctx -> {
+                String token = ctx.queryParam("token");
+                if (!AuthManager.instance().verifyToken(token)) {
+                    log.warn("[Gateway] Unauthorized workflow control WebSocket connection attempt");
+                    ctx.session.close();
+                    return;
+                }
+                log.info("[Gateway] Workflow control channel connected");
+                System.out.println("[Gateway] Workflow control channel connected");
+            });
+
+            ws.onMessage(ctx -> {
+                String message = ctx.message();
+                try {
+                    String action = extractJsonField(message, "action");
+                    if ("HOT_PATCH_PARAM".equals(action)) {
+                        String targetNode = extractJsonField(message, "targetNode");
+                        String paramsJson = extractJsonObject(message, "params");
+
+                        if (targetNode == null || targetNode.isBlank()) {
+                            log.warn("[Gateway] HOT_PATCH_PARAM missing targetNode");
+                            return;
+                        }
+
+                        // 强制覆写 VFS 配置文件
+                        String configPath = "/factory/configs/" + targetNode + ".json";
+                        VfsManager.instance().resolve(configPath)
+                                .ifPresent(node -> node.write(paramsJson != null ? paramsJson : "{}"));
+
+                        // 触发系统级广播
+                        EventBus.instance().broadcast("sys.control." + targetNode, "CONFIG_UPDATED");
+
+                        System.out.printf("[Gateway] God Hand Protocol engaged. Hot-patched VFS config for node %s.%n",
+                                targetNode);
+                        log.info("[Gateway] God Hand Protocol engaged. Hot-patched VFS config for node '{}'.", targetNode);
+                    }
+                } catch (Exception e) {
+                    log.warn("[Gateway] Failed to process workflow control message: {}", e.getMessage());
+                }
+            });
+
+            ws.onClose(ctx -> {
+                log.info("[Gateway] Workflow control channel disconnected");
+            });
+
+            ws.onError(ctx -> {
+                log.warn("[Gateway] Workflow control WebSocket error: {}",
+                        ctx.error() != null ? ctx.error().getMessage() : "unknown");
+            });
+        });
+
+        log.info("[Gateway] Workflow control channel attached: /api/workflow/control");
+        System.out.println("[Gateway] Workflow control channel attached: /api/workflow/control");
+
+        // ════════════════════════════════════════════════════════════════
+        //  POST /api/workflow/deploy — 前端可视化大屏 → AIOS 内核
+        // ════════════════════════════════════════════════════════════════
+        app.post("/api/workflow/deploy", ctx -> {
+            String payload = ctx.body();
+            System.out.printf("[App Gateway] Received Omni-Workflow payload from dashboard. Size: %d bytes.%n",
+                    payload.length());
+            log.info("[App Gateway] Received Omni-Workflow payload from dashboard. Size: {} bytes.", payload.length());
+
+            try {
+                // 解析 JSON → WorkflowManifest
+                WorkflowManifest manifest = parseWorkflowManifest(payload);
+
+                System.out.printf("[App Gateway] Parsed workflow '%s' with %d nodes.%n",
+                        manifest.workflowName(), manifest.nodes().size());
+                log.info("[App Gateway] Parsed workflow '{}' with {} nodes.",
+                        manifest.workflowName(), manifest.nodes().size());
+
+                // 通过内核调度器拉起母体智能体
+                OmniMotherAgent mother = new OmniMotherAgent(manifest);
+                mother.spawn(VfsManager.instance().getTaskScheduler());
+
+                ctx.contentType("application/json");
+                ctx.result("{\"status\":\"success\",\"message\":\"Genesis Process Initiated\"}");
+                System.out.println("[App Gateway] External API engaged. Ready to receive N-Node topologies.");
+            } catch (Exception e) {
+                System.out.printf("[App Gateway] Failed to parse workflow payload: %s%n", e.getMessage());
+                log.error("[App Gateway] Failed to parse workflow payload", e);
+                ctx.status(400);
+                ctx.contentType("application/json");
+                ctx.result("{\"status\":\"error\",\"message\":\"" + e.getMessage().replace("\"", "'") + "\"}");
+            }
+        });
+
+        // CORS 预检支持 — 允许前端跨域访问
+        app.options("/api/workflow/deploy", ctx -> {
+            ctx.header("Access-Control-Allow-Origin", "*");
+            ctx.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+            ctx.header("Access-Control-Allow-Headers", "Content-Type");
+            ctx.result("");
+        });
+
+        // 为所有 /api/* 路由添加 CORS 头
+        app.before("/api/*", ctx -> {
+            ctx.header("Access-Control-Allow-Origin", "*");
+            ctx.header("Access-Control-Allow-Headers", "Content-Type");
+        });
+
+        log.info("[App Gateway] Workflow Deploy API attached: POST /api/workflow/deploy");
+        System.out.println("  ✓ [App Gateway] Workflow Deploy API: POST /api/workflow/deploy");
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  JSON 解析器 — 正则提取，兼容前端各种格式
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 将前端传来的 JSON 解析为 WorkflowManifest。
+     * <p>
+     * 预期格式：
+     * <pre>
+     * {
+     *   "workflowName": "my_workflow",
+     *   "nodes": [
+     *     {
+     *       "instanceId": "agent_1",
+     *       "blueprintId": "spider_agent",
+     *       "role": "爬取数据",
+     *       "subscribeTopic": "",
+     *       "publishTopic": "topic_agent_1_agent_2",
+     *       "userParams": {}
+     *     }
+     *   ]
+     * }
+     * </pre>
+     */
+    private static WorkflowManifest parseWorkflowManifest(String json) {
+        String workflowName = extractJsonField(json, "workflowName");
+        if (workflowName == null || workflowName.isBlank()) {
+            workflowName = "dashboard_workflow";
+        }
+
+        // 提取 nodes 数组部分
+        String nodesArray = extractJsonArray(json, "nodes");
+        if (nodesArray == null || nodesArray.isBlank()) {
+            throw new IllegalArgumentException("Missing or empty 'nodes' array in payload");
+        }
+
+        // 逐个解析节点对象
+        List<WorkflowNode> nodes = new ArrayList<>();
+        Pattern objectPattern = Pattern.compile("\\{[^{}]*(?:\\{[^{}]*\\}[^{}]*)*\\}");
+        Matcher objectMatcher = objectPattern.matcher(nodesArray);
+
+        while (objectMatcher.find()) {
+            String obj = objectMatcher.group();
+            String instanceId = extractJsonField(obj, "instanceId");
+            String blueprintId = extractJsonField(obj, "blueprintId");
+            String role = extractJsonField(obj, "role");
+            String subscribeTopic = extractJsonField(obj, "subscribeTopic");
+            String publishTopic = extractJsonField(obj, "publishTopic");
+
+            // 解析 userParams
+            Map<String, String> userParams = extractUserParams(obj);
+
+            if (instanceId != null && !instanceId.isBlank()) {
+                nodes.add(new WorkflowNode(
+                        instanceId.trim(),
+                        role != null ? role.trim() : "",
+                        blueprintId != null ? blueprintId.trim() : instanceId.trim(),
+                        userParams,
+                        subscribeTopic != null ? subscribeTopic.trim() : "",
+                        publishTopic != null ? publishTopic.trim() : ""
+                ));
+            }
+        }
+
+        if (nodes.isEmpty()) {
+            throw new IllegalArgumentException("No valid nodes found in payload");
+        }
+
+        return new WorkflowManifest(workflowName, nodes);
+    }
+
+    /**
+     * 从 JSON 中提取指定 key 的字符串值。
+     */
+    private static String extractJsonField(String json, String key) {
+        if (json == null || key == null) return null;
+        Pattern p = Pattern.compile("\"" + key + "\"\\s*:\\s*\"([^\"]*?)\"");
+        Matcher m = p.matcher(json);
+        if (m.find()) return m.group(1);
+        // 尝试无引号格式
+        Pattern rawP = Pattern.compile("\"" + key + "\"\\s*:\\s*([^,}\\s]+)");
+        Matcher rawM = rawP.matcher(json);
+        if (rawM.find()) return rawM.group(1).trim();
+        return null;
+    }
+
+    /**
+     * 从 JSON 中提取指定 key 对应的对象内容（含花括号）。
+     * 用于提取 HOT_PATCH_PARAM 中的 params 字段。
+     */
+    private static String extractJsonObject(String json, String key) {
+        Pattern p = Pattern.compile("\"" + key + "\"\\s*:\\s*\\{");
+        Matcher m = p.matcher(json);
+        if (!m.find()) return null;
+        int start = m.start() + m.group().length() - 1; // 从 { 开始
+        int depth = 0;
+        int pos = start;
+        while (pos < json.length()) {
+            char c = json.charAt(pos);
+            if (c == '{') depth++;
+            else if (c == '}') {
+                depth--;
+                if (depth == 0) return json.substring(start, pos + 1);
+            }
+            pos++;
+        }
+        return null;
+    }
+
+    /**
+     * 从 JSON 中提取指定 key 对应的数组内容（不含方括号）。
+     */
+    private static String extractJsonArray(String json, String key) {
+        Pattern p = Pattern.compile("\"" + key + "\"\\s*:\\s*\\[");
+        Matcher m = p.matcher(json);
+        if (!m.find()) return null;
+        int start = m.end();
+        // 找到匹配的闭合方括号
+        int depth = 1;
+        int pos = start;
+        while (pos < json.length() && depth > 0) {
+            char c = json.charAt(pos);
+            if (c == '[') depth++;
+            else if (c == ']') depth--;
+            pos++;
+        }
+        return json.substring(start, pos - 1);
+    }
+
+    /**
+     * 从 JSON 对象中提取 userParams 字典。
+     */
+    private static Map<String, String> extractUserParams(String jsonObj) {
+        Map<String, String> params = new LinkedHashMap<>();
+        Pattern paramsPattern = Pattern.compile("\"userParams\"\\s*:\\s*\\{([^}]*)\\}");
+        Matcher paramsMatcher = paramsPattern.matcher(jsonObj);
+        if (!paramsMatcher.find()) return params;
+
+        String content = paramsMatcher.group(1);
+        Pattern kvPattern = Pattern.compile("\"([^\"]+)\"\\s*:\\s*\"([^\"]*)\"");
+        Matcher kvMatcher = kvPattern.matcher(content);
+        while (kvMatcher.find()) {
+            params.put(kvMatcher.group(1), kvMatcher.group(2));
+        }
+        return params;
+    }
+
+    /**
+     * 将内核自愈告警广播给所有已连接的可视化大屏。
+     * <p>
+     * 当 AutoMedic 熔断触发 {@code sys.human_intervention_required} 事件时，
+     * 此方法将告警 JSON 实时推送给前端大屏，实现 Human-in-the-Loop 介入。
+     *
+     * @param payload 告警事件数据
+     */
+    private static void broadcastToDashboards(Object payload) {
+        String message = payload != null ? payload.toString() : "{}";
+        int sent = 0;
+        Iterator<WsContext> it = dashboardObservers.iterator();
+        while (it.hasNext()) {
+            WsContext ctx = it.next();
+            try {
+                if (ctx.session.isOpen()) {
+                    ctx.send(message);
+                    sent++;
+                } else {
+                    it.remove();
+                }
+            } catch (Exception e) {
+                log.debug("[Gateway] Failed to push alert to dashboard observer: {}", e.getMessage());
+                it.remove();
+            }
+        }
+        if (sent > 0) {
+            log.info("[Gateway] Alert broadcasted to {} dashboard observer(s)", sent);
+        }
     }
 }

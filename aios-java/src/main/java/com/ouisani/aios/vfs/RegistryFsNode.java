@@ -9,25 +9,28 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Registry VFS Node — exposes the global Semantic Registry through the VFS
- * at {@code /proc/registry}.
+ * 注册表 VFS 节点 — 通过 VFS 暴露全局语义注册表，挂载在 {@code /proc/registry}。
  * <p>
- * Read behavior:
+ * 读取行为：
  * <ul>
- *   <li>If the node's path corresponds to a specific registry key (e.g.
- *       {@code /proc/registry/HKEY_LOCAL_AIOS/System/DefaultLlm}), returns that value.</li>
- *   <li>If the path is a prefix with no exact match, dumps all keys under that prefix.</li>
- *   <li>If the path is {@code /proc/registry}, dumps the entire registry.</li>
+ *   <li>如果路径对应特定注册表键（如 {@code /proc/registry/HKEY_LOCAL_AIOS/System/DefaultLlm}），
+ *       返回该键的值</li>
+ *   <li>如果路径是前缀且无精确匹配，导出该前缀下的所有键</li>
+ *   <li>如果路径是 {@code /proc/registry}，导出整个注册表</li>
  * </ul>
  * <p>
- * Write behavior: only REALTIME-priority agents may write.
- * Write format: {@code key=value} to set, or {@code key=} to delete.
+ * 写入行为：仅 REALTIME 优先级的 Agent 可写入。
+ * 写入格式：{@code key=value} 设置值，{@code key=} 删除键。
+ *
+ * <h3>OS 类比</h3>
+ * 类比 Windows 注册表（regedit）— 层次化的系统配置存储，
+ * 通过 VFS 路径映射实现"一切皆文件"的注册表访问。
  */
 public non-sealed class RegistryFsNode implements VfsNode {
 
     private static final Logger log = LoggerFactory.getLogger(RegistryFsNode.class);
 
-    /** The VFS path prefix that maps to this registry node. */
+    /** 映射到此注册表节点的 VFS 路径前缀 */
     private static final String REGISTRY_VFS_PREFIX = "/proc/registry";
 
     private final String path;
@@ -75,8 +78,8 @@ public non-sealed class RegistryFsNode implements VfsNode {
     }
 
     /**
-     * Extract the registry key from the VFS path.
-     * E.g. "/proc/registry/HKEY_LOCAL_AIOS/System/DefaultLlm" → "HKEY_LOCAL_AIOS/System/DefaultLlm"
+     * 从 VFS 路径提取注册表键。
+     * 如 "/proc/registry/HKEY_LOCAL_AIOS/System/DefaultLlm" → "HKEY_LOCAL_AIOS/System/DefaultLlm"
      */
     private String extractRegistryKey() {
         if (path.equals(REGISTRY_VFS_PREFIX) || path.equals(REGISTRY_VFS_PREFIX + "/")) {

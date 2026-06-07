@@ -12,6 +12,21 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
+/**
+ * HTTP 客户端节点 — AIOS 的网络请求设备。
+ * <p>
+ * Agent 通过 VFS write 发送 HTTP 请求（JSON 格式指定 URL、方法、请求体），
+ * 通过 VFS read 读取响应。实现"一切皆文件"的网络 I/O 模型。
+ *
+ * <h3>写入格式</h3>
+ * <pre>
+ * {"url": "https://api.example.com", "method": "POST", "body": "{...}"}
+ * </pre>
+ *
+ * <h3>OS 类比</h3>
+ * 类比 Linux 的 {@code /dev/tcp} 或 {@code /dev/udp} —
+ * 通过文件描述符进行网络 I/O。
+ */
 public non-sealed class HttpNode implements VfsNode {
 
     private static final Logger log = LoggerFactory.getLogger(HttpNode.class);

@@ -2,6 +2,16 @@ package com.ouisani.aios.vfs;
 
 import com.ouisani.aios.core.VfsNode;
 
+/**
+ * 摄像头节点 — AIOS 的视觉感知设备。
+ * <p>
+ * 挂载在 {@code /dev/host/camera}，这是一个只读设备节点。
+ * Agent 通过 VFS read 获取当前摄像头捕获的画面描述（JSON 格式）。
+ *
+ * <h3>OS 类比</h3>
+ * 类比 Linux 的 {@code /dev/video0} —
+ * 从摄像头设备读取视频帧数据。
+ */
 public non-sealed class CameraNode implements VfsNode {
 
     private final String path;

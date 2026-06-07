@@ -16,46 +16,43 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Remote Device Mount Node — a VFS device node that represents a remote
- * physical or virtual device connected via WebSocket.
+ * 远程设备挂载节点 — 通过 WebSocket 连接的远程物理/虚拟设备的 VFS 设备节点。
  * <p>
- * This is the core of AIOS's "everything is a file" distributed architecture.
- * A remote device (IoT sensor, VCP Node, mobile phone, another AIOS instance)
- * connects via the {@code /ws/remote/{deviceId}} WebSocket endpoint, and this
- * node is dynamically mounted at {@code /dev/remote/{deviceId}} in the VFS.
- * <p>
- * <h3>Unix Philosophy: Network Transparency</h3>
- * The Agent process does not know about the network. It simply performs
- * {@code sys_write("/dev/remote/device_abcd", command)} to issue a command
- * and {@code sys_read("/dev/remote/device_abcd")} to read the response.
- * The kernel handles all WebSocket framing, reconnection buffering, and
- * offline detection transparently.
- * <p>
- * <h3>Read Path (Remote → Agent)</h3>
+ * 这是 AIOS "一切皆文件"分布式架构的核心。远程设备（IoT 传感器、VCP 节点、
+ * 手机、另一个 AIOS 实例）通过 {@code /ws/remote/{deviceId}} WebSocket 端点
+ * 连入，此节点被动态挂载到 VFS 的 {@code /dev/remote/{deviceId}} 路径。
+ *
+ * <h3>Unix 哲学：网络透明性</h3>
+ * Agent 进程无需感知网络。它只需执行
+ * {@code sys_write("/dev/remote/device_abcd", command)} 发送命令，
+ * {@code sys_read("/dev/remote/device_abcd")} 读取响应。
+ * 内核透明地处理所有 WebSocket 帧、重连缓冲和离线检测。
+ *
+ * <h3>读取路径（远程 → Agent）</h3>
  * <pre>
- *   Remote Device → WS frame → onWsMessage() → recvQueue → read()
+ *   远程设备 → WS 帧 → onWsMessage() → recvQueue → read()
  *   ↓
- *   Agent calls sys_read("/dev/remote/device_abcd")
+ *   Agent 调用 sys_read("/dev/remote/device_abcd")
  *   ↓
- *   read() blocks on recvQueue.take() → returns JSON/String/Byte data
+ *   read() 阻塞在 recvQueue.take() → 返回 JSON/String/Byte 数据
  * </pre>
- * <p>
- * <h3>Write Path (Agent → Remote)</h3>
+ *
+ * <h3>写入路径（Agent → 远程）</h3>
  * <pre>
- *   Agent calls sys_write("/dev/remote/device_abcd", command)
+ *   Agent 调用 sys_write("/dev/remote/device_abcd", command)
  *   ↓
- *   write() → wsContext.send(command) if online, else sendQueue buffer
+ *   write() → 在线时 wsContext.send(command)，离线时缓冲到 sendQueue
  *   ↓
- *   WS frame → Remote Device
+ *   WS 帧 → 远程设备
  * </pre>
- * <p>
- * <h3>Offline Handling</h3>
- * When the remote device disconnects:
+ *
+ * <h3>离线处理</h3>
+ * 当远程设备断开连接时：
  * <ul>
- *   <li>{@link #detachWsContext()} marks the node as offline</li>
- *   <li>Subsequent {@code read()} throws {@link DeviceOfflineException}</li>
- *   <li>Subsequent {@code write()} buffers in sendQueue (for reconnection)</li>
- *   <li>EventBus broadcasts a {@code device_offline} event</li>
+ *   <li>{@link #detachWsContext()} 将节点标记为离线</li>
+ *   <li>后续 {@code read()} 抛出 {@link DeviceOfflineException}</li>
+ *   <li>后续 {@code write()} 缓冲到 sendQueue（等待重连）</li>
+ *   <li>EventBus 广播 {@code device_offline} 事件</li>
  * </ul>
  *
  * @see DeviceOfflineException
@@ -121,11 +118,11 @@ public non-sealed class RemoteDeviceMountNode implements VfsNode {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Bind a WebSocket context to this device node — called when the
-     * remote device connects (or reconnects).
+     * 绑定 WebSocket 上下文到设备节点 — 远程设备连接（或重连）时调用。
      * <p>
-     * Drains any buffered sendQueue messages that accumulated while
-     * the device was offline.
+     * 会排空设备离线期间在 sendQueue 中积累的缓冲消息。
+     *
+     * @param ctx WebSocket 上下文
      */
     public void attachWsContext(WsContext ctx) {
         this.wsContext = ctx;
@@ -145,12 +142,11 @@ public non-sealed class RemoteDeviceMountNode implements VfsNode {
     }
 
     /**
-     * Detach the WebSocket context — called when the remote device
-     * disconnects.
+     * 解绑 WebSocket 上下文 — 远程设备断开连接时调用。
      * <p>
-     * Marks the node as offline. Subsequent {@code read()} calls will
-     * throw {@link DeviceOfflineException} to prevent Agent deadlocks.
-     * Write calls are buffered in sendQueue for potential reconnection.
+     * 将节点标记为离线。后续 {@code read()} 调用将抛出
+     * {@link DeviceOfflineException} 以防止 Agent 死锁。
+     * 写入调用会缓冲到 sendQueue，等待可能的重新连接。
      */
     public void detachWsContext() {
         this.wsContext = null;
@@ -172,8 +168,7 @@ public non-sealed class RemoteDeviceMountNode implements VfsNode {
     }
 
     /**
-     * Mark this node as permanently removed — the device has been
-     * unmounted from the VFS and will not reconnect.
+     * 标记节点为永久移除 — 设备已从 VFS 卸载且不会重连。
      */
     public void markPermanentlyUnmounted() {
         this.permanentlyUnmounted = true;
@@ -191,10 +186,12 @@ public non-sealed class RemoteDeviceMountNode implements VfsNode {
     }
 
     /**
-     * Handle an incoming WebSocket message from the remote device.
+     * 处理远程设备发来的 WebSocket 消息。
      * <p>
-     * The message is parsed into a {@link RemoteFrame} and placed into
-     * the recvQueue, where it will be consumed by the next {@code read()}.
+     * 消息被解析为 {@link RemoteFrame} 并放入 recvQueue，
+     * 等待下一次 {@code read()} 消费。
+     *
+     * @param message 原始 WebSocket 消息
      */
     public void onWsMessage(String message) {
         if (permanentlyUnmounted) {
@@ -253,23 +250,20 @@ public non-sealed class RemoteDeviceMountNode implements VfsNode {
     }
 
     /**
-     * Read data from the remote device — blocks until a frame arrives.
+     * 从远程设备读取数据 — 阻塞直到有帧到达。
      * <p>
-     * This is the {@code sys_read} path. The Agent calls
-     * {@code sys_read("/dev/remote/device_abcd")} and the kernel
-     * invokes this method, which blocks on the recvQueue until the
-     * remote device sends data.
+     * 这是 {@code sys_read} 路径。Agent 调用
+     * {@code sys_read("/dev/remote/device_abcd")}，内核调用此方法，
+     * 阻塞在 recvQueue 上直到远程设备发送数据。
      * <p>
-     * <b>Offline behavior:</b> If the device is offline and no buffered
-     * data remains, throws {@link DeviceOfflineException} to prevent
-     * the Agent from blocking indefinitely.
+     * <b>离线行为：</b>如果设备离线且无缓冲数据，抛出
+     * {@link DeviceOfflineException} 以防止 Agent 无限阻塞。
      * <p>
-     * <b>EOF behavior:</b> If the node has been permanently unmounted,
-     * returns an empty string (EOF), signaling the Agent that the
-     * device is gone.
+     * <b>EOF 行为：</b>如果节点已被永久卸载，返回空字符串（EOF），
+     * 通知 Agent 设备已消失。
      *
-     * @return the data payload from the remote device
-     * @throws DeviceOfflineException if the device is offline with no buffered data
+     * @return 远程设备的数据载荷
+     * @throws DeviceOfflineException 如果设备离线且无缓冲数据
      */
     @Override
     public String read() {
@@ -310,13 +304,12 @@ public non-sealed class RemoteDeviceMountNode implements VfsNode {
     }
 
     /**
-     * Non-blocking read — returns null if no data is available.
+     * 非阻塞读取 — 无数据时返回 null。
      * <p>
-     * Useful for polling patterns where the Agent doesn't want to
-     * block on a potentially offline device.
+     * 适用于轮询模式，Agent 不希望在可能离线的设备上阻塞。
      *
-     * @return the data payload, or null if no data is available
-     * @throws DeviceOfflineException if the device is offline
+     * @return 数据载荷，无数据时返回 null
+     * @throws DeviceOfflineException 如果设备离线
      */
     public String pollRead() {
         if (permanentlyUnmounted) {
@@ -341,11 +334,11 @@ public non-sealed class RemoteDeviceMountNode implements VfsNode {
     }
 
     /**
-     * Read with timeout — blocks for up to the specified duration.
+     * 带超时的读取 — 阻塞最多指定时长。
      *
-     * @param timeoutMs timeout in milliseconds
-     * @return the data payload, or null if timeout elapsed
-     * @throws DeviceOfflineException if the device is offline with no buffered data
+     * @param timeoutMs 超时时间（毫秒）
+     * @return 数据载荷，超时返回 null
+     * @throws DeviceOfflineException 如果设备离线且无缓冲数据
      */
     public String readWithTimeout(long timeoutMs) {
         if (permanentlyUnmounted) {
@@ -375,21 +368,19 @@ public non-sealed class RemoteDeviceMountNode implements VfsNode {
     }
 
     /**
-     * Write data to the remote device — the {@code sys_write} path.
+     * 向远程设备写入数据 — {@code sys_write} 路径。
      * <p>
-     * The Agent calls {@code sys_write("/dev/remote/device_abcd", command)}
-     * and the kernel invokes this method. If the WebSocket is connected,
-     * the data is sent immediately as a frame. If the device is offline,
-     * the data is buffered in the sendQueue for delivery upon reconnection.
+     * Agent 调用 {@code sys_write("/dev/remote/device_abcd", command)}，
+     * 内核调用此方法。如果 WebSocket 已连接，数据立即作为帧发送；
+     * 如果设备离线，数据缓冲到 sendQueue，等待重连后投递。
      * <p>
-     * <b>Unlike read(), write() does NOT throw DeviceOfflineException.</b>
-     * This mirrors Unix behavior: writing to a disconnected TTY doesn't
-     * fail — the data goes to the bit bucket (or in our case, the buffer).
-     * The Agent can keep issuing commands; they'll be delivered when the
-     * device comes back online.
+     * <b>与 read() 不同，write() 不抛出 DeviceOfflineException。</b>
+     * 这模拟了 Unix 行为：向断开的 TTY 写入不会失败 — 数据进入
+     * 位桶（或在本实现中，缓冲区）。Agent 可以持续发出命令，
+     * 设备重新上线后会被投递。
      *
-     * @param data the command or data to send to the remote device
-     * @return true if the data was sent or buffered successfully
+     * @param data 要发送到远程设备的命令或数据
+     * @return 数据是否成功发送或缓冲
      */
     @Override
     public boolean write(String data) {
@@ -482,11 +473,12 @@ public non-sealed class RemoteDeviceMountNode implements VfsNode {
     }
 
     /**
-     * Convert buffered recv data to an InputStream for binary consumption.
+     * 将缓冲的接收数据转换为 InputStream，供二进制消费使用。
      * <p>
-     * Drains all currently buffered frames and concatenates their data
-     * into a single stream. Useful for consuming binary payloads (images,
-     * sensor data, etc.) from the remote device.
+     * 排空当前所有缓冲帧并将数据拼接为单一流。
+     * 适用于消费来自远程设备的二进制载荷（图片、传感器数据等）。
+     *
+     * @return 包含所有缓冲数据的输入流
      */
     public InputStream asInputStream() {
         StringBuilder sb = new StringBuilder();
@@ -510,13 +502,13 @@ public non-sealed class RemoteDeviceMountNode implements VfsNode {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * A structured frame received from a remote device.
+     * 远程帧 — 来自远程设备的结构化数据单元。
      * <p>
-     * Remote devices may send:
+     * 远程设备可能发送：
      * <ul>
-     *   <li>JSON payloads with a {@code type} field (e.g., "sensor", "response", "error")</li>
-     *   <li>Raw string data (treated as type "data")</li>
-     *   <li>Control signals (offline, eof) injected by the kernel</li>
+     *   <li>带有 {@code type} 字段的 JSON 载荷（如 "sensor"、"response"、"error"）</li>
+     *   <li>原始字符串数据（视为 type "data"）</li>
+     *   <li>内核注入的控制信号（offline、eof）</li>
      * </ul>
      */
     public static final class RemoteFrame {
@@ -537,10 +529,14 @@ public non-sealed class RemoteDeviceMountNode implements VfsNode {
         }
 
         /**
-         * Parse a raw WebSocket message into a RemoteFrame.
+         * 将原始 WebSocket 消息解析为 RemoteFrame。
          * <p>
-         * If the message is valid JSON with a "type" field, extracts
-         * type and data. Otherwise, treats the entire message as raw data.
+         * 如果消息是包含 "type" 字段的有效 JSON，提取 type 和 data；
+         * 否则将整个消息视为原始数据。
+         *
+         * @param message  原始 WebSocket 消息
+         * @param deviceId 设备 ID
+         * @return 解析后的 RemoteFrame
          */
         static RemoteFrame fromJson(String message, String deviceId) {
             // Simple JSON detection — avoid pulling in Jackson for this
@@ -568,10 +564,7 @@ public non-sealed class RemoteDeviceMountNode implements VfsNode {
         boolean isOfflineSignal() { return TYPE_OFFLINE.equals(type); }
         boolean isEofSignal() { return TYPE_EOF.equals(type); }
 
-        /**
-         * Minimal JSON field extraction without a full parser.
-         * Handles simple cases: "field":"value" and "field":value
-         */
+        /** 最小化 JSON 字段提取（无需完整解析器）。处理 "field":"value" 和 "field":value 两种情况 */
         private static String extractJsonField(String json, String fieldName) {
             String needle = "\"" + fieldName + "\"";
             int idx = json.indexOf(needle);

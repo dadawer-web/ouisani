@@ -25,16 +25,30 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * 任务调度器 — AIOS 的核心调度组件，负责 Agent 进程的创建、调度和生命周期管理。
+ * <p>
+ * 类比 Linux 内核的 schedule() + fork()/exit()：维护进程控制块表（PCB），
+ * 使用 Java 虚拟线程实现轻量级 Agent 调度，支持 cgroup 资源隔离、
+ * OOM 杀死、语义级 Kernel Panic、推测执行等高级特性。
+ * <p>
+ * 同时管理 WatchdogDaemon（看门狗）、CognitiveDreamDaemon（认知梦守护）、
+ * SystemTickGenerator（系统心跳）等系统级守护进程的启停。
+ */
 public final class TaskScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(TaskScheduler.class);
 
-    /** ThreadLocal binding the current agent task to its virtual thread. */
+    /** 当前线程绑定的 Agent 任务 — 类比 Linux current 宏，获取当前进程的 task_struct */
     public static final ThreadLocal<AgentTask> CURRENT_TASK = new ThreadLocal<>();
 
+    /** 进程控制块表 — 类比 Linux 的 task_struct 数组，PID → AgentTask 映射 */
     private final ConcurrentHashMap<Integer, AgentTask> pcb = new ConcurrentHashMap<>();
+    /** Agent 虚拟线程映射 — PID → Thread，用于中断和取消 */
     private final ConcurrentHashMap<Integer, Thread> agentThreads = new ConcurrentHashMap<>();
+    /** 虚拟线程执行器 — 每个 Agent 对应一个虚拟线程 */
     private final ExecutorService virtualThreadExecutor;
+    /** 调度器运行标志 */
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicLong totalSpawned = new AtomicLong(0);
     private final AtomicLong totalCompleted = new AtomicLong(0);
@@ -48,6 +62,17 @@ public final class TaskScheduler {
         return spawn(task, agentLogic, null);
     }
 
+    /**
+     * 创建并启动 Agent 进程 — 类比 Linux fork() + exec()。
+     * <p>
+     * 在虚拟线程中运行 Agent 逻辑，自动绑定 CURRENT_TASK、cgroup、VFS root 等上下文。
+     * 支持 OOM 杀死、崩溃恢复（语义级 Kernel Panic）、中断取消等异常处理。
+     *
+     * @param task       Agent 任务控制块
+     * @param agentLogic Agent 执行逻辑
+     * @param rootPath   VFS 根路径（用于容器命名空间隔离），null 表示全局根
+     * @return PID
+     */
     public int spawn(AgentTask task, Runnable agentLogic, String rootPath) {
         if (!running.get()) {
             throw new IllegalStateException("TaskScheduler is not running. Call start() first.");
@@ -144,6 +169,13 @@ public final class TaskScheduler {
         return pid;
     }
 
+    /**
+     * 取消 Agent 进程 — 类比 Linux kill(pid, SIGKILL)。
+     * 设置取消标志、更新状态为 KILLED、中断虚拟线程、从 PCB 中移除。
+     *
+     * @param pid 目标进程 ID
+     * @return true 取消成功，false PID 不存在
+     */
     public boolean cancelAgent(int pid) {
         AgentTask task = pcb.get(pid);
         if (task == null) {
@@ -212,6 +244,10 @@ public final class TaskScheduler {
         return true;
     }
 
+    /**
+     * 启动调度器 — 类比 Linux 内核初始化。
+     * 依次启动 WatchdogDaemon、CognitiveDreamDaemon、SystemTickGenerator。
+     */
     public void start() {
         if (running.compareAndSet(false, true)) {
             log.info("TaskScheduler started with virtual thread executor");
@@ -224,6 +260,10 @@ public final class TaskScheduler {
         }
     }
 
+    /**
+     * 关闭调度器 — 类比 Linux shutdown。
+     * 停止系统守护进程，中断所有活跃 Agent 线程，清空 PCB，关闭虚拟线程执行器。
+     */
     public void shutdown() {
         if (running.compareAndSet(true, false)) {
             SystemTickGenerator.instance().stop();
@@ -274,8 +314,10 @@ public final class TaskScheduler {
         return pcb.size();
     }
 
+    /** PID 序列号 — 从 1000 开始递增，类比 Linux 的 pid_allocator */
     private final AtomicInteger nextPidSeq = new AtomicInteger(1000);
 
+    /** 分配下一个 PID — 类比 Linux alloc_pid() */
     public int nextPid() {
         return nextPidSeq.incrementAndGet();
     }
@@ -349,6 +391,7 @@ public final class TaskScheduler {
         return sb.toString();
     }
 
+    /** 调度器统计信息 — 类比 /proc/stat 中的进程统计 */
     public record SchedulerStats(long totalSpawned, long totalCompleted, long totalCancelled, int activeCount) {
         @Override
         public String toString() {

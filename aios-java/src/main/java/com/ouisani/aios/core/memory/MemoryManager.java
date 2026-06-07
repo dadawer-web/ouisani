@@ -11,21 +11,33 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Memory Subsystem Manager — the unified dispatch center for all
- * memory operations in the AIOS kernel.
+ * 记忆子系统管理器 — AIOS 内核所有记忆操作的统一调度中心。
  * <p>
- * Reads the provider configuration from the VFS semantic registry
- * ({@code /proc/registry}) at startup. If no provider is configured,
- * defaults to the native {@link TokenZramProvider}.
+ * 类比 Linux 的 VFS（虚拟文件系统）统一抽象层：不同文件系统
+ * （ext4, xfs, tmpfs）通过 VFS 提供统一的文件操作接口，
+ * 上层代码无需关心底层实现。
  * <p>
- * Supported registry key:
+ * MemoryManager 做同样的事情：不同的记忆后端（TokenZRAM、Mem0、Zep）
+ * 通过 {@link MemoryProvider} 接口提供统一的 store/retrieve/clear 操作，
+ * AIOS 内核的 syscall 层只需调用 MemoryManager，无需关心底层是
+ * 本地压缩存储还是云端向量数据库。
+ * <p>
+ * 启动时从 VFS 语义注册表 ({@code /proc/registry}) 读取配置：
  * <pre>
  *   HKEY_LOCAL_AIOS/Memory/Provider = "TokenZRAM" | "Mem0" | "Zep"
  * </pre>
- * <p>
- * All memory syscalls ({@code memory.store}, {@code memory.retrieve},
- * {@code memory.delete}) are routed through this manager to the
- * currently active {@link MemoryProvider}.
+ * 默认使用 {@link TokenZramProvider}。支持运行时热切换后端。
+ *
+ * <h3>OS 类比</h3>
+ * <table>
+ *   <tr><th>Linux</th><th>AIOS MemoryManager</th><th>说明</th></tr>
+ *   <tr><td>VFS</td><td>MemoryManager</td><td>统一抽象层</td></tr>
+ *   <tr><td>文件系统驱动</td><td>MemoryProvider</td><td>后端实现</td></tr>
+ *   <tr><td>mount</td><td>switchProvider()</td><td>切换后端</td></tr>
+ * </table>
+ *
+ * @see MemoryProvider
+ * @see TokenZramProvider
  */
 public final class MemoryManager {
 
@@ -48,8 +60,8 @@ public final class MemoryManager {
     }
 
     /**
-     * Read the VFS semantic registry and select the appropriate provider.
-     * Falls back to TokenZramProvider if no configuration is found.
+     * 从 VFS 语义注册表读取配置并选择对应的记忆后端。
+     * 未配置时默认使用 TokenZramProvider。
      */
     private void initializeProvider() {
         String providerName = SemanticRegistry.instance().getValue(REGISTRY_KEY);
@@ -71,18 +83,16 @@ public final class MemoryManager {
     }
 
     /**
-     * Get the currently active memory provider.
+     * 获取当前活跃的记忆后端。
      */
     public MemoryProvider currentProvider() {
         return currentProvider;
     }
 
     /**
-     * Switch the memory provider at runtime.
-     * <p>
-     * This enables hot-swapping memory backends without restarting the kernel.
+     * 运行时切换记忆后端 — 无需重启内核即可热替换。
      *
-     * @param provider the new memory provider
+     * @param provider 新的记忆后端
      */
     public void switchProvider(MemoryProvider provider) {
         MemoryProvider old = this.currentProvider;
@@ -93,13 +103,10 @@ public final class MemoryManager {
     }
 
     /**
-     * Process a memory syscall from the kernel dispatcher.
-     * <p>
-     * Routes the {@link MemoryPayload} to the appropriate method on
-     * the current {@link MemoryProvider} based on the operation type.
+     * 处理记忆系统调用 — 将 MemoryPayload 路由到当前后端的对应方法。
      *
-     * @param payload the typed memory syscall payload
-     * @return the syscall response
+     * @param payload 记忆系统调用的类型化载荷
+     * @return 系统调用响应
      */
     public SyscallResponse processMemorySyscall(MemoryPayload payload) {
         if (payload == null) {
@@ -130,7 +137,7 @@ public final class MemoryManager {
     }
 
     /**
-     * Process a memory syscall with explicit agent identity.
+     * 处理带 Agent 身份的记忆系统调用 — 支持多 Agent 隔离存储。
      */
     public SyscallResponse processMemorySyscall(String agentId, MemoryPayload payload) {
         if (payload == null) {

@@ -1,5 +1,16 @@
 package com.ouisani.aios.core.cgroup;
 
+/**
+ * Token 硬 OOM 异常 — Agent 的 Token 消耗超过硬限制时抛出。
+ * <p>
+ * 类比 Linux 的 OOM (Out of Memory)：当进程的内存使用超过 cgroup 的
+ * memory.limit_in_bytes 时，内核触发 OOM Killer。
+ * AIOS 中，当 Agent 的 Token 消耗超过 CgroupNode 的 tokenQuota 时，
+ * 抛出此异常，CgroupManager 随后执行 OOM Kill。
+ *
+ * @see CgroupNode#consumeTokens(long, String)
+ * @see CgroupManager#oomKill(String)
+ */
 public class TokenOomException extends RuntimeException {
 
     private final String cgroupNode;

@@ -10,20 +10,17 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * AIOS-native memory provider — leverages TokenZRAM compression
- * and SwapManager disk paging for maximum memory efficiency.
+ * AIOS 原生记忆后端 — 基于 TokenZRAM 压缩和 SwapManager 磁盘换页的高效存储。
  * <p>
- * This is the soul of the AIOS memory subsystem:
+ * 这是 AIOS 记忆子系统的核心实现：
  * <ul>
- *   <li><b>Store</b>: Writes content to an in-memory page store,
- *       with automatic ZRAM compression when pages exceed the
- *       compression threshold.</li>
- *   <li><b>Retrieve</b>: Queries the in-memory store first, then
- *       transparently swaps in from disk if the data was paged out
- *       by the kswapd daemon.</li>
- *   <li><b>Clear</b>: Evicts all pages for the agent, including
- *       any swap files on disk.</li>
+ *   <li><b>存储</b>：写入内存页存储，超过压缩阈值时自动 ZRAM 压缩</li>
+ *   <li><b>检索</b>：先查内存存储，若数据已被 kswapd 换出则透明换入</li>
+ *   <li><b>清除</b>：驱逐该 Agent 的所有页面，包括磁盘上的交换文件</li>
  * </ul>
+ *
+ * @see com.ouisani.aios.core.memory.TokenZram
+ * @see com.ouisani.aios.core.memory.SwapManager
  */
 public class TokenZramProvider implements MemoryProvider {
 
@@ -31,7 +28,7 @@ public class TokenZramProvider implements MemoryProvider {
 
     private static final int COMPRESSION_THRESHOLD_CHARS = 2000;
 
-    /** In-memory page store: agentId → list of memory entries. */
+    /** 内存页存储：agentId → 记忆条目列表 */
     private final ConcurrentHashMap<String, List<String>> pageStore = new ConcurrentHashMap<>();
 
     @Override

@@ -8,6 +8,7 @@ import com.ouisani.aios.core.cgroup.CgroupManager;
 import com.ouisani.aios.core.cgroup.CgroupNode;
 import com.ouisani.aios.core.cgroup.TokenOomException;
 import com.ouisani.aios.core.llm.LlmProvider;
+import com.ouisani.aios.core.network.EventBus;
 import com.ouisani.aios.core.plugin.AgentToolContext;
 import com.ouisani.aios.core.plugin.PluginManager;
 import com.ouisani.aios.core.security.ObjectManager;
@@ -146,6 +147,11 @@ public final class SemanticCrashAnalyzer {
 
         // LLM 诊断
         diagnoseCrash(agentId, coreDump);
+
+        // ════════════════════════════════════════════════════════════════
+        //  EventBus 全网广播 — 通知 AutoMedic 等自愈智能体
+        // ════════════════════════════════════════════════════════════════
+        broadcastCrashEvent(agentId, coreDump);
     }
 
     /**
@@ -684,6 +690,95 @@ public final class SemanticCrashAnalyzer {
         // 注意：实际的重新调度需要由上层调用者完成，
         // 因为 TaskScheduler.spawn() 需要新的 Runnable
         return true;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  EventBus 崩溃广播 — 通知 AutoMedic 自愈智能体
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 将崩溃事件广播到 EventBus 的 "sys.kernel.panic" 频道。
+     * <p>
+     * AutoMedic 等自愈智能体订阅该频道后，会自动收到崩溃通知并尝试热修复。
+     * 广播的 JSON 包含：
+     * <ul>
+     *   <li>failed_node_id — 崩溃节点的 Agent ID</li>
+     *   <li>vfs_script_path — 该节点的脚本路径（从 VFS 句柄推断）</li>
+     *   <li>error_stacktrace — 异常堆栈信息</li>
+     * </ul>
+     *
+     * @param agentId   崩溃的 Agent 标识
+     * @param coreDump  核心转储
+     */
+    private void broadcastCrashEvent(String agentId, SemanticCoreDump coreDump) {
+        try {
+            // 从 VFS 句柄推断脚本路径
+            String vfsScriptPath = inferScriptPath(agentId);
+
+            // 组装 Core Dump 遗言 JSON
+            String stacktrace = coreDump.crashInfo().stackTrace();
+            if (stacktrace == null || stacktrace.isBlank()) {
+                stacktrace = coreDump.crashInfo().exceptionClass() + ": " + coreDump.crashInfo().exceptionMessage();
+            }
+            // 转义 JSON 特殊字符
+            String escapedStacktrace = stacktrace
+                    .replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+                    .replace("\n", "\\n")
+                    .replace("\r", "\\r")
+                    .replace("\t", "\\t");
+            String escapedAgentId = agentId.replace("\"", "\\\"");
+            String escapedPath = (vfsScriptPath != null ? vfsScriptPath : "").replace("\"", "\\\"");
+
+            int currentCrashCount = crashCounts.getOrDefault(agentId, 0);
+
+            String crashJson = "{\"failed_node_id\":\"" + escapedAgentId + "\","
+                    + "\"vfs_script_path\":\"" + escapedPath + "\","
+                    + "\"error_stacktrace\":\"" + escapedStacktrace + "\","
+                    + "\"retry_count\":" + currentCrashCount + "}";
+
+            // 全网广播
+            EventBus.instance().broadcast("sys.kernel.panic", crashJson);
+
+            System.out.printf("[Kernel Monitor] Node %s crashed. Strike %d/3. Broadcasting advanced core dump...%n",
+                    agentId, currentCrashCount);
+            log.info("[CrashAnalyzer] Crash event broadcasted to sys.kernel.panic for agent={} (strike {}/3)", agentId, currentCrashCount);
+        } catch (Exception e) {
+            // 广播失败不应影响崩溃处理主流程
+            log.warn("[CrashAnalyzer] Failed to broadcast crash event for agent={}: {}", agentId, e.getMessage());
+        }
+    }
+
+    /**
+     * 从 Agent 的 VFS 句柄中推断脚本路径。
+     * <p>
+     * 优先查找 /factory/ 下的 .py 文件（OmniFactory 工作流节点），
+     * 否则返回第一个写权限句柄的路径，或 null。
+     */
+    private String inferScriptPath(String agentId) {
+        try {
+            ObjectManager objMgr = ObjectManager.instance();
+            for (Map.Entry<Integer, ObjectManager.HandleInfo> entry : objMgr.activeHandleInfo().entrySet()) {
+                ObjectManager.HandleInfo info = entry.getValue();
+                if (agentId.equals(info.agentId())) {
+                    String path = info.vfsPath();
+                    // 优先匹配 OmniFactory 工作流脚本
+                    if (path != null && path.startsWith("/factory/") && path.endsWith(".py")) {
+                        return path;
+                    }
+                }
+            }
+            // 回退：返回第一个关联句柄路径
+            for (Map.Entry<Integer, ObjectManager.HandleInfo> entry : objMgr.activeHandleInfo().entrySet()) {
+                ObjectManager.HandleInfo info = entry.getValue();
+                if (agentId.equals(info.agentId()) && info.vfsPath() != null) {
+                    return info.vfsPath();
+                }
+            }
+        } catch (Exception e) {
+            // ignore
+        }
+        return null;
     }
 
     // ════════════════════════════════════════════════════════════════

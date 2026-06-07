@@ -9,13 +9,19 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Shared Memory VFS Node — a blackboard that multiple agents can read/write
- * concurrently through a VFS path like {@code /dev/shm/segment_alpha}.
+ * 共享内存 VFS 节点 — 多个 Agent 可并发读写的黑板（Blackboard）。
  * <p>
- * Write format: {@code key=value} (writes a single key-value pair into the segment).<br>
- * Read format: returns the full segment contents as a JSON-like string.
+ * 通过 VFS 路径（如 {@code /dev/shm/segment_alpha}）访问，
+ * 多个 Agent 可以同时读写同一共享内存段进行协调。
  * <p>
- * Thread safety is guaranteed by {@link ConcurrentHashMap} backing each segment.
+ * 写入格式：{@code key=value}（向段中写入单个键值对）<br>
+ * 读取格式：返回段的完整内容（JSON 风格字符串）
+ * <p>
+ * 线程安全由 {@link ConcurrentHashMap} 支撑的每个段保证。
+ *
+ * <h3>OS 类比</h3>
+ * 类比 Linux 的 POSIX 共享内存（shm_open/mmap）— 多进程通过
+ * 共享内存区域进行高速数据交换，但 AIOS 使用键值对而非原始字节。
  */
 public non-sealed class ShmNode implements VfsNode {
 
@@ -75,8 +81,8 @@ public non-sealed class ShmNode implements VfsNode {
     }
 
     /**
-     * Read the entire shared memory segment.
-     * Returns all key-value pairs as a JSON-like string.
+     * 读取整个共享内存段。
+     * 返回所有键值对，格式为 JSON 风格字符串。
      */
     @Override
     public String read() {
@@ -86,9 +92,8 @@ public non-sealed class ShmNode implements VfsNode {
     }
 
     /**
-     * Write a key-value pair into the shared memory segment.
-     * Expected format: {@code key=value}
-     * If the value contains '=', only the first '=' is treated as the delimiter.
+     * 向共享内存段写入键值对。
+     * 期望格式：{@code key=value}，如果值中包含 '='，只有第一个 '=' 被视为分隔符。
      */
     @Override
     public boolean write(String data) {

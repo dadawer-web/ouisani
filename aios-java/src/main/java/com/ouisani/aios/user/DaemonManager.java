@@ -14,6 +14,21 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * 守护进程管理器 — AIOS 的 systemd。
+ * <p>
+ * 类比 Linux 的 systemd：维护守护进程的目标状态（desired state），
+ * 定期协调（reconcile）确保所有注册的守护进程存活。
+ * 如果守护进程崩溃（KILLED / OOM_KILLED），自动重启以维持目标状态。
+ *
+ * <h3>OS 类比</h3>
+ * <table>
+ *   <tr><th>systemd</th><th>AIOS DaemonManager</th><th>说明</th></tr>
+ *   <tr><td>systemctl start</td><td>registerService()</td><td>注册并启动守护进程</td></tr>
+ *   <tr><td>systemctl stop</td><td>unregisterService()</td><td>停止并注销守护进程</td></tr>
+ *   <tr><td>Restart=always</td><td>reconcile()</td><td>崩溃后自动重启</td></tr>
+ * </table>
+ */
 public class DaemonManager {
 
     private final ConcurrentHashMap<String, AgentImageConfig> targetState = new ConcurrentHashMap<>();

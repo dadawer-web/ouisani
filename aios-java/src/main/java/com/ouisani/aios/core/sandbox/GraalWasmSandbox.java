@@ -99,10 +99,18 @@ public class GraalWasmSandbox implements SandboxProvider {
         currentLimits = new SandboxResourceLimit(
                 DEFAULT_MAX_CPU_CYCLES, DEFAULT_MAX_MEMORY_BYTES, DEFAULT_MAX_STACK_DEPTH);
 
-        context = Context.newBuilder("wasm")
-                .allowAllAccess(false)          // Ring 3: 禁止直接访问宿主
-                .option("wasm.MaxMemoryPages", "1024")  // 64MB 上限
-                .build();
+        var ctxBuilder = Context.newBuilder("wasm")
+                .allowAllAccess(false);          // Ring 3: 禁止直接访问宿主
+
+        // wasm.MaxMemoryPages 选项仅在完整 GraalVM（非 JVMCI fallback）下可用
+        // 先尝试带选项构建，失败则回退到无选项构建
+        try {
+            context = ctxBuilder.option("wasm.MaxMemoryPages", "1024").build();
+            log.info("[Sandbox] WASM context created with MaxMemoryPages=1024");
+        } catch (IllegalArgumentException e) {
+            log.warn("[Sandbox] wasm.MaxMemoryPages not available (fallback runtime), creating without memory limit option");
+            context = Context.newBuilder("wasm").allowAllAccess(false).build();
+        }
 
         Map<String, Object> aiosEnv = new HashMap<>();
 

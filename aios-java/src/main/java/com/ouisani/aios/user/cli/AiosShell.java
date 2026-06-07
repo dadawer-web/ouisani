@@ -2,16 +2,29 @@ package com.ouisani.aios.user.cli;
 
 import com.ouisani.aios.core.ProcessPriority;
 import com.ouisani.aios.core.TaskScheduler;
+import com.ouisani.aios.core.VfsManager;
+import com.ouisani.aios.core.cgroup.CgroupManager;
 import com.ouisani.aios.core.llm.ComputeAffinity;
 import com.ouisani.aios.core.llm.LlmRouter;
+import com.ouisani.aios.core.llm.OpenAiAdapter;
+import com.ouisani.aios.core.security.ObjectManager;
 import com.ouisani.aios.core.syscall.SyscallDispatcher;
 import com.ouisani.aios.core.syscall.SyscallRequest;
 import com.ouisani.aios.core.syscall.SyscallResponse;
 import com.ouisani.aios.core.telemetry.SemanticEtw;
+import com.ouisani.aios.user.apps.omnifactory.OmniMotherAgent;
+import com.ouisani.aios.user.apps.omnifactory.TopologyCompiler;
+import com.ouisani.aios.user.apps.omnifactory.WorkflowManifest;
+import com.ouisani.aios.user.bin.AiosAppManager;
 import com.ouisani.aios.user.sdk.AbstractAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Scanner;
 
@@ -164,10 +177,44 @@ public class AiosShell extends AbstractAgent {
     /**
      * 处理自然语言命令 — 通过 E_CORE LLM 路由。
      * <p>
-     * 优先使用 IntentRouter（如果已配置），否则直接使用
-     * LlmRouter 路由到 E_CORE 进行意图理解。
+     * 包含极客级快捷指令拦截：当用户输入 {@code create workflow:} 或 {@code 创建工作流：}
+     * 时，直接在内核底层拉起 OmniMotherAgent 母体进程，实现降维打击。
      */
     private void handleNaturalLanguage(String input, IntentRouter router) {
+        // ── 极客级快捷指令拦截：触发"造物主母体" ──
+        String lowerInput = input.toLowerCase();
+        if (lowerInput.startsWith("create workflow:") || input.startsWith("创建工作流：")
+                || lowerInput.startsWith("create workflow：") || input.startsWith("创建工作流:")) {
+            System.out.println(ANSI_CYAN + ">> [Genesis] Awakening Omni Mother Agent..." + ANSI_RESET);
+
+            // 提取真正的 userGoal
+            String userGoal = extractWorkflowGoal(input);
+            if (userGoal.isBlank()) {
+                System.out.println(ANSI_RED + "[Error] No goal specified. Usage: create workflow: <your goal>" + ANSI_RESET);
+                return;
+            }
+
+            // 操作系统的降维打击：直接在底层拉起"母体进程"
+            TaskScheduler scheduler = VfsManager.instance().getTaskScheduler();
+            if (scheduler == null) {
+                System.out.println(ANSI_RED + "[Error] TaskScheduler not available" + ANSI_RESET);
+                return;
+            }
+
+            // 确保 AiosAppManager 已配置
+            AiosAppManager.configure(scheduler);
+
+            // 通过 TopologyCompiler 将用户目标编译为 WorkflowManifest
+            WorkflowManifest manifest = TopologyCompiler.getInstance().compile(userGoal);
+
+            OmniMotherAgent mother = new OmniMotherAgent(manifest);
+            mother.spawn(scheduler);
+
+            System.out.println(ANSI_GREEN + ">> Mother Agent dispatched in background. Check TaskScheduler logs for progress." + ANSI_RESET);
+            return;
+        }
+
+        // ── 原有的 LLM 路由逻辑 ──
         System.out.println(ANSI_CYAN + ">> Routing through E_CORE..." + ANSI_RESET);
 
         try {
@@ -186,6 +233,19 @@ public class AiosShell extends AbstractAgent {
                 System.out.println(ANSI_RED + "[Error] No LLM available for intent routing" + ANSI_RESET);
             }
         }
+    }
+
+    /**
+     * 从 "create workflow: xxx" 或 "创建工作流：xxx" 中提取用户目标。
+     */
+    private String extractWorkflowGoal(String input) {
+        // 尝试中文冒号
+        int idx = input.indexOf('：');
+        if (idx >= 0) return input.substring(idx + 1).trim();
+        // 尝试英文冒号
+        idx = input.indexOf(':');
+        if (idx >= 0) return input.substring(idx + 1).trim();
+        return "";
     }
 
     /**
@@ -233,12 +293,12 @@ public class AiosShell extends AbstractAgent {
     }
 
     /**
-     * 旧版静态入口点 — 保持向后兼容。
+     * 独立模式入口 — 自动初始化内核后进入 Shell REPL。
      * <p>
-     * 在没有 InitDaemon 的独立模式下，仍可通过 main() 直接启动 Shell。
+     * 如果没有 InitDaemon 的完整引导，此方法会执行最小化内核初始化：
+     * TaskScheduler → LLM Router → VfsManager → CgroupManager → SyscallDispatcher → IntentRouter
      */
     public static void main(String[] args) {
-        // 独立模式的简化启动
         System.out.println("\u001B[36m");
         System.out.println("   ___  _________  _____ ");
         System.out.println("  / _ \\/  _/ __ \\/ ___/ ");
@@ -248,12 +308,54 @@ public class AiosShell extends AbstractAgent {
         System.out.println("Ouisani General-Purpose AIOS v1.0.0-FINAL\u001B[0m");
         System.out.println();
 
+        // ── 最小化内核初始化 ──
+        Map<String, String> env = loadDotEnv(Path.of("/home/xmy/tryaios/.env"));
+
+        // 1. TaskScheduler
+        TaskScheduler scheduler = new TaskScheduler();
+        scheduler.start();
+        System.out.println("  ✓ TaskScheduler started");
+
+        // 2. LLM Router
+        LlmRouter llmRouter = new LlmRouter();
+        String apiKey = env.getOrDefault("OPENAI_API_KEY", System.getenv().getOrDefault("OPENAI_API_KEY", ""));
+        String baseUrl = env.getOrDefault("OPENAI_BASE_URL", System.getenv().getOrDefault("OPENAI_BASE_URL", "https://api.openai.com"));
+        String model = env.getOrDefault("OPENAI_MODEL", System.getenv().getOrDefault("OPENAI_MODEL", "gpt-4o-mini"));
+
+        if (!apiKey.isEmpty()) {
+            OpenAiAdapter adapter = new OpenAiAdapter(apiKey, baseUrl, model);
+            llmRouter.registerProvider("fast_model", adapter);
+            llmRouter.registerProvider("smart_model", adapter);
+            VfsManager.instance().configureLlmProvider(adapter);
+            System.out.printf("  ✓ LLM: %s @ %s%n", model, baseUrl);
+        } else {
+            System.out.println("  ⚠ No OPENAI_API_KEY — LLM unavailable");
+        }
+
+        // 3. VfsManager
+        VfsManager.instance().configureTaskScheduler(scheduler);
+        VfsManager.instance().init();
+        System.out.println("  ✓ VfsManager initialized");
+
+        // 4. CgroupManager
+        CgroupManager.instance().init();
+        System.out.println("  ✓ CgroupManager initialized");
+
+        // 5. SyscallDispatcher + IntentRouter
+        if (!apiKey.isEmpty()) {
+            SyscallDispatcher.getInstance().configure(llmRouter, VfsManager.instance(), ObjectManager.instance());
+            IntentRouter.getInstance().configure(llmRouter, SyscallDispatcher.getInstance());
+            System.out.println("  ✓ SyscallDispatcher + IntentRouter configured");
+        }
+
+        System.out.println();
+        System.out.println("Welcome to AIOS. Type your intent naturally, or use '/' for raw syscalls.");
+        System.out.println("Type 'exit' to halt the system.\n");
+
+        // ── REPL ──
         Scanner scanner = new Scanner(System.in);
         IntentRouter router = IntentRouter.getInstance();
         SyscallDispatcher dispatcher = SyscallDispatcher.getInstance();
-
-        System.out.println("Welcome to AIOS. Type your intent naturally, or use '/' for raw syscalls.");
-        System.out.println("Type 'exit' to halt the system.\n");
 
         while (true) {
             System.out.print(ANSI_YELLOW + "aios> " + ANSI_RESET);
@@ -291,12 +393,49 @@ public class AiosShell extends AbstractAgent {
                     }
                 } else {
                     System.out.println(ANSI_CYAN + ">> Routing intent through NUI Engine..." + ANSI_RESET);
-                    router.executeNaturalLanguage(input);
+                    SyscallResponse response = router.executeNaturalLanguage(input);
+                    if (response != null && response.success()) {
+                        System.out.println(ANSI_GREEN + response.data() + ANSI_RESET);
+                    } else {
+                        String errMsg = response != null ? response.errorMessage() : "Unknown error";
+                        // IntentRouter 不可用时 fallback 到直接 LLM 对话
+                        if (errMsg.contains("not configured") && llmRouter != null) {
+                            try {
+                                String reply = llmRouter.think(input, SHELL_SYSTEM_PROMPT);
+                                System.out.println(ANSI_GREEN + reply + ANSI_RESET);
+                            } catch (Exception ex) {
+                                System.out.println(ANSI_RED + "[LLM Error] " + ex.getMessage() + ANSI_RESET);
+                            }
+                        } else {
+                            System.out.println(ANSI_RED + "[Error] " + errMsg + ANSI_RESET);
+                        }
+                    }
                 }
             } catch (Exception e) {
                 System.out.println(ANSI_RED + "[Kernel Panic] " + e.getMessage() + ANSI_RESET);
             }
         }
         scanner.close();
+    }
+
+    private static Map<String, String> loadDotEnv(Path dotEnvPath) {
+        Map<String, String> env = new HashMap<>();
+        if (!Files.exists(dotEnvPath)) return env;
+        try (BufferedReader reader = Files.newBufferedReader(dotEnvPath)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty() || line.startsWith("#")) continue;
+                int eq = line.indexOf('=');
+                if (eq > 0) {
+                    String key = line.substring(0, eq).trim();
+                    String value = line.substring(eq + 1).trim();
+                    if (!key.isEmpty()) env.put(key, value);
+                }
+            }
+        } catch (IOException e) {
+            System.out.println("  ⚠ Failed to read .env: " + e.getMessage());
+        }
+        return env;
     }
 }

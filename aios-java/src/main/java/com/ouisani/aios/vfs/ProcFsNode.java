@@ -9,6 +9,20 @@ import com.ouisani.aios.core.cgroup.CgroupNode;
 import java.util.Map;
 import java.util.function.Supplier;
 
+/**
+ * 进程文件系统节点 — AIOS 的 /proc 伪文件系统。
+ * <p>
+ * 类比 Linux 的 /proc 文件系统，提供内核运行时信息的只读视图。
+ * 每个 ProcFsNode 通过一个 {@link Supplier} 延迟读取数据，
+ * 确保每次读取都返回最新的运行时状态。
+ *
+ * <h3>OS 类比</h3>
+ * <table>
+ *   <tr><th>Linux /proc</th><th>AIOS /proc</th><th>说明</th></tr>
+ *   <tr><td>/proc/[pid]/status</td><td>/proc/agents</td><td>进程（Agent）列表与状态</td></tr>
+ *   <tr><td>/proc/cgroups</td><td>/proc/cgroups</td><td>控制组资源配额信息</td></tr>
+ * </table>
+ */
 public non-sealed class ProcFsNode implements VfsNode {
 
     private final String path;
@@ -27,10 +41,12 @@ public non-sealed class ProcFsNode implements VfsNode {
         this.permissions = permissions;
     }
 
+    /** 创建 /proc/agents 节点 — 读取所有 Agent 进程状态 */
     public static ProcFsNode agents(TaskScheduler scheduler) {
         return new ProcFsNode("/proc/agents", () -> readAgents(scheduler));
     }
 
+    /** 创建 /proc/cgroups 节点 — 读取控制组资源配额信息 */
     public static ProcFsNode cgroups() {
         return new ProcFsNode("/proc/cgroups", ProcFsNode::readCgroups);
     }
@@ -70,6 +86,7 @@ public non-sealed class ProcFsNode implements VfsNode {
         return reader.get();
     }
 
+    /** /proc 是只读文件系统，写入操作始终抛出异常 */
     @Override
     public boolean write(String data) {
         throw new UnsupportedOperationException(

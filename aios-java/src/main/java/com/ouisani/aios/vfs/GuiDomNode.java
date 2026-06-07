@@ -10,22 +10,22 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Semantic DOM Node — the AIOS kernel's framebuffer.
+ * 语义 DOM 节点 — AIOS 内核的帧缓冲区（Framebuffer）。
  * <p>
- * This is the write-side of the Semantic Display Server. When an Agent
- * calls {@code sys_write("/dev/gui/dom", jsonPayload)}, this node:
+ * 这是语义显示服务器的写入端。当 Agent 调用
+ * {@code sys_write("/dev/gui/dom", jsonPayload)} 时，此节点：
  * <ol>
- *   <li>Parses the JSON payload as a Semantic DOM tree</li>
- *   <li>Merges it with the current DOM state (incremental patching)</li>
- *   <li>Broadcasts the diff via EventBus {@code "ui_render"} to all
- *       connected frontends (dashboard.html)</li>
+ *   <li>将 JSON 载荷解析为语义 DOM 树</li>
+ *   <li>与当前 DOM 状态合并（增量补丁）</li>
+ *   <li>通过 EventBus {@code "ui_render"} 将差异广播到所有
+ *       已连接的前端（dashboard.html）</li>
  * </ol>
- * <p>
- * <h3>Semantic DOM Protocol</h3>
- * The JSON payload follows a Virtual DOM format:
+ *
+ * <h3>语义 DOM 协议</h3>
+ * JSON 载荷遵循 Virtual DOM 格式：
  * <pre>
  * {
- *   "type": "render",          // "render" = full replace, "patch" = incremental
+ *   "type": "render",          // "render" = 全量替换, "patch" = 增量更新
  *   "agentId": "pm_agent",
  *   "timestamp": 1717584000000,
  *   "dom": {
@@ -33,33 +33,32 @@ import java.util.concurrent.atomic.AtomicLong;
  *     "type": "container",
  *     "props": { "direction": "column", "padding": 16 },
  *     "children": [
- *       { "id": "title", "type": "text", "props": { "value": "PRD Document", "style": "heading" } },
+ *       { "id": "title", "type": "text", "props": { "value": "PRD 文档", "style": "heading" } },
  *       { "id": "prd_content", "type": "text_area", "props": { "value": "...", "rows": 10 } },
- *       { "id": "btn_confirm", "type": "button", "props": { "label": "Confirm", "variant": "primary" } }
+ *       { "id": "btn_confirm", "type": "button", "props": { "label": "确认", "variant": "primary" } }
  *     ]
  *   }
  * }
  * </pre>
- * <p>
- * <h3>Supported Component Types</h3>
+ *
+ * <h3>支持的组件类型</h3>
  * <ul>
- *   <li>{@code container} — flex layout container (like div)</li>
- *   <li>{@code text} — static text (like span/h1/h2)</li>
- *   <li>{@code text_area} — multi-line text (like textarea)</li>
- *   <li>{@code text_input} — single-line input (like input)</li>
- *   <li>{@code button} — clickable button</li>
- *   <li>{@code card} — bordered card container</li>
- *   <li>{@code list} — dynamic list of items</li>
- *   <li>{@code chart} — chart/graph placeholder</li>
- *   <li>{@code image} — image display (base64 or URL)</li>
- *   <li>{@code status} — status indicator (ok/warn/error)</li>
+ *   <li>{@code container} — 弹性布局容器（类似 div）</li>
+ *   <li>{@code text} — 静态文本（类似 span/h1/h2）</li>
+ *   <li>{@code text_area} — 多行文本（类似 textarea）</li>
+ *   <li>{@code text_input} — 单行输入（类似 input）</li>
+ *   <li>{@code button} — 可点击按钮</li>
+ *   <li>{@code card} — 带边框的卡片容器</li>
+ *   <li>{@code list} — 动态列表</li>
+ *   <li>{@code chart} — 图表占位符</li>
+ *   <li>{@code image} — 图片显示（base64 或 URL）</li>
+ *   <li>{@code status} — 状态指示器（ok/warn/error）</li>
  * </ul>
- * <p>
- * <h3>OS Analogy: Framebuffer + DRM</h3>
- * Just as the Linux DRM/KMS subsystem manages framebuffers and pushes
- * pixel diffs to the display, GuiDomNode manages a DOM tree and pushes
- * JSON diffs to the frontend. The Agent is the "GPU" that renders into
- * this framebuffer, and the dashboard is the "monitor" that displays it.
+ *
+ * <h3>OS 类比：帧缓冲区 + DRM</h3>
+ * 正如 Linux DRM/KMS 子系统管理帧缓冲区并将像素差异推送到显示器，
+ * GuiDomNode 管理 DOM 树并将 JSON 差异推送到前端。
+ * Agent 是渲染到此帧缓冲区的"GPU"，而 dashboard 是显示它的"显示器"。
  *
  * @see GuiActionNode
  * @see EventBus
@@ -76,13 +75,13 @@ public non-sealed class GuiDomNode implements VfsNode {
 
     // ── DOM State ──
 
-    /** Current full DOM tree (per agentId). */
+    /** 当前完整 DOM 树（按 agentId 分组） */
     private final ConcurrentHashMap<String, String> agentDomState = new ConcurrentHashMap<>();
 
-    /** Version counter per agent (for incremental patching). */
+    /** 每个 Agent 的版本计数器（用于增量补丁） */
     private final ConcurrentHashMap<String, AtomicLong> agentVersions = new ConcurrentHashMap<>();
 
-    /** Global render sequence number. */
+    /** 全局渲染序列号 */
     private final AtomicLong renderSeq = new AtomicLong(0);
 
     public GuiDomNode(String path) {
@@ -122,9 +121,9 @@ public non-sealed class GuiDomNode implements VfsNode {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Read the current DOM state (all agents).
-     * <p>
-     * Returns a JSON object mapping agentId → their current DOM tree.
+     * 读取当前所有 Agent 的 DOM 状态。
+     *
+     * @return JSON 对象，键为 agentId，值为对应的 DOM 树
      */
     @Override
     public String read() {
@@ -140,7 +139,10 @@ public non-sealed class GuiDomNode implements VfsNode {
     }
 
     /**
-     * Read the DOM state for a specific agent.
+     * 读取指定 Agent 的 DOM 状态。
+     *
+     * @param agentId Agent 标识
+     * @return 该 Agent 的 DOM 树 JSON，不存在则返回空对象
      */
     public String readAgent(String agentId) {
         return agentDomState.getOrDefault(agentId, "{}");
@@ -151,16 +153,18 @@ public non-sealed class GuiDomNode implements VfsNode {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Write a Semantic DOM payload to the framebuffer.
+     * 写入语义 DOM 载荷到帧缓冲区。
      * <p>
-     * Supports two modes:
+     * 支持两种模式：
      * <ul>
-     *   <li>{@code "type": "render"} — full DOM replacement (like swapping a framebuffer)</li>
-     *   <li>{@code "type": "patch"} — incremental update (like dirty rect rendering)</li>
+     *   <li>{@code "type": "render"} — 全量 DOM 替换（类似交换帧缓冲区）</li>
+     *   <li>{@code "type": "patch"} — 增量更新（类似脏矩形渲染）</li>
      * </ul>
      * <p>
-     * After updating the DOM state, broadcasts the diff via EventBus
-     * {@code "ui_render"} to all connected frontends.
+     * 更新 DOM 状态后，通过 EventBus {@code "ui_render"} 广播差异到所有已连接前端。
+     *
+     * @param payload 语义 DOM JSON 载荷
+     * @return 是否成功渲染
      */
     @Override
     public boolean write(String payload) {
@@ -219,20 +223,24 @@ public non-sealed class GuiDomNode implements VfsNode {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Apply an incremental patch to the current DOM state.
+     * 对当前 DOM 状态应用增量补丁。
      * <p>
-     * The patch format specifies which nodes to update:
+     * 补丁格式指定要更新的节点：
      * <pre>
      * {
      *   "type": "patch",
      *   "agentId": "pm_agent",
      *   "ops": [
-     *     {"op": "update", "id": "title", "props": {"value": "Updated Title"}},
+     *     {"op": "update", "id": "title", "props": {"value": "更新标题"}},
      *     {"op": "remove", "id": "btn_cancel"},
      *     {"op": "insert", "parentId": "root", "node": {...}}
      *   ]
      * }
      * </pre>
+     *
+     * @param currentDom   当前 DOM 状态 JSON
+     * @param patchPayload 补丁载荷 JSON
+     * @return 补丁后的 DOM 状态 JSON
      */
     private String applyPatch(String currentDom, String patchPayload) {
         // For now, a simple implementation: if the patch contains a "dom" field,

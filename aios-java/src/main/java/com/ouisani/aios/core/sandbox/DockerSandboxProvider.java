@@ -10,11 +10,21 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Cloud-native sandbox provider that spawns real Docker containers.
+ * 云原生沙箱后端 — 启动真实 Docker 容器执行代码。
  * <p>
- * Code is written to a temporary file on the host, then mounted into
- * a disposable container via {@code docker run --rm -v ...}.
- * The container's stdout is captured and returned as the execution result.
+ * 代码写入宿主机临时文件，通过 {@code docker run --rm -v ...}
+ * 挂载到一次性容器中执行，捕获 stdout 作为执行结果返回。
+ * <p>
+ * 安全加固参数：
+ * <ul>
+ *   <li>{@code --network none} — 无网络访问（气隙隔离）</li>
+ *   <li>{@code -m 256m} — 内存硬限制 256MB</li>
+ *   <li>{@code --cpus=0.5} — CPU 配额半核</li>
+ *   <li>{@code --pids-limit 64} — 防止 fork 炸弹</li>
+ *   <li>{@code --read-only} — 只读根文件系统</li>
+ * </ul>
+ *
+ * @see SandboxProvider
  */
 public class DockerSandboxProvider implements SandboxProvider {
 

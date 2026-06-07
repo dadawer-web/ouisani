@@ -11,16 +11,24 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Windows-style Object Manager with handle-based security for AIOS.
+ * 对象管理器 — AIOS 的句柄式安全访问控制。
  * <p>
- * Agents cannot access VFS nodes directly by path. They must first
- * {@link #openHandle} to obtain an integer handle, then use that handle
- * for all subsequent operations. This enables:
+ * Agent 不能直接通过路径访问 VFS 节点，必须先通过 {@link #openHandle} 获取
+ * 整数句柄，然后用句柄进行后续操作。这实现了：
  * <ul>
- *   <li>Access control at handle-creation time (not every read/write)</li>
- *   <li>Handle revocation / capability revocation</li>
- *   <li>Audit logging of who opened what</li>
+ *   <li>访问控制在句柄创建时执行（而非每次读写）</li>
+ *   <li>句柄撤销 / 权能回收</li>
+ *   <li>审计日志：记录谁打开了什么</li>
  * </ul>
+ *
+ * <h3>OS 类比: Windows Object Manager</h3>
+ * Windows 内核的 Object Manager 将所有内核对象（文件、事件、互斥体等）
+ * 统一用 Handle 管理，进程通过 Handle 而非指针访问对象。
+ * AIOS 的 ObjectManager 采用相同模型：Agent 通过整数 Handle 访问 VFS 节点，
+ * 而非直接操作路径。Handle 的分配、校验、回收由 ObjectManager 统一管控。
+ *
+ * @see SecurityToken
+ * @see InvalidHandleException
  */
 public final class ObjectManager {
 
@@ -41,18 +49,20 @@ public final class ObjectManager {
     private ObjectManager() {}
 
     /**
-     * Open a handle to a VFS path for the given agent.
+     * 为指定 Agent 打开一个 VFS 路径的句柄。
      * <p>
-     * Security checks:
-     * <ul>
-     *   <li>If the path contains "secret" and the agent is not REALTIME, throws {@link SecurityException}.</li>
-     * </ul>
+     * 安全检查流程：
+     * <ol>
+     *   <li>解析 VFS 路径，若不存在则抛出 IllegalArgumentException</li>
+     *   <li>校验有效令牌的 SE_HANDLE_OPEN 权能</li>
+     *   <li>若路径包含 "secret"，还需校验 SE_SECRET_ACCESS 权能</li>
+     * </ol>
      *
-     * @param agentId the agent requesting access
-     * @param vfsPath the VFS path to open
-     * @return an integer handle for subsequent operations
-     * @throws SecurityException       if the agent lacks permission
-     * @throws IllegalArgumentException if the path does not resolve
+     * @param agentId 请求访问的 Agent 标识
+     * @param vfsPath 要打开的 VFS 路径
+     * @return 整数句柄，用于后续操作
+     * @throws SecurityException       如果 Agent 缺少权限
+     * @throws IllegalArgumentException 如果路径不存在
      */
     public int openHandle(String agentId, String vfsPath) {
         // Resolve VFS node
@@ -96,11 +106,11 @@ public final class ObjectManager {
     }
 
     /**
-     * Retrieve the VfsNode associated with a handle.
+     * 通过句柄获取关联的 VfsNode。
      *
-     * @param handle the handle returned by {@link #openHandle}
-     * @return the VfsNode
-     * @throws InvalidHandleException if the handle is not valid or has been closed
+     * @param handle 由 {@link #openHandle} 返回的句柄
+     * @return VfsNode
+     * @throws InvalidHandleException 如果句柄无效或已关闭
      */
     public VfsNode getNodeByHandle(int handle) {
         VfsNode node = handleTable.get(handle);
@@ -111,10 +121,10 @@ public final class ObjectManager {
     }
 
     /**
-     * Close a handle, releasing the mapping.
+     * 关闭句柄，释放映射。
      *
-     * @param handle the handle to close
-     * @return true if the handle was closed, false if it was already invalid
+     * @param handle 要关闭的句柄
+     * @return true 如果句柄成功关闭，false 如果句柄已无效
      */
     public boolean closeHandle(int handle) {
         VfsNode removed = handleTable.remove(handle);
@@ -129,45 +139,35 @@ public final class ObjectManager {
         return false;
     }
 
-    /**
-     * Check if a handle is currently valid.
-     */
+    /** 检查句柄是否有效 */
     public boolean isValidHandle(int handle) {
         return handleTable.containsKey(handle);
     }
 
-    /**
-     * Get metadata about a handle.
-     */
+    /** 获取句柄的元数据 */
     public HandleInfo getHandleInfo(int handle) {
         return handleInfo.get(handle);
     }
 
-    /**
-     * Get all currently active handles (read-only view).
-     */
+    /** 获取所有活跃句柄（只读视图） */
     public Map<Integer, VfsNode> activeHandles() {
         return Collections.unmodifiableMap(handleTable);
     }
 
     /**
-     * Get all currently active handle info entries (read-only view).
-     * Used by CrashAnalyzer to collect handle snapshots for core dumps.
+     * 获取所有活跃句柄的元数据（只读视图）。
+     * 供 CrashAnalyzer 收集句柄快照以生成核心转储。
      */
     public Map<Integer, HandleInfo> activeHandleInfo() {
         return Collections.unmodifiableMap(handleInfo);
     }
 
-    /**
-     * Get the number of active handles.
-     */
+    /** 获取活跃句柄数量 */
     public int activeHandleCount() {
         return handleTable.size();
     }
 
-    /**
-     * Close all handles for a specific agent.
-     */
+    /** 关闭指定 Agent 的所有句柄 */
     public int closeAllHandlesForAgent(String agentId) {
         int closed = 0;
         for (Map.Entry<Integer, HandleInfo> entry : handleInfo.entrySet()) {
@@ -183,8 +183,6 @@ public final class ObjectManager {
         return closed;
     }
 
-    /**
-     * Metadata about an open handle.
-     */
+    /** 句柄元数据：记录哪个 Agent 打开了哪个 VFS 路径 */
     public record HandleInfo(String agentId, String vfsPath, long openedAt) {}
 }

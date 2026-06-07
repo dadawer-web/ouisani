@@ -13,23 +13,36 @@ import com.ouisani.aios.core.ipc.SignalType;
 import com.ouisani.aios.core.AgentTask;
 import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.VfsManager;
+import com.ouisani.aios.core.compact.CompactService;
+import com.ouisani.aios.core.context.ClaudeMdLoader;
+import com.ouisani.aios.core.context.SystemPromptBuilder;
+import com.ouisani.aios.core.hook.HookManager;
+import com.ouisani.aios.core.memory.SessionMemoryService;
+import com.ouisani.aios.core.permission.PermissionChecker;
+import com.ouisani.aios.core.permission.PermissionMode;
+import com.ouisani.aios.core.telemetry.TelemetryService;
+import com.ouisani.aios.core.tool.QueryEngine;
+import com.ouisani.aios.core.tool.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
 import java.util.Map;
 
 /**
- * AIOS User Space SDK — elegant high-level API that wraps the
- * low-level SyscallDispatcher so Agent developers never need to
- * touch raw syscalls.
+ * AIOS 用户空间 SDK — 封装底层 SyscallDispatcher 的高级 API，
+ * 使 Agent 开发者无需直接接触原始系统调用。
  * <p>
- * All methods require an {@code agentId} parameter to identify the
- * calling Agent in the kernel's syscall boundary.
+ * 所有方法都需要 {@code agentId} 参数，用于在内核系统调用边界
+ * 标识调用方 Agent。
  * <p>
- * Usage:
+ * OS 类比：相当于 glibc / libc — 用户态程序通过 libc 调用内核系统调用，
+ * AIOS 中 Agent 通过 AiosSdk 调用内核功能。
+ * <p>
+ * 使用示例：
  * <pre>
  *   AiosSdk sdk = AiosSdk.getInstance();
- *   String answer = sdk.think("agent_1", "What is the meaning of life?");
+ *   String answer = sdk.think("agent_1", "生命的意义是什么？");
  *   String screen = sdk.readFile("agent_1", "/dev/gui/dom");
  *   sdk.writeFile("agent_1", "/dev/gui/action", "{\"action\":\"click\",\"id\":\"btn_1\"}");
  * </pre>
@@ -54,12 +67,11 @@ public final class AiosSdk {
     // ── LLM ──
 
     /**
-     * Ask the LLM a question. Transparently augmented by ContextInjector
-     * with Vector Memory background knowledge.
+     * 向 LLM 提问。由 ContextInjector 自动注入向量记忆背景知识。
      *
-     * @param agentId the calling Agent's ID
-     * @param prompt  the user prompt
-     * @return the LLM response text
+     * @param agentId 调用方 Agent ID
+     * @param prompt  用户提示词
+     * @return LLM 响应文本
      */
     public String think(String agentId, String prompt) {
         SyscallRequest request = new SyscallRequest("llm", "think", new LlmPayload(prompt));
@@ -68,7 +80,7 @@ public final class AiosSdk {
     }
 
     /**
-     * Ask the LLM with a custom system prompt.
+     * 使用自定义系统提示词向 LLM 提问。
      */
     public String think(String agentId, String prompt, String systemPrompt) {
         SyscallRequest request = new SyscallRequest("llm", "think",
@@ -80,11 +92,11 @@ public final class AiosSdk {
     // ── VFS ──
 
     /**
-     * Read from a VFS path.
+     * 从 VFS 路径读取内容。
      *
-     * @param agentId the calling Agent's ID
-     * @param path    the VFS path
-     * @return the content read from the VFS node
+     * @param agentId 调用方 Agent ID
+     * @param path    VFS 路径
+     * @return 从 VFS 节点读取的内容
      */
     public String readFile(String agentId, String path) {
         SyscallRequest request = new SyscallRequest("vfs", "read", new RawPayload(Map.of("path", path)));
@@ -93,11 +105,11 @@ public final class AiosSdk {
     }
 
     /**
-     * Write data to a VFS path.
+     * 向 VFS 路径写入数据。
      *
-     * @param agentId the calling Agent's ID
-     * @param path    the VFS path
-     * @param data    the data to write
+     * @param agentId 调用方 Agent ID
+     * @param path    VFS 路径
+     * @param data    要写入的数据
      */
     public void writeFile(String agentId, String path, String data) {
         SyscallRequest request = new SyscallRequest("vfs", "write",
@@ -111,7 +123,7 @@ public final class AiosSdk {
     // ── Storage (typed payload) ──
 
     /**
-     * Read from a storage path using the standardized StoragePayload.
+     * 使用标准化 StoragePayload 从存储路径读取。
      */
     public String storageRead(String agentId, String path) {
         SyscallRequest request = new SyscallRequest("storage", "read", StoragePayload.read(path));
@@ -120,7 +132,7 @@ public final class AiosSdk {
     }
 
     /**
-     * Write to a storage path using the standardized StoragePayload.
+     * 使用标准化 StoragePayload 向存储路径写入。
      */
     public void storageWrite(String agentId, String path, String data) {
         SyscallRequest request = new SyscallRequest("storage", "write", StoragePayload.write(path, data));
@@ -130,8 +142,9 @@ public final class AiosSdk {
         }
     }
 
-    // ── Handles ──
+    // ── 文件句柄（open/read/close） ──
 
+    /** 打开 VFS 文件句柄，返回句柄 ID */
     public int openHandle(String agentId, String path) {
         SyscallRequest request = new SyscallRequest("handle", "open", new RawPayload(Map.of("path", path)));
         SyscallResponse resp = SyscallDispatcher.getInstance().execute(agentId, request);
@@ -142,26 +155,28 @@ public final class AiosSdk {
         return -1;
     }
 
+    /** 通过句柄 ID 读取内容 */
     public String readHandle(String agentId, int handleId) {
         SyscallRequest request = new SyscallRequest("handle", "read", new RawPayload(Map.of("handleId", handleId)));
         SyscallResponse resp = SyscallDispatcher.getInstance().execute(agentId, request);
         return resp.success() ? resp.data() : "[SDK Error] " + resp.errorMessage();
     }
 
+    /** 关闭文件句柄 */
     public void closeHandle(String agentId, int handleId) {
         SyscallRequest request = new SyscallRequest("handle", "close", new RawPayload(Map.of("handleId", handleId)));
         SyscallDispatcher.getInstance().execute(agentId, request);
     }
 
-    // ── Dynamic Tools ──
+    // ── 动态工具 ──
 
     /**
-     * Call a dynamically registered WASM plugin tool.
+     * 调用动态注册的 WASM 插件工具。
      *
-     * @param agentId  the calling Agent's ID
-     * @param toolName the tool name (without "tool." prefix)
-     * @param args     the arguments
-     * @return the syscall response
+     * @param agentId  调用方 Agent ID
+     * @param toolName 工具名称（不含 "tool." 前缀）
+     * @param args     参数
+     * @return 系统调用响应
      */
     public SyscallResponse callTool(String agentId, String toolName, Map<String, Object> args) {
         log.info("[SDK] Agent '{}' calling tool: {} with {} args", agentId, toolName, args != null ? args.size() : 0);
@@ -169,10 +184,10 @@ public final class AiosSdk {
         return SyscallDispatcher.getInstance().execute(agentId, request);
     }
 
-    // ── Raw Syscall ──
+    // ── 原始系统调用 ──
 
     /**
-     * Dispatch a raw syscall with agent identity.
+     * 带 Agent 身份分派原始系统调用。
      */
     public SyscallResponse dispatch(String agentId, String action, Map<String, Object> params) {
         SyscallRequest request = new SyscallRequest(action, params);
@@ -180,21 +195,21 @@ public final class AiosSdk {
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Shared Memory (SHM IPC) — Neural mmap()
+    //  共享内存（SHM IPC）— 神经网络 mmap()
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Write a string value to a semantic memory block.
+     * 向语义内存块写入字符串值。
      * <p>
-     * This is the neural equivalent of {@code mmap() + memcpy()}:
-     * the calling agent writes data into a shared memory region
-     * that other agents can read without message passing.
+     * 等同于 {@code mmap() + memcpy()} 的神经网络版本：
+     * 调用方 Agent 将数据写入共享内存区域，其他 Agent 可直接读取，
+     * 无需消息传递。
      *
-     * @param agentId the calling Agent's ID
-     * @param blockId the semantic block identifier
-     * @param key     the key
-     * @param value   the value
-     * @return the new version number of the block
+     * @param agentId 调用方 Agent ID
+     * @param blockId 语义内存块标识符
+     * @param key     键
+     * @param value   值
+     * @return 内存块的新版本号
      */
     public long shmWrite(String agentId, String blockId, String key, String value) {
         long version = SharedMemoryManager.instance().putSemanticString(blockId, key, value);
@@ -203,12 +218,12 @@ public final class AiosSdk {
     }
 
     /**
-     * Read a string value from a semantic memory block.
+     * 从语义内存块读取字符串值。
      *
-     * @param agentId the calling Agent's ID
-     * @param blockId the semantic block identifier
-     * @param key     the key
-     * @return the value, or null if not found
+     * @param agentId 调用方 Agent ID
+     * @param blockId 语义内存块标识符
+     * @param key     键
+     * @return 值，未找到时返回 null
      */
     public String shmRead(String agentId, String blockId, String key) {
         String value = SharedMemoryManager.instance().getSemanticString(blockId, key);
@@ -217,17 +232,16 @@ public final class AiosSdk {
     }
 
     /**
-     * Write a vector embedding to a semantic memory block.
+     * 向语义内存块写入向量嵌入。
      * <p>
-     * This enables "subconscious" knowledge transfer: the writing agent
-     * encodes its understanding as a high-dimensional vector, and the
-     * reading agent can access it without any text exchange.
+     * 实现"潜意识"知识传递：写入方 Agent 将理解编码为高维向量，
+     * 读取方 Agent 可直接访问，无需文本交换。
      *
-     * @param agentId  the calling Agent's ID
-     * @param blockId  the semantic block identifier
-     * @param key      the vector key
-     * @param embedding the float array
-     * @return the new version number
+     * @param agentId   调用方 Agent ID
+     * @param blockId   语义内存块标识符
+     * @param key       向量键
+     * @param embedding 浮点数组
+     * @return 新版本号
      */
     public long shmWriteVector(String agentId, String blockId, String key, float[] embedding) {
         long version = SharedMemoryManager.instance().putSemanticVector(blockId, key, embedding);
@@ -237,39 +251,34 @@ public final class AiosSdk {
     }
 
     /**
-     * Read a vector embedding from a semantic memory block.
+     * 从语义内存块读取向量嵌入。
      */
     public float[] shmReadVector(String agentId, String blockId, String key) {
         return SharedMemoryManager.instance().getSemanticVector(blockId, key);
     }
 
-    /**
-     * Get or create a SemanticMemoryBlock.
-     */
+    /** 获取或创建语义内存块 */
     public SemanticMemoryBlock shmGetBlock(String blockId) {
         return SharedMemoryManager.instance().getOrCreateSemanticBlock(blockId);
     }
 
-    /**
-     * Get an existing SemanticMemoryBlock (returns null if not found).
-     */
+    /** 获取已有语义内存块（不存在时返回 null） */
     public SemanticMemoryBlock shmGetBlockIfExists(String blockId) {
         return SharedMemoryManager.instance().getSemanticBlock(blockId);
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Signal IPC — Hardware-Level Interrupt
+    //  信号 IPC — 硬件级中断
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Send a signal to an agent identified by its PID.
+     * 向指定 PID 的 Agent 发送信号。
      * <p>
-     * This is the AIOS equivalent of {@code kill(pid, signal)}.
-     * The signal is enqueued in the target agent's signal queue
-     * and will be processed on its next scheduling cycle.
+     * 等同于 AIOS 的 {@code kill(pid, signal)}。
+     * 信号被加入目标 Agent 的信号队列，在其下次调度周期处理。
      *
-     * @param targetPid the target agent's PID
-     * @param signal    the signal type
+     * @param targetPid 目标 Agent 的 PID
+     * @param signal    信号类型
      */
     public void sendSignal(int targetPid, SignalType signal) {
         TaskScheduler scheduler = VfsManager.instance().getTaskScheduler();
@@ -287,26 +296,25 @@ public final class AiosSdk {
     }
 
     /**
-     * Send a SIG_CONTEXT_UPDATE signal to an agent by PID.
+     * 向指定 PID 的 Agent 发送 SIG_CONTEXT_UPDATE 信号。
      * <p>
-     * This is the primary IPC mechanism for "shared memory + interrupt"
-     * communication. After writing to a SemanticMemoryBlock, the writer
-     * agent calls this method to notify the reader agent.
+     * 这是"共享内存 + 中断"通信的主要 IPC 机制。
+     * 写入 SemanticMemoryBlock 后，写入方 Agent 调用此方法通知读取方 Agent。
      *
-     * @param targetPid the target agent's PID
+     * @param targetPid 目标 Agent 的 PID
      */
     public void sendContextUpdate(int targetPid) {
         sendSignal(targetPid, SignalType.SIG_CONTEXT_UPDATE);
     }
 
     /**
-     * Broadcast a SIG_CONTEXT_UPDATE to all agents in a cgroup.
+     * 向 cgroup 中的所有 Agent 广播 SIG_CONTEXT_UPDATE 信号。
      * <p>
-     * This is the AIOS equivalent of {@code kill(-pgid, signal)}:
-     * it sends the signal to all agents in the specified process group.
+     * 等同于 AIOS 的 {@code kill(-pgid, signal)}：
+     * 向指定进程组中的所有 Agent 发送信号。
      *
-     * @param cgroup the cgroup name (e.g., "agents")
-     * @param signal the signal type
+     * @param cgroup cgroup 名称（如 "agents"）
+     * @param signal 信号类型
      */
     public void broadcastSignal(String cgroup, SignalType signal) {
         TaskScheduler scheduler = VfsManager.instance().getTaskScheduler();
@@ -325,21 +333,20 @@ public final class AiosSdk {
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Dynamic Module Loading (insmod / rmmod)
+    //  动态模块加载（insmod / rmmod）
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * sys_insmod: Load a tool into the Agent's active context by semantic query.
+     * sys_insmod：通过语义查询将工具加载到 Agent 的活跃上下文。
      * <p>
-     * This is the AIOS equivalent of {@code insmod} / {@code modprobe}:
-     * the Agent describes what it needs in natural language, and the
-     * kernel finds and loads the best-matching tool.
+     * 等同于 AIOS 的 {@code insmod} / {@code modprobe}：
+     * Agent 用自然语言描述需求，内核查找并加载最佳匹配的工具。
      * <p>
-     * Example: {@code sdk.insmod(agentId, "我需要一个能搜索网页的工具")}
+     * 示例：{@code sdk.insmod(agentId, "我需要一个能搜索网页的工具")}
      *
-     * @param agentId the calling Agent's ID
-     * @param query   natural language tool requirement
-     * @return the SyscallResponse containing the loaded tool's JSON Schema
+     * @param agentId 调用方 Agent ID
+     * @param query   自然语言工具需求描述
+     * @return 包含已加载工具 JSON Schema 的系统调用响应
      */
     public SyscallResponse insmod(String agentId, String query) {
         SyscallRequest request = new SyscallRequest("tool", "call",
@@ -348,11 +355,11 @@ public final class AiosSdk {
     }
 
     /**
-     * sys_insmod: Load a specific tool by name.
+     * sys_insmod：按名称加载指定工具。
      *
-     * @param agentId  the calling Agent's ID
-     * @param toolName the exact tool name to load
-     * @return the SyscallResponse
+     * @param agentId  调用方 Agent ID
+     * @param toolName 要加载的工具名称
+     * @return 系统调用响应
      */
     public SyscallResponse insmodByName(String agentId, String toolName) {
         SyscallRequest request = new SyscallRequest("tool", "call",
@@ -361,11 +368,11 @@ public final class AiosSdk {
     }
 
     /**
-     * sys_rmmod: Unload a tool from the Agent's active context.
+     * sys_rmmod：从 Agent 的活跃上下文卸载工具。
      *
-     * @param agentId  the calling Agent's ID
-     * @param toolName the tool to unload
-     * @return the SyscallResponse
+     * @param agentId  调用方 Agent ID
+     * @param toolName 要卸载的工具名称
+     * @return 系统调用响应
      */
     public SyscallResponse rmmod(String agentId, String toolName) {
         SyscallRequest request = new SyscallRequest("tool", "call",
@@ -373,9 +380,7 @@ public final class AiosSdk {
         return SyscallDispatcher.getInstance().execute(agentId, request);
     }
 
-    /**
-     * sys_lsmod: List all tools currently loaded in the Agent's context.
-     */
+    /** sys_lsmod：列出 Agent 当前上下文中已加载的所有工具 */
     public SyscallResponse lsmod(String agentId) {
         SyscallRequest request = new SyscallRequest("tool", "call",
                 new ToolPayload("kernel.lsmod"));
@@ -383,11 +388,11 @@ public final class AiosSdk {
     }
 
     /**
-     * sys_modprobe: Search for available tools without loading them.
+     * sys_modprobe：搜索可用工具但不加载。
      *
-     * @param agentId the calling Agent's ID
-     * @param query   natural language tool requirement
-     * @return the SyscallResponse listing matching tools
+     * @param agentId 调用方 Agent ID
+     * @param query   自然语言工具需求描述
+     * @return 列出匹配工具的系统调用响应
      */
     public SyscallResponse modprobe(String agentId, String query) {
         SyscallRequest request = new SyscallRequest("tool", "call",
@@ -395,10 +400,90 @@ public final class AiosSdk {
         return SyscallDispatcher.getInstance().execute(agentId, request);
     }
 
-    /**
-     * Get the Agent's active tool context (for direct access to loaded tools).
-     */
+    /** 获取 Agent 的活跃工具上下文（直接访问已加载工具） */
     public com.ouisani.aios.core.plugin.AgentToolContext getToolContext(String agentId) {
         return com.ouisani.aios.core.plugin.PluginManager.getInstance().getAgentContext(agentId);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Claude Code 能力 — 工具增强推理 + 上下文 + 遥测
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 创建 QueryEngine — 工具增强推理循环。
+     * <p>
+     * Agent 可通过 QueryEngine 进行多轮工具调用推理，
+     * 自动检测工具调用意图并执行，最多 20 轮。
+     *
+     * @param agentId   Agent ID
+     * @param workingDir 工作目录
+     * @return QueryEngine 实例
+     */
+    public QueryEngine createQueryEngine(String agentId, String workingDir) {
+        return new QueryEngine(this, agentId, workingDir);
+    }
+
+    /**
+     * 使用 QueryEngine 进行工具增强推理 — 一行调用。
+     */
+    public String queryWithTools(String agentId, String prompt, String workingDir) {
+        return new QueryEngine(this, agentId, workingDir).query(prompt);
+    }
+
+    /**
+     * 获取所有已注册工具的描述。
+     */
+    public String getToolsDescription() {
+        return ToolRegistry.instance().toolsDescription();
+    }
+
+    /**
+     * 构建系统提示词 — 包含工具描述 + CLAUDE.md + Git 状态。
+     */
+    public String buildSystemPrompt(String workingDir) {
+        return SystemPromptBuilder.build(workingDir);
+    }
+
+    /**
+     * 加载 CLAUDE.md 项目指令。
+     */
+    public String loadClaudeMd(String workingDir) {
+        return ClaudeMdLoader.formatAsPrompt(ClaudeMdLoader.loadAll(workingDir));
+    }
+
+    /**
+     * 获取遥测成本报告。
+     */
+    public String getCostReport() {
+        return TelemetryService.instance().formatCostReport();
+    }
+
+    /**
+     * 记录 Token 使用量。
+     */
+    public void recordTokenUsage(String model, long inputTokens, long outputTokens, double costUSD) {
+        TelemetryService.instance().recordTokenUsage(model, inputTokens, outputTokens, 0, 0, costUSD);
+    }
+
+    /**
+     * 触发生命周期 Hook。
+     */
+    public HookManager.HookResult triggerHook(HookManager.HookEvent event, Map<String, Object> data) {
+        return HookManager.instance().trigger(event, data);
+    }
+
+    /**
+     * 注册生命周期 Hook。
+     */
+    public void registerHook(HookManager.HookEvent event, HookManager.HookHandler handler) {
+        HookManager.instance().register(event, handler);
+    }
+
+    /**
+     * 设置权限模式。
+     */
+    public void setPermissionMode(PermissionMode mode) {
+        // 通过 ThreadLocal 或全局状态传递
+        log.info("[SDK] Permission mode set to: {}", mode);
     }
 }

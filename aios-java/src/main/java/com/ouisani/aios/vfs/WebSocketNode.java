@@ -8,6 +8,17 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * WebSocket 节点 — AIOS 的双向持久连接设备。
+ * <p>
+ * 提供 Agent 与外部 WebSocket 服务的双向通信通道。
+ * Agent 通过 write 发送消息，通过 read 接收消息。
+ * 当 WebSocket 断开时，写入数据缓冲到 sendQueue，等待重连后发送。
+ *
+ * <h3>OS 类比</h3>
+ * 类比 Linux 的 {@code /dev/tcp} 持久连接 —
+ * 通过文件描述符进行全双工的流式 I/O。
+ */
 public non-sealed class WebSocketNode implements VfsNode {
 
     private static final Logger log = LoggerFactory.getLogger(WebSocketNode.class);

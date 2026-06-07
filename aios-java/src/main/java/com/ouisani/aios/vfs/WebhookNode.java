@@ -9,6 +9,16 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Webhook 节点 — AIOS 的外部事件接收器。
+ * <p>
+ * 挂载在 VFS 中，动态注册 HTTP POST 路由（如 {@code /webhook/{webhookId}}），
+ * 外部系统通过 HTTP POST 将事件推送到此节点，Agent 通过 VFS read 读取。
+ *
+ * <h3>OS 类比</h3>
+ * 类比 Linux 的 {@code /dev/input} — 外部硬件中断转换为文件可读事件。
+ * Webhook 是"网络中断"，将外部 HTTP 请求转换为 VFS 可读数据。
+ */
 public non-sealed class WebhookNode implements VfsNode {
 
     private static final Logger log = LoggerFactory.getLogger(WebhookNode.class);

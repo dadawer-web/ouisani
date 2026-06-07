@@ -1,0 +1,356 @@
+import { create } from "zustand";
+import {
+  type Node,
+  type Edge,
+  type Connection,
+  type XYPosition,
+  addEdge,
+} from "@xyflow/react";
+import axios from "axios";
+
+/** 智能体节点数据 */
+export interface AgentNodeData {
+  label: string;
+  role: string;
+  blueprintId: string;
+  subscribeTopic: string;
+  publishTopic: string;
+  userParams: Record<string, string>;
+  [key: string]: unknown;
+}
+
+/** 编译后的节点格式 (WorkflowManifest.nodes[]) */
+export interface CompiledWorkflowNode {
+  instanceId: string;
+  blueprintId: string;
+  role: string;
+  subscribeTopic: string;
+  publishTopic: string;
+  userParams: Record<string, string>;
+}
+
+/** 编译后的工作流清单 (WorkflowManifest) */
+export interface CompiledWorkflowManifest {
+  workflowName: string;
+  nodes: CompiledWorkflowNode[];
+}
+
+/** Toast 状态 */
+interface ToastState {
+  visible: boolean;
+  message: string;
+  type: "success" | "error" | "info";
+}
+
+/** 系统告警状态 — AutoMedic 熔断时触发 */
+export interface SystemAlert {
+  visible: boolean;
+  nodeId: string;
+  dump: string;
+}
+
+/** 工作流状态管理 */
+interface WorkflowStore {
+  nodes: Node[];
+  edges: Edge[];
+  workflowName: string;
+  nodeCounter: number;
+  toast: ToastState;
+  systemAlert: SystemAlert;
+  deploying: boolean;
+  controlWs: WebSocket | null;
+  setNodes: (nodes: Node[]) => void;
+  setEdges: (edges: Edge[]) => void;
+  addNode: (position: XYPosition) => void;
+  updateNodeData: (id: string, data: Partial<AgentNodeData>) => void;
+  removeNode: (id: string) => void;
+  onConnect: (connection: Connection) => void;
+  setWorkflowName: (name: string) => void;
+  showToast: (message: string, type?: ToastState["type"]) => void;
+  hideToast: () => void;
+  triggerSystemAlert: (nodeId: string, dump: string) => void;
+  dismissSystemAlert: () => void;
+  setControlWs: (ws: WebSocket | null) => void;
+  hotPatchParam: (targetNode: string, params: Record<string, number>) => void;
+  autoCompile: (userIdea: string) => void;
+  compileToWorkflow: () => CompiledWorkflowManifest;
+  deploy: () => Promise<void>;
+}
+
+let idCounter = 1;
+const getId = () => `agent_${idCounter++}`;
+
+export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
+  nodes: [],
+  edges: [],
+  workflowName: "untitled_workflow",
+  nodeCounter: 0,
+  toast: { visible: false, message: "", type: "info" },
+  systemAlert: { visible: false, nodeId: "", dump: "" },
+  deploying: false,
+  controlWs: null,
+
+  setNodes: (nodes) => set({ nodes }),
+  setEdges: (edges) => set({ edges }),
+
+  addNode: (position) => {
+    const id = getId();
+    const newNode: Node = {
+      id,
+      type: "agentNode",
+      position,
+      data: {
+        label: `Agent ${get().nodeCounter + 1}`,
+        role: "",
+        blueprintId: "",
+        subscribeTopic: "",
+        publishTopic: "",
+        userParams: {},
+      },
+    };
+    set((state) => ({
+      nodes: [...state.nodes, newNode],
+      nodeCounter: state.nodeCounter + 1,
+    }));
+  },
+
+  updateNodeData: (id, data) => {
+    set((state) => ({
+      nodes: state.nodes.map((node) =>
+        node.id === id ? { ...node, data: { ...node.data, ...data } } : node
+      ),
+    }));
+  },
+
+  removeNode: (id) => {
+    set((state) => ({
+      nodes: state.nodes.filter((node) => node.id !== id),
+      edges: state.edges.filter(
+        (edge) => edge.source !== id && edge.target !== id
+      ),
+    }));
+  },
+
+  onConnect: (connection) => {
+    set((state) => ({
+      edges: addEdge(
+        {
+          ...connection,
+          animated: true,
+          style: { stroke: "#00f0ff", strokeWidth: 2 },
+        },
+        state.edges
+      ),
+    }));
+  },
+
+  setWorkflowName: (name) => set({ workflowName: name }),
+
+  showToast: (message, type = "info") => {
+    set({ toast: { visible: true, message, type } });
+    setTimeout(() => get().hideToast(), 4000);
+  },
+
+  hideToast: () => set({ toast: { visible: false, message: "", type: "info" } }),
+
+  triggerSystemAlert: (nodeId, dump) =>
+    set({ systemAlert: { visible: true, nodeId, dump } }),
+
+  dismissSystemAlert: () =>
+    set({ systemAlert: { visible: false, nodeId: "", dump: "" } }),
+
+  setControlWs: (ws) => set({ controlWs: ws }),
+
+  /**
+   * God Hand Protocol — 热补丁参数到运行中的沙箱智能体。
+   * 通过控制 WebSocket 发送 HOT_PATCH_PARAM 指令，
+   * 后端将参数写入 VFS 配置文件并广播 EventBus 通知。
+   */
+  hotPatchParam: (targetNode, params) => {
+    const ws = get().controlWs;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.warn("[AIOS] Control WebSocket not connected. Cannot hot-patch.");
+      get().showToast("控制通道未连接，无法热补丁", "error");
+      return;
+    }
+    const message = JSON.stringify({
+      action: "HOT_PATCH_PARAM",
+      targetNode,
+      params,
+    });
+    ws.send(message);
+    console.log(`[AIOS] Hot-patch sent: ${targetNode}`, params);
+  },
+
+  /**
+   * 一键生成拓扑 — 傻瓜模式。
+   * 模拟后端返回 2~3 个节点 + 连线，动态渲染到画布。
+   * 未来可替换为真实 LLM 后端调用。
+   */
+  autoCompile: (userIdea: string) => {
+    // 清空画布
+    idCounter = 1;
+    const idea = userIdea.trim() || "通用数据处理流水线";
+
+    // 模拟后端返回的节点拓扑
+    const nodes: Node[] = [
+      {
+        id: "agent_1",
+        type: "agentNode",
+        position: { x: 80, y: 200 },
+        data: {
+          label: "Data Collector",
+          role: `采集数据：${idea}`,
+          blueprintId: "agent_1",
+          subscribeTopic: "",
+          publishTopic: "topic_agent_1_agent_2",
+          userParams: { threshold: "0.05", keywords: "" },
+        },
+      },
+      {
+        id: "agent_2",
+        type: "agentNode",
+        position: { x: 420, y: 120 },
+        data: {
+          label: "Analyzer",
+          role: `分析与过滤：${idea}`,
+          blueprintId: "agent_2",
+          subscribeTopic: "topic_agent_1_agent_2",
+          publishTopic: "topic_agent_2_agent_3",
+          userParams: { threshold: "0.02", keywords: "AI,科技" },
+        },
+      },
+      {
+        id: "agent_3",
+        type: "agentNode",
+        position: { x: 760, y: 200 },
+        data: {
+          label: "Reporter",
+          role: `生成报告并输出：${idea}`,
+          blueprintId: "agent_3",
+          subscribeTopic: "topic_agent_2_agent_3",
+          publishTopic: "",
+          userParams: { threshold: "0.01", keywords: "" },
+        },
+      },
+    ];
+    idCounter = 4;
+
+    const edges: Edge[] = [
+      {
+        id: "e_agent_1_agent_2",
+        source: "agent_1",
+        target: "agent_2",
+        animated: true,
+        style: { stroke: "#00f0ff", strokeWidth: 2 },
+      },
+      {
+        id: "e_agent_2_agent_3",
+        source: "agent_2",
+        target: "agent_3",
+        animated: true,
+        style: { stroke: "#00f0ff", strokeWidth: 2 },
+      },
+    ];
+
+    set({
+      nodes,
+      edges,
+      nodeCounter: 3,
+      workflowName: idea.slice(0, 30).replace(/\s+/g, "_"),
+    });
+
+    get().showToast(`拓扑已生成：3 节点 DAG — ${idea.slice(0, 20)}`, "success");
+  },
+
+  /**
+   * 拓扑编译核心逻辑 — 将 React Flow 图编译为 WorkflowManifest。
+   *
+   * 遍历 edges，为每条边自动生成 topic：
+   *   - source 节点获得 publishTopic = "topic_{sourceId}_{targetId}"
+   *   - target 节点获得 subscribeTopic = "topic_{sourceId}_{targetId}"
+   *
+   * 如果一个节点有多条出边，publishTopic 用逗号拼接；
+   * 如果一个节点有多条入边，subscribeTopic 用逗号拼接。
+   */
+  compileToWorkflow: () => {
+    const { nodes, edges, workflowName } = get();
+
+    // 构建每个节点的 publish/subscribe topic 映射
+    const publishMap = new Map<string, string[]>();
+    const subscribeMap = new Map<string, string[]>();
+
+    for (const edge of edges) {
+      const topicName = `topic_${edge.source}_${edge.target}`;
+
+      if (!publishMap.has(edge.source)) publishMap.set(edge.source, []);
+      publishMap.get(edge.source)!.push(topicName);
+
+      if (!subscribeMap.has(edge.target)) subscribeMap.set(edge.target, []);
+      subscribeMap.get(edge.target)!.push(topicName);
+    }
+
+    // 编译节点
+    const compiledNodes: CompiledWorkflowNode[] = nodes.map((node) => {
+      const d = node.data as AgentNodeData;
+      const publishTopics = publishMap.get(node.id) ?? [];
+      const subscribeTopics = subscribeMap.get(node.id) ?? [];
+
+      return {
+        instanceId: node.id,
+        blueprintId: d.blueprintId || node.id,
+        role: d.role || "",
+        subscribeTopic: subscribeTopics.join(","),
+        publishTopic: publishTopics.join(","),
+        userParams: d.userParams || {},
+      };
+    });
+
+    const manifest: CompiledWorkflowManifest = {
+      workflowName,
+      nodes: compiledNodes,
+    };
+
+    return manifest;
+  },
+
+  deploy: async () => {
+    const { compileToWorkflow, showToast } = get();
+    set({ deploying: true });
+
+    try {
+      const manifest = compileToWorkflow();
+
+      // 打印编译后的 JSON 到控制台
+      console.log(
+        "[AIOS] Compiled WorkflowManifest:\n",
+        JSON.stringify(manifest, null, 2)
+      );
+
+      // 发送到 AIOS 后端
+      const response = await axios.post(
+        "http://localhost:8080/api/workflow/deploy",
+        manifest,
+        { timeout: 30000 }
+      );
+
+      console.log("[AIOS] Deploy response:", response.data);
+      showToast("已将工作流拓扑发送至 AIOS 内核！", "success");
+    } catch (err) {
+      // 即使后端不可达，也打印编译结果供调试
+      const manifest = compileToWorkflow();
+      console.warn(
+        "[AIOS] Backend unreachable. Compiled manifest for reference:\n",
+        JSON.stringify(manifest, null, 2)
+      );
+
+      if (axios.isAxiosError(err) && err.code === "ERR_NETWORK") {
+        showToast("后端未连接，拓扑已编译（见控制台）", "error");
+      } else {
+        showToast("部署失败，请检查后端服务", "error");
+      }
+    } finally {
+      set({ deploying: false });
+    }
+  },
+}));

@@ -11,12 +11,22 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Disk-based swap manager (kswapd) for AIOS.
+ * 磁盘交换管理器（kswapd）— AIOS 的磁盘换出/换入引擎。
  * <p>
- * When ZRAM compression is still not enough to bring an Agent under its
- * hard Token limit, SwapManager evicts cold context pages to disk and
- * replaces them with a short pointer string, freeing both JVM heap and
- * Token budget. Pages can be swapped back in on demand.
+ * 类比 Linux 的 kswapd 内核线程和 swap 分区：当 ZRAM 压缩后
+ * 仍无法将 Agent 控制在 Token 硬限制内时，SwapManager 将
+ * 冷上下文页面换出到磁盘文件，替换为短指针字符串，同时
+ * 释放 JVM 堆内存和 Token 预算。需要时可按需换入恢复。
+ *
+ * <h3>OS 类比</h3>
+ * <table>
+ *   <tr><th>Linux</th><th>AIOS SwapManager</th><th>说明</th></tr>
+ *   <tr><td>kswapd</td><td>SwapManager</td><td>后台换出守护进程</td></tr>
+ *   <tr><td>swap 分区</td><td>/var/swap/</td><td>磁盘交换区</td></tr>
+ *   <tr><td>swap_out</td><td>swapOut()</td><td>页面换出</td></tr>
+ *   <tr><td>swap_in</td><td>swapIn()</td><td>页面换入</td></tr>
+ *   <tr><td>swap entry</td><td>SWAPPED_OUT_TO_DISK 指针</td><td>交换条目</td></tr>
+ * </table>
  */
 public class SwapManager {
 
@@ -47,11 +57,11 @@ public class SwapManager {
     }
 
     /**
-     * Evict cold context entries to disk.
+     * 将冷上下文条目换出到磁盘。
      *
-     * @param agentId      the Agent identifier
-     * @param coldContext  list of cold context strings to swap out
-     * @return a short pointer string like {@code <SWAPPED_OUT_TO_DISK: page_id_101>}
+     * @param agentId     Agent 标识
+     * @param coldContext 要换出的冷上下文字符串列表
+     * @return 短指针字符串，如 {@code <SWAPPED_OUT_TO_DISK: page_id_101>}
      */
     public String swapOut(String agentId, List<String> coldContext) {
         if (coldContext == null || coldContext.isEmpty()) {
@@ -88,10 +98,10 @@ public class SwapManager {
     }
 
     /**
-     * Restore context from disk by pointer.
+     * 从磁盘换入恢复上下文 — 类比 Page Fault 的换入。
      *
-     * @param pageId the page identifier (extracted from a pointer string)
-     * @return the original list of context strings, or empty list on failure
+     * @param pageId 页面标识（从指针字符串中提取）
+     * @return 原始上下文字符串列表，失败返回空列表
      */
     public List<String> swapIn(String pageId) {
         Path swapFile = pageRegistry.remove(pageId);
@@ -113,10 +123,10 @@ public class SwapManager {
     }
 
     /**
-     * Extract the page ID from a pointer string.
+     * 从指针字符串中提取页面 ID。
      *
-     * @param pointer a string like {@code <SWAPPED_OUT_TO_DISK: page_id_101>}
-     * @return the extracted page ID, or null if not a valid pointer
+     * @param pointer 指针字符串，如 {@code <SWAPPED_OUT_TO_DISK: page_id_101>}
+     * @return 提取的页面 ID，无效指针返回 null
      */
     public static String extractPageId(String pointer) {
         if (pointer == null || !pointer.startsWith(POINTER_PREFIX) || !pointer.endsWith(POINTER_SUFFIX)) {
@@ -125,23 +135,17 @@ public class SwapManager {
         return pointer.substring(POINTER_PREFIX.length(), pointer.length() - POINTER_SUFFIX.length());
     }
 
-    /**
-     * Check if a string is a swap pointer.
-     */
+    /** 判断字符串是否为换出指针。 */
     public static boolean isSwapPointer(String text) {
         return text != null && text.startsWith(POINTER_PREFIX) && text.endsWith(POINTER_SUFFIX);
     }
 
-    /**
-     * Get the number of pages currently swapped out to disk.
-     */
+    /** 当前换出到磁盘的页面数量。 */
     public int swappedPageCount() {
         return pageRegistry.size();
     }
 
-    /**
-     * Get total bytes used on disk by swap files.
-     */
+    /** 交换文件占用的磁盘总字节数。 */
     public long totalSwapBytes() {
         return pageRegistry.values().stream()
                 .mapToLong(p -> {

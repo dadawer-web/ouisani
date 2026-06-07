@@ -16,38 +16,34 @@ import org.slf4j.LoggerFactory;
 import java.util.Map;
 
 /**
- * Coder Agent — the code monkey of the Auto Dev House.
+ * Coder Agent — 自动开发屋的程序员。
  * <p>
- * This Agent acts as a genius programmer. Instead of polling the VFS
- * for status changes (the old 500ms spin-wait), it uses the
- * <b>"shared memory + hardware interrupt"</b> IPC model:
+ * OS 类比：相当于内核中受 CPU 调度的工作进程 — 使用"共享内存 + 硬件中断"IPC 模型：
  * <ol>
- *   <li>Registers a signal handler for {@code SIG_CONTEXT_UPDATE}</li>
- *   <li>Waits for the interrupt (no polling!)</li>
- *   <li>When the PM agent fires the interrupt, reads the PRD from
- *       the SemanticMemoryBlock — zero-copy, instant access</li>
- *   <li>Generates code, executes in Docker, writes results back
- *       to the shared memory block</li>
- *   <li>Fires {@code SIG_CONTEXT_UPDATE} to notify the Reviewer</li>
+ *   <li>注册 {@code SIG_CONTEXT_UPDATE} 信号处理器</li>
+ *   <li>等待中断（无轮询！）</li>
+ *   <li>当 PM Agent 触发中断时，从 SemanticMemoryBlock 零拷贝读取 PRD</li>
+ *   <li>生成代码，在 Docker 中执行，将结果写回共享内存块</li>
+ *   <li>触发 {@code SIG_CONTEXT_UPDATE} 通知 Reviewer</li>
  * </ol>
  * <p>
- * <h3>Performance Comparison</h3>
+ * <h3>性能对比</h3>
  * <pre>
- *   Old model: 500ms polling × ~60 attempts = 30s worst-case latency
- *   New model: SIG_CONTEXT_UPDATE interrupt = ~0ms latency
+ *   旧模型：500ms 轮询 × ~60 次 = 最坏 30s 延迟
+ *   新模型：SIG_CONTEXT_UPDATE 中断 ≈ 0ms 延迟
  * </pre>
  */
 public class CoderAgent extends AbstractAgent {
 
     private static final Logger log = LoggerFactory.getLogger(CoderAgent.class);
 
-    /** The shared memory block ID for the DevHouse project. */
+    /** DevHouse 项目共享内存块 ID */
     private static final String SHM_BLOCK_ID = "devhouse_project";
 
-    /** Maximum time to wait for SIG_CONTEXT_UPDATE (fallback safety net). */
+    /** SIG_CONTEXT_UPDATE 信号等待超时时间（回退安全网） */
     private static final long SIGNAL_WAIT_TIMEOUT_MS = 60_000;
 
-    /** Polling interval as a safety net fallback (only if signal fails). */
+    /** 回退轮询间隔（仅当信号机制失效时使用） */
     private static final int FALLBACK_POLL_INTERVAL_MS = 2000;
     private static final int FALLBACK_MAX_POLLS = 30;
 
@@ -186,20 +182,18 @@ public class CoderAgent extends AbstractAgent {
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Signal Handler: Wait for SIG_CONTEXT_UPDATE
+    //  信号处理器：等待 SIG_CONTEXT_UPDATE
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Wait for a SIG_CONTEXT_UPDATE signal from the PM agent.
+     * 等待 PM Agent 发来的 SIG_CONTEXT_UPDATE 信号。
      * <p>
-     * This replaces the old 500ms polling loop with a signal-driven
-     * wait. The agent sleeps until the interrupt arrives, then
-     * reads the updated shared memory block.
+     * 用信号驱动等待替代旧的 500ms 轮询循环。
+     * Agent 休眠直到中断到达，然后读取更新后的共享内存块。
      * <p>
-     * As a safety net, we also check the SHM status periodically
-     * (every 2s) in case the signal was lost.
+     * 作为安全网，也定期检查 SHM 状态（每 2 秒），以防信号丢失。
      *
-     * @return true if the signal was received, false if timed out
+     * @return 收到信号返回 true，超时返回 false
      */
     private boolean waitForContextUpdate() {
         long startTime = System.currentTimeMillis();
@@ -244,7 +238,7 @@ public class CoderAgent extends AbstractAgent {
     }
 
     /**
-     * Fallback: VFS polling in case signal mechanism fails entirely.
+     * 回退方案：当信号机制完全失效时使用 VFS 轮询。
      */
     private boolean vfsFallbackPoll(String targetStatus) {
         for (int i = 0; i < FALLBACK_MAX_POLLS; i++) {
@@ -262,6 +256,7 @@ public class CoderAgent extends AbstractAgent {
         return false;
     }
 
+    /** 去除 LLM 输出中的 Markdown 代码围栏 */
     private String stripMarkdownFences(String code) {
         String stripped = code.trim();
         if (stripped.startsWith("```python")) {
@@ -275,6 +270,7 @@ public class CoderAgent extends AbstractAgent {
         return stripped.trim();
     }
 
+    /** 生成回退代码（当 LLM 调用失败时使用） */
     private String generateFallbackCode() {
         return """
                 from http.server import HTTPServer, BaseHTTPRequestHandler

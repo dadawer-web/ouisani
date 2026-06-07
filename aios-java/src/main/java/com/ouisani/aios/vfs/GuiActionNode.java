@@ -15,41 +15,40 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Consumer;
 
 /**
- * GUI Action Node — the AIOS kernel's input device (mouse + keyboard).
+ * GUI 动作节点 — AIOS 内核的输入设备（鼠标 + 键盘）。
  * <p>
- * When a user clicks a button or types into an input on the frontend
- * dashboard, the event flows through this node:
+ * 当用户在前端 dashboard 上点击按钮或在输入框中输入时，事件流经此节点：
  * <ol>
- *   <li>Frontend sends a JSON action event via WebSocket to
+ *   <li>前端通过 WebSocket 将 JSON 动作事件发送到
  *       {@code /ws/gui/action}</li>
- *   <li>{@code SyscallServer} routes the event to this node's
- *       {@link #write(String)} method</li>
- *   <li>The node resolves which Agent owns the target component</li>
- *   <li>The node delivers the event to the Agent via one of:
+ *   <li>{@code SyscallServer} 将事件路由到此节点的
+ *       {@link #write(String)} 方法</li>
+ *   <li>节点解析目标组件所属的 Agent</li>
+ *   <li>节点通过以下方式之一将事件投递给 Agent：
  *       <ul>
- *         <li>Enqueuing to the Agent's message queue (stdin)</li>
- *         <li>Sending a {@code SIGIO} signal to wake the Agent</li>
+ *         <li>入队到 Agent 的消息队列（stdin）</li>
+ *         <li>发送 {@code SIGIO} 信号唤醒 Agent</li>
  *       </ul>
+ *   </li>
  * </ol>
- * <p>
- * <h3>Action Event Protocol</h3>
- * The frontend sends JSON action events in this format:
+ *
+ * <h3>动作事件协议</h3>
+ * 前端发送的 JSON 动作事件格式：
  * <pre>
  * {
  *   "agentId": "pm_agent",
  *   "action": "click",          // click | type | change | submit | scroll
  *   "componentId": "btn_confirm",
- *   "value": "optional text",   // for type/change events
+ *   "value": "可选文本",         // 用于 type/change 事件
  *   "timestamp": 1717584000000
  * }
  * </pre>
- * <p>
- * <h3>OS Analogy: /dev/input + SIGIO</h3>
- * In Linux, {@code /dev/input/event0} receives hardware interrupts from
- * the keyboard/mouse, and the kernel delivers them to the focused
- * application via {@code SIGIO} or {@code read()}. GuiActionNode is
- * the AIOS equivalent: it receives UI interaction events from the
- * frontend and delivers them to the owning Agent process.
+ *
+ * <h3>OS 类比：/dev/input + SIGIO</h3>
+ * 在 Linux 中，{@code /dev/input/event0} 接收来自键盘/鼠标的硬件中断，
+ * 内核通过 {@code SIGIO} 或 {@code read()} 将它们投递给焦点应用程序。
+ * GuiActionNode 是 AIOS 的等价物：它从前端接收 UI 交互事件，
+ * 并投递给拥有该组件的 Agent 进程。
  *
  * @see GuiDomNode
  * @see EventBus
@@ -66,13 +65,13 @@ public non-sealed class GuiActionNode implements VfsNode {
 
     // ── Action State ──
 
-    /** Pending actions per agent (agentId → queue of action events). */
+    /** 待处理的动作队列（agentId → 动作事件队列） */
     private final ConcurrentHashMap<String, ConcurrentLinkedQueue<String>> pendingActions = new ConcurrentHashMap<>();
 
-    /** Last action result (for read() compatibility). */
+    /** 最近一次动作结果（用于 read() 兼容） */
     private volatile String lastResult = "{\"status\":\"idle\"}";
 
-    /** Action event subscribers (agentId → callback). */
+    /** 动作事件订阅者（agentId → 回调函数） */
     private final ConcurrentHashMap<String, Consumer<String>> actionSubscribers = new ConcurrentHashMap<>();
 
     public GuiActionNode(String path) {
@@ -112,7 +111,7 @@ public non-sealed class GuiActionNode implements VfsNode {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Read the last action result (legacy compatibility).
+     * 读取最近一次动作结果（遗留兼容接口）。
      */
     @Override
     public String read() {
@@ -120,11 +119,13 @@ public non-sealed class GuiActionNode implements VfsNode {
     }
 
     /**
-     * Read and drain all pending actions for a specific agent.
+     * 读取并排空指定 Agent 的所有待处理动作。
      * <p>
-     * This is the "polling" approach — the Agent periodically calls
-     * this to check for UI events. For interrupt-driven approach,
-     * use {@link #subscribe(String, Consumer)}.
+     * 这是"轮询"方式 — Agent 定期调用此方法检查 UI 事件。
+     * 对于中断驱动方式，请使用 {@link #subscribe(String, Consumer)}。
+     *
+     * @param agentId Agent 标识
+     * @return JSON 数组，包含所有待处理的动作事件
      */
     public String drainActions(String agentId) {
         ConcurrentLinkedQueue<String> queue = pendingActions.get(agentId);
@@ -146,7 +147,10 @@ public non-sealed class GuiActionNode implements VfsNode {
     }
 
     /**
-     * Check if there are pending actions for an agent.
+     * 检查指定 Agent 是否有待处理的动作。
+     *
+     * @param agentId Agent 标识
+     * @return 是否有待处理动作
      */
     public boolean hasPendingActions(String agentId) {
         ConcurrentLinkedQueue<String> queue = pendingActions.get(agentId);
@@ -158,15 +162,17 @@ public non-sealed class GuiActionNode implements VfsNode {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Write an action event from the frontend.
+     * 接收来自前端的动作事件。
      * <p>
-     * This method is called when the user interacts with the UI
-     * rendered by an Agent. It:
+     * 当用户与 Agent 渲染的 UI 交互时调用此方法。它会：
      * <ol>
-     *   <li>Enqueues the event to the Agent's action queue</li>
-     *   <li>Notifies the Agent via subscriber callback (if registered)</li>
-     *   <li>Sends SIGIO to the Agent process (interrupt-driven)</li>
+     *   <li>将事件入队到 Agent 的动作队列</li>
+     *   <li>通过订阅者回调通知 Agent（如果已注册）</li>
+     *   <li>向 Agent 进程发送 SIGIO 信号（中断驱动）</li>
      * </ol>
+     *
+     * @param payload JSON 格式的动作事件
+     * @return 是否成功处理
      */
     @Override
     public boolean write(String payload) {
@@ -228,12 +234,13 @@ public non-sealed class GuiActionNode implements VfsNode {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Deliver a SIGIO signal to the Agent process that owns the
-     * target component.
+     * 向拥有目标组件的 Agent 进程投递 SIGIO 信号。
      * <p>
-     * This is the AIOS equivalent of the kernel sending SIGIO to
-     * a process when I/O is possible on a file descriptor — the
-     * Agent is woken up to handle the UI event.
+     * 这是 AIOS 中内核向进程发送 SIGIO 的等价操作 —
+     * 当文件描述符上有 I/O 就绪时唤醒 Agent。
+     *
+     * @param agentId     Agent 标识
+     * @param componentId 目标组件 ID
      */
     private void deliverSignalToAgent(String agentId, String componentId) {
         VfsManager vfs = VfsManager.instance();
@@ -258,14 +265,12 @@ public non-sealed class GuiActionNode implements VfsNode {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Register a callback to be invoked when a UI action event
-     * arrives for the specified agent.
+     * 注册回调 — 当指定 Agent 的 UI 动作事件到达时触发。
      * <p>
-     * This enables the Agent to receive UI events in an
-     * interrupt-driven manner, rather than polling.
+     * 这使 Agent 能以中断驱动方式接收 UI 事件，而非轮询。
      *
-     * @param agentId   the agent to subscribe for
-     * @param callback  the callback to invoke with the action JSON
+     * @param agentId  要订阅的 Agent 标识
+     * @param callback 动作事件 JSON 的回调函数
      */
     public void subscribe(String agentId, Consumer<String> callback) {
         actionSubscribers.put(agentId, callback);
@@ -273,7 +278,9 @@ public non-sealed class GuiActionNode implements VfsNode {
     }
 
     /**
-     * Unregister a previously registered subscriber.
+     * 取消注册之前注册的订阅者。
+     *
+     * @param agentId 要取消订阅的 Agent 标识
      */
     public void unsubscribe(String agentId) {
         actionSubscribers.remove(agentId);
