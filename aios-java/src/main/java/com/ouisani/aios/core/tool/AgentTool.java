@@ -1,9 +1,7 @@
 package com.ouisani.aios.core.tool;
 
-import com.ouisani.aios.core.permission.PermissionDecision;
+import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.task.TaskScheduler;
-import com.ouisani.aios.core.task.TaskStatus;
-import com.ouisani.aios.user.sdk.AiosSdk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,40 +11,41 @@ import org.slf4j.LoggerFactory;
  * 生成子 Agent 执行独立任务，支持：
  * - 同步执行（等待结果）
  * - 异步执行（后台运行）
- * - 内置 Agent 类型（Explore, Plan）
+ * - VFS 蓝图驱动拉起（唯一合法途径）
  * <p>
  * OS 类比：相当于 Linux 的 fork() + exec() — 创建子进程执行独立任务。
+ * 但 exec() 的参数不是硬编码的程序名，而是指向文件系统中可执行文件的路径。
+ * 同理，AgentTool 只接受 VFS 蓝图路径，不接受硬编码的枚举常量。
+ * <p>
+ * 绝不包含 BuiltinAgentType 枚举 — 内核不认识任何具体的业务智能体。
+ * 要拉起一个 Agent，唯一的合法途径是传入 VFS 蓝图路径或 Docker 镜像名。
  */
 public class AgentTool implements Tool<AgentTool.Input> {
 
     private static final Logger log = LoggerFactory.getLogger(AgentTool.class);
 
-    /** 内置 Agent 类型 */
-    public enum BuiltinAgentType {
-        EXPLORE("Explore", "Explore codebase to answer questions about architecture, patterns, and implementation"),
-        PLAN("Plan", "Create a detailed implementation plan for a feature or task");
-
-        private final String name;
-        private final String description;
-
-        BuiltinAgentType(String name, String description) {
-            this.name = name;
-            this.description = description;
-        }
-
-        public String agentName() { return name; }
-        public String agentDescription() { return description; }
+    static {
+        log.info("[Kernel] Hardcoded BuiltinAgentType removed. Strict VFS-driven spawning enforced.");
+        System.out.println("[Kernel] Hardcoded BuiltinAgentType removed. Strict VFS-driven spawning enforced.");
     }
 
+    /**
+     * Agent 工具输入 — 纯 VFS 蓝图驱动，零硬编码。
+     *
+     * @param prompt          任务描述（必填）
+     * @param blueprintPath   VFS 蓝图路径（如 /factory/blueprints/spider.json）或 Docker 镜像名
+     * @param runInBackground 是否异步执行
+     * @param description     简短任务描述
+     */
     public record Input(
             String prompt,
-            String subagentType,
+            String blueprintPath,
             boolean runInBackground,
             String description
     ) implements ToolInput {
         public Input {
             if (prompt == null || prompt.isBlank()) throw new IllegalArgumentException("prompt required");
-            if (subagentType == null) subagentType = "";
+            if (blueprintPath == null) blueprintPath = "";
             if (description == null) description = "";
         }
 
@@ -54,19 +53,25 @@ public class AgentTool implements Tool<AgentTool.Input> {
 
         @Override public String toJson() {
             return "{\"prompt\":\"" + prompt.replace("\"", "\\\"")
-                    + "\",\"subagent_type\":\"" + subagentType
-                    + "\",\"run_in_background\":" + runInBackground + "}";
+                    + "\",\"blueprint_path\":\"" + blueprintPath.replace("\"", "\\\"")
+                    + "\",\"run_in_background\":" + runInBackground
+                    + ",\"description\":\"" + description.replace("\"", "\\\"") + "\"}";
         }
     }
 
     @Override public String name() { return "agent"; }
 
     @Override public String description() {
-        return "Launch a sub-agent to perform a task. Supports built-in agent types (Explore, Plan) and custom prompts. Can run synchronously or in background.";
+        return "Launch a sub-agent to perform a task. The agent is defined by a VFS blueprint path or Docker image. No hardcoded agent types.";
     }
 
     @Override public String inputSchema() {
-        return "{\"type\":\"object\",\"properties\":{\"prompt\":{\"type\":\"string\",\"description\":\"The task description for the sub-agent\"},\"subagent_type\":{\"type\":\"string\",\"description\":\"Built-in agent type: Explore or Plan\"},\"run_in_background\":{\"type\":\"boolean\",\"description\":\"Run asynchronously (default false)\"},\"description\":{\"type\":\"string\",\"description\":\"Short description of the task\"}},\"required\":[\"prompt\"]}";
+        return "{\"type\":\"object\",\"properties\":{"
+                + "\"prompt\":{\"type\":\"string\",\"description\":\"The task description for the sub-agent\"},"
+                + "\"blueprint_path\":{\"type\":\"string\",\"description\":\"VFS blueprint path (e.g. /factory/blueprints/spider.json) or Docker image name. If empty, a generic agent is spawned.\"},"
+                + "\"run_in_background\":{\"type\":\"boolean\",\"description\":\"Run asynchronously (default false)\"},"
+                + "\"description\":{\"type\":\"string\",\"description\":\"Short description of the task\"}"
+                + "},\"required\":[\"prompt\"]}";
     }
 
     @Override
@@ -74,8 +79,11 @@ public class AgentTool implements Tool<AgentTool.Input> {
         String agentId = "sub_" + System.currentTimeMillis();
         String prompt = buildPrompt(input);
 
-        log.info("[AgentTool] Launching sub-agent: type={}, background={}", input.subagentType(), input.runInBackground());
-        System.out.printf("[AgentTool] ├─ Launching sub-agent: %s%n", input.subagentType().isEmpty() ? "custom" : input.subagentType());
+        log.info("[AgentTool] Launching sub-agent: blueprint={}, background={}",
+                input.blueprintPath().isEmpty() ? "(generic)" : input.blueprintPath(),
+                input.runInBackground());
+        System.out.printf("[AgentTool] ├─ Launching sub-agent: blueprint=%s%n",
+                input.blueprintPath().isEmpty() ? "(generic)" : input.blueprintPath());
 
         if (input.runInBackground()) {
             // 异步执行 — 强制沙箱隔离
@@ -83,6 +91,7 @@ public class AgentTool implements Tool<AgentTool.Input> {
                     prompt, agentId, context.workingDir(), context.sdk());
 
             return ToolOutput.ok("Agent launched in SANDBOX. Task ID: " + task.taskId()
+                    + "\nBlueprint: " + (input.blueprintPath().isEmpty() ? "(generic)" : input.blueprintPath())
                     + "\nDescription: " + input.description()
                     + "\nStatus: " + task.status()
                     + "\nOutput routed to EventBus: sys.sandbox.agent." + task.taskId());
@@ -95,48 +104,44 @@ public class AgentTool implements Tool<AgentTool.Input> {
     }
 
     /**
-     * 根据 Agent 类型构建完整 Prompt。
+     * 根据 VFS 蓝图构建完整 Prompt。
+     * <p>
+     * 如果 blueprintPath 非空：
+     * 1. 尝试从 VFS 读取蓝图 JSON
+     * 2. 将蓝图内容注入 prompt 作为 Agent 的角色定义
+     * 3. 如果 VFS 中不存在，视为 Docker 镜像名（由沙箱处理）
+     * <p>
+     * 如果 blueprintPath 为空：使用通用 Agent prompt
      */
     private String buildPrompt(Input input) {
-        if (input.subagentType().isEmpty()) {
+        if (input.blueprintPath().isEmpty()) {
+            // 通用 Agent — 无蓝图，纯 prompt 驱动
             return input.prompt();
         }
 
-        return switch (input.subagentType().toUpperCase()) {
-            case "EXPLORE" -> """
-                    You are an Explore agent. Your job is to thoroughly explore the codebase to answer questions.
-                    
-                    Guidelines:
-                    - Use file_read, grep, and glob tools to investigate the codebase
-                    - Provide specific file paths and line numbers in your findings
-                    - Summarize architecture, patterns, and key implementation details
-                    - Be thorough but concise
-                    
-                    Task: """ + input.prompt();
+        // 尝试从 VFS 读取蓝图
+        String blueprintContent = VfsManager.instance().readText(input.blueprintPath());
+        if (blueprintContent != null) {
+            log.info("[AgentTool] Blueprint loaded from VFS: {} ({} bytes)",
+                    input.blueprintPath(), blueprintContent.length());
+            return "你是一个由蓝图定义的智能体。蓝图内容如下：\n"
+                    + "```json\n" + blueprintContent + "\n```\n\n"
+                    + "请严格按照蓝图中的角色定义和工具列表执行任务。\n\n"
+                    + "任务：" + input.prompt();
+        }
 
-            case "PLAN" -> """
-                    You are a Plan agent. Your job is to create detailed implementation plans.
-                    
-                    Guidelines:
-                    - Explore the relevant code first using file_read, grep, glob
-                    - Identify all files that need to be modified
-                    - Break down the implementation into clear, ordered steps
-                    - Consider edge cases and potential issues
-                    - Provide specific code changes where possible
-                    
-                    Task: """ + input.prompt();
-
-            default -> input.prompt();
-        };
+        // VFS 中不存在 — 可能是 Docker 镜像名
+        log.info("[AgentTool] Blueprint not found in VFS, treating as Docker image: {}", input.blueprintPath());
+        return input.prompt();
     }
 
     @Override public boolean readOnly() { return false; }
 
     @Override public String prompt() {
         return """
-                Use the agent tool to delegate complex tasks to sub-agents. Built-in types:
-                - Explore: for codebase exploration and architecture analysis
-                - Plan: for creating detailed implementation plans
+                Use the agent tool to delegate complex tasks to sub-agents.
+                Agents are defined by VFS blueprint paths (e.g. /factory/blueprints/spider.json) or Docker images.
+                If no blueprint is specified, a generic agent is spawned with the given prompt.
                 For simple tasks, handle them directly with other tools instead of spawning an agent.""";
     }
 }

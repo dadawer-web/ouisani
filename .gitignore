@@ -1,33 +1,53 @@
 .env
 .env.*
 
-build/
+# ── Java / Maven ──
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+dependency-reduced-pom.xml
+.mvn/wrapper/maven-wrapper.jar
+hs_err_pid*
+replay_pid*
 
+# ── Node / Frontend ──
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# ── Python ──
 .venv/
 venv/
 __pycache__/
 *.pyc
 *.pyo
 
+# ── Models / Binaries ──
 models/
 *.gguf
 *.bin
-
 llama.cpp/
 
-snapshots/
-swap/
+# ── OS / Editor ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
 
+# ── Native compiled ──
 *.o
 *.out
 *.wasm
 *.so
 *.a
 
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
+# ── Runtime ──
+snapshots/
+swap/
 /tmp/
