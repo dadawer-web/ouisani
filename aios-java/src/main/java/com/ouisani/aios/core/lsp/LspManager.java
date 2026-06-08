@@ -4,19 +4,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
-import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 
 /**
- * LSP 管理器 — 对标 Claude Code 的 LSP Server Manager。
+ * LSP 管理器 — 对标 Claude Code 的 src/services/lsp/ 模块。
  * <p>
- * 管理多个 LSP 服务器实例，按文件扩展名路由请求：
- * - 服务器生命周期管理（状态机：stopped→starting→running→stopped）
- * - 文件同步（open/change/save/close）
- * - 诊断收集与去重
- * - 崩溃恢复与限流
+ * 管理多种语言的 LSP 服务器实例，提供代码智能功能：
+ * - 服务器生命周期管理（启动/停止）
+ * - 诊断信息获取
+ * - 跳转到定义
+ * - 查找引用
+ * - 代码补全
  * <p>
  * OS 类比：相当于 Linux 的设备驱动管理器 — 每种语言一个驱动（LSP 服务器）。
  */
@@ -25,171 +24,199 @@ public class LspManager {
     private static final Logger log = LoggerFactory.getLogger(LspManager.class);
     private static final LspManager INSTANCE = new LspManager();
 
-    /** LSP 服务器状态 */
-    public enum ServerState { STOPPED, STARTING, RUNNING, STOPPING, ERROR }
-
-    /** LSP 诊断 */
-    public record Diagnostic(
+    /** LSP 诊断信息 */
+    public record LspDiagnostic(
             String filePath,
             int line,
-            int column,
             String severity,  // error, warning, info, hint
-            String message,
-            String source
+            String message
     ) {}
 
-    /** LSP 服务器配置 */
-    public record LspServerConfig(
-            String name,
-            List<String> command,
-            List<String> extensions,
-            int maxRestarts,
-            long startupTimeoutMs
-    ) {
-        public LspServerConfig(String name, List<String> command, List<String> extensions) {
-            this(name, command, extensions, 3, 30000);
-        }
-    }
+    /** LSP 位置信息 */
+    public record LspLocation(
+            String filePath,
+            int line,
+            int col
+    ) {}
 
-    /** LSP 服务器实例 */
-    public static class LspServerInstance {
-        private final String name;
-        private final LspServerConfig config;
-        private volatile ServerState state = ServerState.STOPPED;
-        private volatile Process process;
-        private int crashCount = 0;
-        private final List<Diagnostic> diagnostics = Collections.synchronizedList(new ArrayList<>());
+    /** 支持的语言及其对应的 LSP 服务器启动命令 */
+    private static final Map<String, List<String>> LANGUAGE_COMMANDS = Map.of(
+            "python", List.of("pylsp"),
+            "java", List.of("jdtls"),
+            "typescript", List.of("typescript-language-server", "--stdio"),
+            "go", List.of("gopls"),
+            "rust", List.of("rust-analyzer")
+    );
 
-        public LspServerInstance(String name, LspServerConfig config) {
-            this.name = name;
-            this.config = config;
-        }
+    /** 活跃的 LSP 服务器进程，键为语言名称 */
+    private final ConcurrentHashMap<String, Process> activeServers = new ConcurrentHashMap<>();
 
-        public String name() { return name; }
-        public ServerState state() { return state; }
-        public void setState(ServerState s) { this.state = s; }
-        public List<Diagnostic> diagnostics() { return Collections.unmodifiableList(diagnostics); }
-        public void addDiagnostic(Diagnostic d) { diagnostics.add(d); }
-        public void clearDiagnostics() { diagnostics.clear(); }
-    }
+    /** 各语言对应的工作区根路径 */
+    private final ConcurrentHashMap<String, String> workspaceRoots = new ConcurrentHashMap<>();
 
-    private final Map<String, LspServerInstance> servers = new ConcurrentHashMap<>();
-    private final Map<String, String> extensionToServer = new ConcurrentHashMap<>();
+    /** 各服务器收集的诊断信息 */
+    private final ConcurrentHashMap<String, List<LspDiagnostic>> diagnosticsMap = new ConcurrentHashMap<>();
 
     private LspManager() {}
 
-    public static LspManager instance() { return INSTANCE; }
-
     /**
-     * 注册 LSP 服务器配置。
+     * 获取单例实例。
      */
-    public void registerServer(LspServerConfig config) {
-        LspServerInstance instance = new LspServerInstance(config.name(), config);
-        servers.put(config.name(), instance);
-
-        for (String ext : config.extensions()) {
-            extensionToServer.put(ext, config.name());
-        }
-
-        log.info("[LspManager] Registered server: {} for extensions: {}", config.name(), config.extensions());
+    public static LspManager instance() {
+        return INSTANCE;
     }
 
     /**
-     * 启动 LSP 服务器。
+     * 启动指定语言的 LSP 服务器。
+     *
+     * @param language     语言名称（python, java, typescript, go, rust）
+     * @param workspaceRoot 工作区根路径
+     * @return 是否启动成功
      */
-    public boolean startServer(String name) {
-        LspServerInstance instance = servers.get(name);
-        if (instance == null) return false;
-
-        if (instance.state() == ServerState.RUNNING) return true;
-
-        if (instance.crashCount >= instance.config.maxRestarts()) {
-            log.warn("[LspManager] Server {} exceeded max restarts ({})", name, instance.config.maxRestarts());
-            instance.setState(ServerState.ERROR);
+    public boolean startServer(String language, String workspaceRoot) {
+        if (!LANGUAGE_COMMANDS.containsKey(language)) {
+            log.warn("[LspManager] 不支持的语言: {}", language);
             return false;
         }
 
-        try {
-            instance.setState(ServerState.STARTING);
+        // 如果已有该语言的服务器在运行，先停止
+        if (activeServers.containsKey(language)) {
+            log.info("[LspManager] 语言 {} 的服务器已在运行，先停止", language);
+            stopServer(language);
+        }
 
-            ProcessBuilder pb = new ProcessBuilder(instance.config.command());
+        List<String> command = LANGUAGE_COMMANDS.get(language);
+        try {
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.directory(new File(workspaceRoot));
             pb.redirectErrorStream(true);
             Process process = pb.start();
-            instance.process = process;
 
-            // 等待初始化
-            boolean started = process.waitFor(instance.config.startupTimeoutMs(), TimeUnit.MILLISECONDS);
-            if (started && process.isAlive()) {
-                instance.setState(ServerState.RUNNING);
-                log.info("[LspManager] Server {} started (PID: {})", name, process.pid());
-                return true;
-            } else {
-                instance.setState(ServerState.ERROR);
-                instance.crashCount++;
-                process.destroyForcibly();
-                log.warn("[LspManager] Server {} failed to start", name);
-                return false;
-            }
-        } catch (Exception e) {
-            instance.setState(ServerState.ERROR);
-            instance.crashCount++;
-            log.error("[LspManager] Server {} start error: {}", name, e.getMessage());
+            activeServers.put(language, process);
+            workspaceRoots.put(language, workspaceRoot);
+            diagnosticsMap.put(language, Collections.synchronizedList(new ArrayList<>()));
+
+            log.info("[LspManager] 已启动 {} LSP 服务器 (PID: {}), 工作区: {}", language, process.pid(), workspaceRoot);
+            return true;
+        } catch (IOException e) {
+            log.error("[LspManager] 启动 {} LSP 服务器失败: {}", language, e.getMessage());
             return false;
         }
     }
 
     /**
-     * 停止 LSP 服务器。
+     * 停止指定语言的 LSP 服务器。
+     *
+     * @param language 语言名称
      */
-    public void stopServer(String name) {
-        LspServerInstance instance = servers.get(name);
-        if (instance == null || instance.process == null) return;
-
-        instance.setState(ServerState.STOPPING);
-        instance.process.destroyForcibly();
-        instance.setState(ServerState.STOPPED);
-        log.info("[LspManager] Server {} stopped", name);
+    public void stopServer(String language) {
+        Process process = activeServers.remove(language);
+        if (process != null && process.isAlive()) {
+            process.destroyForcibly();
+            log.info("[LspManager] 已停止 {} LSP 服务器", language);
+        }
+        workspaceRoots.remove(language);
+        diagnosticsMap.remove(language);
     }
 
     /**
-     * 获取文件的诊断信息。
+     * 获取指定文件的诊断信息。
+     *
+     * @param filePath 文件路径
+     * @return 该文件的所有诊断信息列表
      */
-    public List<Diagnostic> getDiagnostics(String filePath) {
-        List<Diagnostic> result = new ArrayList<>();
-        for (LspServerInstance server : servers.values()) {
-            for (Diagnostic d : server.diagnostics()) {
+    public List<LspDiagnostic> getDiagnostics(String filePath) {
+        List<LspDiagnostic> result = new ArrayList<>();
+        for (List<LspDiagnostic> diagnostics : diagnosticsMap.values()) {
+            for (LspDiagnostic d : diagnostics) {
                 if (d.filePath().equals(filePath)) {
                     result.add(d);
                 }
             }
         }
-        // 按严重程度排序
+        // 按严重程度排序：error > warning > info > hint
         result.sort((a, b) -> severityOrder(a.severity()) - severityOrder(b.severity()));
-        return result.stream().limit(30).toList(); // 每文件最多 30 条
-    }
-
-    /**
-     * 获取所有诊断信息。
-     */
-    public List<Diagnostic> getAllDiagnostics() {
-        List<Diagnostic> result = new ArrayList<>();
-        for (LspServerInstance server : servers.values()) {
-            result.addAll(server.diagnostics());
-        }
         return result;
     }
 
     /**
-     * 按扩展名查找服务器。
+     * 跳转到定义。
+     *
+     * @param filePath 文件路径
+     * @param line     行号（从 0 开始）
+     * @param col      列号（从 0 开始）
+     * @return 定义位置，未找到则返回 null
      */
-    public Optional<LspServerInstance> getServerForFile(String filePath) {
-        int dotIdx = filePath.lastIndexOf('.');
-        if (dotIdx < 0) return Optional.empty();
-        String ext = filePath.substring(dotIdx);
-        String serverName = extensionToServer.get(ext);
-        return Optional.ofNullable(serverName != null ? servers.get(serverName) : null);
+    public LspLocation goToDefinition(String filePath, int line, int col) {
+        String language = detectLanguage(filePath);
+        if (language == null || !activeServers.containsKey(language)) {
+            log.debug("[LspManager] 无法跳转到定义：语言 {} 的服务器未运行", language);
+            return null;
+        }
+
+        log.debug("[LspManager] 请求跳转到定义: {}:{}:{}", filePath, line, col);
+        // TODO: 通过 LSP 协议发送 textDocument/definition 请求并解析响应
+        // 当前为框架实现，后续需对接真实的 LSP JSON-RPC 通信
+        return null;
     }
 
+    /**
+     * 查找所有引用。
+     *
+     * @param filePath 文件路径
+     * @param line     行号（从 0 开始）
+     * @param col      列号（从 0 开始）
+     * @return 引用位置列表
+     */
+    public List<LspLocation> findReferences(String filePath, int line, int col) {
+        String language = detectLanguage(filePath);
+        if (language == null || !activeServers.containsKey(language)) {
+            log.debug("[LspManager] 无法查找引用：语言 {} 的服务器未运行", language);
+            return List.of();
+        }
+
+        log.debug("[LspManager] 请求查找引用: {}:{}:{}", filePath, line, col);
+        // TODO: 通过 LSP 协议发送 textDocument/references 请求并解析响应
+        // 当前为框架实现，后续需对接真实的 LSP JSON-RPC 通信
+        return List.of();
+    }
+
+    /**
+     * 获取代码补全建议。
+     *
+     * @param filePath 文件路径
+     * @param line     行号（从 0 开始）
+     * @param col      列号（从 0 开始）
+     * @return 补全项列表（当前返回标签列表）
+     */
+    public List<String> getCompletions(String filePath, int line, int col) {
+        String language = detectLanguage(filePath);
+        if (language == null || !activeServers.containsKey(language)) {
+            log.debug("[LspManager] 无法获取补全：语言 {} 的服务器未运行", language);
+            return List.of();
+        }
+
+        log.debug("[LspManager] 请求代码补全: {}:{}:{}", filePath, line, col);
+        // TODO: 通过 LSP 协议发送 textDocument/completion 请求并解析响应
+        // 当前为框架实现，后续需对接真实的 LSP JSON-RPC 通信
+        return List.of();
+    }
+
+    /**
+     * 根据文件路径检测语言类型。
+     */
+    private String detectLanguage(String filePath) {
+        if (filePath.endsWith(".py")) return "python";
+        if (filePath.endsWith(".java")) return "java";
+        if (filePath.endsWith(".ts") || filePath.endsWith(".tsx")) return "typescript";
+        if (filePath.endsWith(".go")) return "go";
+        if (filePath.endsWith(".rs")) return "rust";
+        return null;
+    }
+
+    /**
+     * 严重程度排序权重。
+     */
     private int severityOrder(String severity) {
         return switch (severity.toLowerCase()) {
             case "error" -> 0;
@@ -200,11 +227,12 @@ public class LspManager {
         };
     }
 
-    public Collection<LspServerInstance> allServers() {
-        return Collections.unmodifiableCollection(servers.values());
-    }
-
+    /**
+     * 停止所有 LSP 服务器。
+     */
     public void stopAll() {
-        servers.keySet().forEach(this::stopServer);
+        for (String language : List.copyOf(activeServers.keySet())) {
+            stopServer(language);
+        }
     }
 }

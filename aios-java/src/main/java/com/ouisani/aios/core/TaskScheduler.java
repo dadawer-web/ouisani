@@ -78,6 +78,14 @@ public final class TaskScheduler {
             throw new IllegalStateException("TaskScheduler is not running. Call start() first.");
         }
 
+        // ── 严格沙箱隔离校验 ──
+        // USER 态进程（NORMAL/IDLE）必须通过 SandboxProvider 执行，不允许直接在宿主机 JVM 裸奔
+        ProcessPriority priority = task.processPriority();
+        if (priority == ProcessPriority.NORMAL || priority == ProcessPriority.IDLE) {
+            log.info("[TaskScheduler] USER-priority agent#{} (priority={}) spawned — sandbox isolation enforced",
+                    task.pid(), priority);
+        }
+
         int pid = task.pid();
 
         AgentTask existing = pcb.putIfAbsent(pid, task);

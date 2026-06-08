@@ -1,15 +1,14 @@
 package com.ouisani.aios.core.tool;
 
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import com.ouisani.aios.core.VfsManager;
 
 /**
  * 文件读取工具 — 对标 Claude Code 的 FileReadTool。
  * <p>
- * 支持偏移量和行数限制，适合读取大文件的指定区域。
+ * 安全边界：通过 VfsManager 虚拟文件系统读取，永远不接触宿主机真实文件系统。
+ * Agent 只能读取 VFS 命名空间内的文件，防止越权访问 /etc/passwd 等敏感文件。
  * <p>
- * OS 类比：相当于 Linux 的 read() 系统调用。
+ * OS 类比：相当于 Linux 的 read() 系统调用，但经过 VFS 层的命名空间隔离。
  */
 public class FileReadTool implements Tool<FileReadTool.Input> {
 
@@ -32,22 +31,26 @@ public class FileReadTool implements Tool<FileReadTool.Input> {
     @Override public String name() { return "file_read"; }
 
     @Override public String description() {
-        return "Reads a file from the filesystem. Supports line offset and limit for reading specific sections of large files.";
+        return "Reads a file from the virtual filesystem. Supports line offset and limit for reading specific sections of large files.";
     }
 
     @Override public String inputSchema() {
-        return "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute file path\"},\"offset\":{\"type\":\"integer\",\"description\":\"Line number to start reading from (0-based, default 0)\"},\"limit\":{\"type\":\"integer\",\"description\":\"Maximum number of lines to read (default 2000)\"}},\"required\":[\"path\"]}";
+        return "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"VFS virtual file path\"},\"offset\":{\"type\":\"integer\",\"description\":\"Line number to start reading from (0-based, default 0)\"},\"limit\":{\"type\":\"integer\",\"description\":\"Maximum number of lines to read (default 2000)\"}},\"required\":[\"path\"]}";
     }
 
     @Override
     public ToolOutput call(Input input, ToolContext context) {
         try {
-            Path filePath = Path.of(input.path());
-            if (!Files.exists(filePath)) {
-                return ToolOutput.fail("File not found: " + input.path());
+            VfsManager vfs = VfsManager.instance();
+
+            if (!vfs.exists(input.path())) {
+                return ToolOutput.fail("File not found in VFS: " + input.path());
             }
 
-            String content = Files.readString(filePath, StandardCharsets.UTF_8);
+            String content = vfs.readText(input.path());
+            if (content == null) {
+                return ToolOutput.fail("Permission denied or read failed for VFS path: " + input.path());
+            }
 
             // Split into lines and apply offset/limit
             String[] lines = content.split("\n");
@@ -66,13 +69,13 @@ public class FileReadTool implements Tool<FileReadTool.Input> {
 
             return ToolOutput.ok(result);
         } catch (Exception e) {
-            return ToolOutput.fail("Failed to read file: " + e.getMessage());
+            return ToolOutput.fail("Failed to read file from VFS: " + e.getMessage());
         }
     }
 
     @Override public boolean readOnly() { return true; }
 
     @Override public String prompt() {
-        return "Use file_read to examine file contents. For large files, use offset and limit to read specific sections.";
+        return "Use file_read to examine file contents in the virtual filesystem. For large files, use offset and limit to read specific sections.";
     }
 }

@@ -13,6 +13,10 @@ import java.util.concurrent.TimeUnit;
  * - 输出截断（默认 30000 字符）
  * - 只读检测（dry-run 模式下只允许读取命令）
  * <p>
+ * ⚠️ 安全风险：当前使用 ProcessBuilder 为宿主机直接执行，存在越权风险！
+ * TODO: 后续必须将执行逻辑切换到 com.ouisani.aios.core.sandbox.SandboxProvider
+ * （如 Docker 容器）中执行，确保环境隔离。当前实现仅适用于受控开发环境。
+ * <p>
  * OS 类比：相当于 Linux 的 execve() 系统调用。
  */
 public class BashTool implements Tool<BashTool.Input> {

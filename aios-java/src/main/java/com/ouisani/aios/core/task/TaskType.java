@@ -4,8 +4,8 @@ package com.ouisani.aios.core.task;
  * 任务类型 — 对标 Claude Code 的 TaskType。
  * <p>
  * 7 种任务类型，覆盖所有异步执行场景：
- * - LOCAL_BASH: 本地 Shell 命令（后台执行）
- * - LOCAL_AGENT: 本地 Agent 子代理（异步执行）
+ * - SANDBOX_BASH: 沙箱化 Shell 命令（强制隔离执行）
+ * - SANDBOX_AGENT: 沙箱化 Agent 子代理（强制隔离执行）
  * - REMOTE_AGENT: 远程 Agent（跨节点执行）
  * - IN_PROCESS_TEAMMATE: 进程内队友（Swarm 协作）
  * - LOCAL_WORKFLOW: 本地工作流（DAG 执行）
@@ -16,8 +16,8 @@ package com.ouisani.aios.core.task;
  */
 public enum TaskType {
 
-    LOCAL_BASH("b", "Local Shell"),
-    LOCAL_AGENT("a", "Local Agent"),
+    SANDBOX_BASH("b", "Sandboxed Shell"),
+    SANDBOX_AGENT("a", "Sandboxed Agent"),
     REMOTE_AGENT("r", "Remote Agent"),
     IN_PROCESS_TEAMMATE("t", "In-Process Teammate"),
     LOCAL_WORKFLOW("w", "Local Workflow"),

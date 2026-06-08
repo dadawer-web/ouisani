@@ -15,6 +15,11 @@ import com.ouisani.aios.core.telemetry.SystemMonitorDaemon;
 import com.ouisani.aios.core.tick.SystemTickGenerator;
 import com.ouisani.aios.core.vfs.VfsJournal;
 import com.ouisani.aios.user.DaemonManager;
+import com.ouisani.aios.user.apps.omnifactory.AgentBlueprint;
+import com.ouisani.aios.user.apps.omnifactory.TemplateManager;
+import com.ouisani.aios.user.apps.omnifactory.WorkflowEngine;
+import com.ouisani.aios.user.apps.omnifactory.WorkflowManifest;
+import com.ouisani.aios.user.apps.omnifactory.WorkflowNode;
 import com.ouisani.aios.user.cli.AiosShell;
 import com.ouisani.aios.user.container.ContainerRuntime;
 import com.ouisani.aios.user.sdk.AbstractAgent;
@@ -22,6 +27,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -275,6 +281,17 @@ public class InitDaemon extends AbstractAgent {
         }
         bootResults.put("PluginManager", pluginOk);
 
+        // 3e. VFS Manifest 驱动启动 — 从 /etc/init/startup_manifest.json 读取业务进程清单
+        boolean manifestOk = false;
+        try {
+            System.out.println("  │  [SVC] Reading /etc/init/startup_manifest.json...              │");
+            manifestOk = bootFromVfsManifest();
+        } catch (Exception e) {
+            log.warn("[PID 1] VFS manifest boot failed: {}", e.getMessage());
+            System.out.println("  │  [SVC] VFS Manifest Boot: FAILED ✗                          │");
+        }
+        bootResults.put("VfsManifestBoot", manifestOk);
+
         System.out.println("  └────────────────────────────────────────────────────────────┘");
 
         // ════════════════════════════════════════════════════════════════
@@ -303,6 +320,187 @@ public class InitDaemon extends AbstractAgent {
 
         // ── 拉起 AiosShell ──
         spawnAiosShell();
+    }
+
+    /**
+     * VFS Manifest 驱动启动 — 从 /etc/init/startup_manifest.json 读取业务进程清单。
+     * <p>
+     * 如果 manifest 不存在，使用 TemplateManager 写入一个包含系统基础进程的默认 JSON。
+     * 然后解析 JSON 为 WorkflowManifest，传递给 WorkflowEngine 自动拉起进程。
+     * <p>
+     * OS 类比：相当于 systemd 读取 /etc/systemd/system/*.service 单元文件，
+     * 而不是在内核代码中硬编码要启动的服务。
+     */
+    private boolean bootFromVfsManifest() {
+        VfsManager vfs = VfsManager.instance();
+        String manifestPath = "/etc/init/startup_manifest.json";
+
+        String manifestJson = vfs.readText(manifestPath);
+
+        if (manifestJson == null) {
+            // Manifest 不存在，写入默认 manifest
+            System.out.println("  │  [SVC] No startup_manifest.json found, generating default... │");
+            log.info("[PID 1] No VFS manifest at '{}', generating default with AutoMedicAgent", manifestPath);
+
+            // 确保 /etc/init 目录存在
+            vfs.writeText("/etc/init/.keep", "");
+
+            // 初始化模板
+            TemplateManager.initTemplates();
+
+            // 生成默认 manifest — 包含系统基础进程
+            manifestJson = generateDefaultManifest();
+            vfs.writeText(manifestPath, manifestJson);
+            System.out.println("  │  [SVC] Default manifest written to VFS ✓                     │");
+        }
+
+        // 解析 manifest JSON
+        try {
+            WorkflowManifest manifest = parseManifestJson(manifestJson);
+
+            // 构建蓝图注册表（系统内置蓝图）
+            Map<String, AgentBlueprint> blueprintRegistry = buildSystemBlueprints();
+
+            // 传递给 WorkflowEngine 自动拉起进程
+            WorkflowEngine.getInstance().executeWorkflow(manifest, blueprintRegistry);
+
+            System.out.printf("  │  [SVC] VFS Manifest Boot: %d processes launched ✓           │%n",
+                    manifest.nodes().size());
+            System.out.println("[Kernel] Business logic purged. Booting strictly from VFS manifest.");
+
+            return true;
+        } catch (Exception e) {
+            log.error("[PID 1] Failed to parse/execute VFS manifest: {}", e.getMessage());
+            System.out.println("  │  [SVC] VFS Manifest parse error: " + e.getMessage() + "   │");
+            return false;
+        }
+    }
+
+    /**
+     * 生成默认 startup_manifest.json — 包含系统基础守护进程。
+     */
+    private String generateDefaultManifest() {
+        return """
+                {
+                  "workflowName": "aios_system_daemons",
+                  "nodes": [
+                    {
+                      "instanceId": "auto_medic_1",
+                      "role": "系统自愈守护进程 — 监听崩溃事件并自动修复",
+                      "blueprintId": "auto_medic",
+                      "userParams": {},
+                      "subscribeTopic": "sys.kernel.panic",
+                      "publishTopic": "sys.medic.fixed"
+                    }
+                  ]
+                }
+                """;
+    }
+
+    /**
+     * 解析 manifest JSON 为 WorkflowManifest record。
+     * <p>
+     * 简单的手写 JSON 解析器，避免引入 Jackson/Gson 依赖。
+     */
+    private WorkflowManifest parseManifestJson(String json) {
+        // 提取 workflowName
+        String workflowName = extractJsonString(json, "workflowName");
+
+        // 提取 nodes 数组
+        String nodesSection = extractJsonArray(json, "nodes");
+        java.util.List<WorkflowNode> nodes = new java.util.ArrayList<>();
+
+        // 逐个解析 node 对象
+        int depth = 0;
+        int start = -1;
+        for (int i = 0; i < nodesSection.length(); i++) {
+            char c = nodesSection.charAt(i);
+            if (c == '{') {
+                if (depth == 0) start = i;
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0 && start >= 0) {
+                    String nodeJson = nodesSection.substring(start, i + 1);
+                    nodes.add(parseWorkflowNode(nodeJson));
+                    start = -1;
+                }
+            }
+        }
+
+        return new WorkflowManifest(workflowName, nodes);
+    }
+
+    private WorkflowNode parseWorkflowNode(String json) {
+        String instanceId = extractJsonString(json, "instanceId");
+        String role = extractJsonString(json, "role");
+        String blueprintId = extractJsonString(json, "blueprintId");
+        String subscribeTopic = extractJsonString(json, "subscribeTopic");
+        String publishTopic = extractJsonString(json, "publishTopic");
+        return new WorkflowNode(instanceId, role, blueprintId, Map.of(), subscribeTopic, publishTopic);
+    }
+
+    /** 从 JSON 字符串中提取指定 key 的字符串值 */
+    private String extractJsonString(String json, String key) {
+        String pattern = "\"" + key + "\"";
+        int keyIdx = json.indexOf(pattern);
+        if (keyIdx < 0) return "";
+        int colonIdx = json.indexOf(':', keyIdx + pattern.length());
+        if (colonIdx < 0) return "";
+        // 找到值部分的引号
+        int startQuote = json.indexOf('"', colonIdx + 1);
+        if (startQuote < 0) return "";
+        int endQuote = json.indexOf('"', startQuote + 1);
+        if (endQuote < 0) return "";
+        return json.substring(startQuote + 1, endQuote);
+    }
+
+    /** 从 JSON 字符串中提取指定 key 的数组内容 */
+    private String extractJsonArray(String json, String key) {
+        String pattern = "\"" + key + "\"";
+        int keyIdx = json.indexOf(pattern);
+        if (keyIdx < 0) return "[]";
+        int colonIdx = json.indexOf(':', keyIdx + pattern.length());
+        if (colonIdx < 0) return "[]";
+        int startBracket = json.indexOf('[', colonIdx + 1);
+        if (startBracket < 0) return "[]";
+        int depth = 0;
+        for (int i = startBracket; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == '[') depth++;
+            else if (c == ']') {
+                depth--;
+                if (depth == 0) return json.substring(startBracket + 1, i);
+            }
+        }
+        return "[]";
+    }
+
+    /**
+     * 构建系统内置蓝图注册表。
+     * <p>
+     * 内核只提供系统级守护进程的蓝图，业务蓝图由用户通过 VFS 或前端注入。
+     */
+    private Map<String, AgentBlueprint> buildSystemBlueprints() {
+        Map<String, AgentBlueprint> blueprints = new LinkedHashMap<>();
+
+        // AutoMedic 蓝图 — 系统自愈守护进程
+        blueprints.put("auto_medic", new AgentBlueprint(
+                "auto_medic",
+                "系统自愈守护进程 — 监听 sys.kernel.panic 事件并自动修复崩溃节点",
+                "# AutoMedic — 系统内置，由 InitDaemon 自动拉起\n" +
+                        "# 实际逻辑由 com.ouisani.aios.user.apps.omnifactory.AutoMedicAgent 提供\n" +
+                        "import BaseAgent\n" +
+                        "import json\n\n" +
+                        "class AutoMedicDaemon(BaseAgent.BaseAgent):\n" +
+                        "    def process_data(self, data):\n" +
+                        "        # AutoMedic 由内核 AutoMedicAgent.java 驱动\n" +
+                        "        # 此 Python 入口仅作为 EventBus 桥接\n" +
+                        "        pass\n",
+                List.of()
+        ));
+
+        return blueprints;
     }
 
     /**

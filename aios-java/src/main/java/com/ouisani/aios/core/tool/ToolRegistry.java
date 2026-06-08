@@ -103,6 +103,13 @@ public class ToolRegistry {
         reg.register(new TodoWriteTool());
         reg.register(new AskUserQuestionTool());
         reg.register(new PlanModeTool());
+        reg.register(new TaskTool());
+        reg.register(new SkillTool());
+        reg.register(new SendMessageTool());
+        reg.register(new LspTool());
+        reg.register(new ConfigTool());
+        reg.register(new NotebookEditTool());
+        reg.register(new McpTool());
         // WebSearchTool 已有独立实现 (com.ouisani.aios.core.plugin.WebSearchTool)
         log.info("[ToolRegistry] {} builtin tools registered", reg.tools.size());
         System.out.println("[ToolRegistry] " + reg.tools.size() + " builtin tools registered");

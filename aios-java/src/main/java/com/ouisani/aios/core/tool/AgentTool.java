@@ -1,7 +1,6 @@
 package com.ouisani.aios.core.tool;
 
 import com.ouisani.aios.core.permission.PermissionDecision;
-import com.ouisani.aios.core.task.LocalAgentTask;
 import com.ouisani.aios.core.task.TaskScheduler;
 import com.ouisani.aios.core.task.TaskStatus;
 import com.ouisani.aios.user.sdk.AiosSdk;
@@ -79,13 +78,14 @@ public class AgentTool implements Tool<AgentTool.Input> {
         System.out.printf("[AgentTool] ├─ Launching sub-agent: %s%n", input.subagentType().isEmpty() ? "custom" : input.subagentType());
 
         if (input.runInBackground()) {
-            // 异步执行
-            LocalAgentTask task = TaskScheduler.instance().submitAgentTask(
+            // 异步执行 — 强制沙箱隔离
+            TaskScheduler.SandboxAgentTask task = TaskScheduler.instance().submitAgentTask(
                     prompt, agentId, context.workingDir(), context.sdk());
 
-            return ToolOutput.ok("Agent launched in background. Task ID: " + task.taskId()
+            return ToolOutput.ok("Agent launched in SANDBOX. Task ID: " + task.taskId()
                     + "\nDescription: " + input.description()
-                    + "\nStatus: " + task.status());
+                    + "\nStatus: " + task.status()
+                    + "\nOutput routed to EventBus: sys.sandbox.agent." + task.taskId());
         } else {
             // 同步执行 — 使用 QueryEngine
             QueryEngine engine = new QueryEngine(context.sdk(), agentId, context.workingDir());

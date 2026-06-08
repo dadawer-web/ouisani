@@ -143,6 +143,23 @@ public class CoordinatorMode {
     public boolean isActive() { return active; }
 
     /**
+     * 添加 Worker — 便捷方法，用于母体分配节点到 Worker。
+     *
+     * @param workerId Worker ID
+     * @param role     Worker 角色/任务描述
+     */
+    public void addWorker(String workerId, String role) {
+        if (!active) activate();
+        String[] colors = {"#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD"};
+        String color = colors[workers.size() % colors.length];
+        WorkerIdentity identity = new WorkerIdentity(workerId, workerId, "omnifactory", color);
+        WorkerState state = registerWorker(identity);
+        state.setCurrentTask(role);
+        state.setIdle(false);
+        log.info("[CoordinatorMode] Worker {} assigned: {}", workerId, role);
+    }
+
+    /**
      * 关闭所有 Worker。
      */
     public void shutdown() {

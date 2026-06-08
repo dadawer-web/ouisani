@@ -4,7 +4,6 @@ import com.ouisani.aios.core.ProcessPriority;
 import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.cgroup.CgroupManager;
-import com.ouisani.aios.core.llm.ComputeAffinity;
 import com.ouisani.aios.core.llm.LlmRouter;
 import com.ouisani.aios.core.llm.OpenAiAdapter;
 import com.ouisani.aios.core.security.ObjectManager;
@@ -12,10 +11,6 @@ import com.ouisani.aios.core.syscall.SyscallDispatcher;
 import com.ouisani.aios.core.syscall.SyscallRequest;
 import com.ouisani.aios.core.syscall.SyscallResponse;
 import com.ouisani.aios.core.telemetry.SemanticEtw;
-import com.ouisani.aios.user.apps.omnifactory.OmniMotherAgent;
-import com.ouisani.aios.user.apps.omnifactory.TopologyCompiler;
-import com.ouisani.aios.user.apps.omnifactory.WorkflowManifest;
-import com.ouisani.aios.user.bin.AiosAppManager;
 import com.ouisani.aios.user.sdk.AbstractAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -175,77 +170,36 @@ public class AiosShell extends AbstractAgent {
     }
 
     /**
-     * 处理自然语言命令 — 通过 E_CORE LLM 路由。
+     * 处理自然语言命令 — 通过 LLM 语义路由，零硬编码匹配。
      * <p>
-     * 包含极客级快捷指令拦截：当用户输入 {@code create workflow:} 或 {@code 创建工作流：}
-     * 时，直接在内核底层拉起 OmniMotherAgent 母体进程，实现降维打击。
+     * 所有自然语言输入统一通过 IntentRouter.route() 进行 LLM 语义分类，
+     * 再由 switch-case 分发到对应的系统组件。
+     * 绝不使用 startsWith/equals/正则表达式等硬编码匹配。
      */
     private void handleNaturalLanguage(String input, IntentRouter router) {
-        // ── 极客级快捷指令拦截：触发"造物主母体" ──
-        String lowerInput = input.toLowerCase();
-        if (lowerInput.startsWith("create workflow:") || input.startsWith("创建工作流：")
-                || lowerInput.startsWith("create workflow：") || input.startsWith("创建工作流:")) {
-            System.out.println(ANSI_CYAN + ">> [Genesis] Awakening Omni Mother Agent..." + ANSI_RESET);
-
-            // 提取真正的 userGoal
-            String userGoal = extractWorkflowGoal(input);
-            if (userGoal.isBlank()) {
-                System.out.println(ANSI_RED + "[Error] No goal specified. Usage: create workflow: <your goal>" + ANSI_RESET);
-                return;
-            }
-
-            // 操作系统的降维打击：直接在底层拉起"母体进程"
-            TaskScheduler scheduler = VfsManager.instance().getTaskScheduler();
-            if (scheduler == null) {
-                System.out.println(ANSI_RED + "[Error] TaskScheduler not available" + ANSI_RESET);
-                return;
-            }
-
-            // 确保 AiosAppManager 已配置
-            AiosAppManager.configure(scheduler);
-
-            // 通过 TopologyCompiler 将用户目标编译为 WorkflowManifest
-            WorkflowManifest manifest = TopologyCompiler.getInstance().compile(userGoal);
-
-            OmniMotherAgent mother = new OmniMotherAgent(manifest);
-            mother.spawn(scheduler);
-
-            System.out.println(ANSI_GREEN + ">> Mother Agent dispatched in background. Check TaskScheduler logs for progress." + ANSI_RESET);
-            return;
-        }
-
-        // ── 原有的 LLM 路由逻辑 ──
-        System.out.println(ANSI_CYAN + ">> Routing through E_CORE..." + ANSI_RESET);
+        System.out.println(ANSI_CYAN + ">> Semantic routing via LLM..." + ANSI_RESET);
 
         try {
-            // 尝试使用 IntentRouter（已配置 LLM + Dispatcher 管线）
-            router.executeNaturalLanguage(input);
-        } catch (Exception e) {
-            // IntentRouter 不可用，尝试直接使用 LLM
-            if (llmRouter != null) {
-                try {
-                    String response = llmRouter.think(input, SHELL_SYSTEM_PROMPT);
-                    System.out.println(ANSI_GREEN + response + ANSI_RESET);
-                } catch (Exception ex) {
-                    System.out.println(ANSI_RED + "[LLM Error] " + ex.getMessage() + ANSI_RESET);
-                }
-            } else {
-                System.out.println(ANSI_RED + "[Error] No LLM available for intent routing" + ANSI_RESET);
-            }
-        }
-    }
+            IntentRouter.RouteResult result = router.route(input);
 
-    /**
-     * 从 "create workflow: xxx" 或 "创建工作流：xxx" 中提取用户目标。
-     */
-    private String extractWorkflowGoal(String input) {
-        // 尝试中文冒号
-        int idx = input.indexOf('：');
-        if (idx >= 0) return input.substring(idx + 1).trim();
-        // 尝试英文冒号
-        idx = input.indexOf(':');
-        if (idx >= 0) return input.substring(idx + 1).trim();
-        return "";
+            switch (result.intentType()) {
+                case SYSTEM_COMMAND -> {
+                    System.out.println(ANSI_CYAN + "  [SYSTEM_COMMAND] " + ANSI_RESET + result.response());
+                }
+                case WORKFLOW_DEPLOY -> {
+                    System.out.println(ANSI_CYAN + "  [WORKFLOW_DEPLOY] " + ANSI_RESET + result.response());
+                    System.out.println(ANSI_GREEN + ">> Mother Agent dispatched in background. Check TaskScheduler logs for progress." + ANSI_RESET);
+                }
+                case SEMANTIC_SEARCH -> {
+                    System.out.println(ANSI_CYAN + "  [SEMANTIC_SEARCH] " + ANSI_RESET + result.response());
+                }
+                case CHAT -> {
+                    System.out.println(ANSI_GREEN + result.response() + ANSI_RESET);
+                }
+            }
+        } catch (Exception e) {
+            System.out.println(ANSI_RED + "[Error] Semantic routing failed: " + e.getMessage() + ANSI_RESET);
+        }
     }
 
     /**
@@ -392,23 +346,16 @@ public class AiosShell extends AbstractAgent {
                         System.out.println(ANSI_RED + "Error: " + response.errorMessage() + ANSI_RESET);
                     }
                 } else {
-                    System.out.println(ANSI_CYAN + ">> Routing intent through NUI Engine..." + ANSI_RESET);
-                    SyscallResponse response = router.executeNaturalLanguage(input);
-                    if (response != null && response.success()) {
-                        System.out.println(ANSI_GREEN + response.data() + ANSI_RESET);
-                    } else {
-                        String errMsg = response != null ? response.errorMessage() : "Unknown error";
-                        // IntentRouter 不可用时 fallback 到直接 LLM 对话
-                        if (errMsg.contains("not configured") && llmRouter != null) {
-                            try {
-                                String reply = llmRouter.think(input, SHELL_SYSTEM_PROMPT);
-                                System.out.println(ANSI_GREEN + reply + ANSI_RESET);
-                            } catch (Exception ex) {
-                                System.out.println(ANSI_RED + "[LLM Error] " + ex.getMessage() + ANSI_RESET);
-                            }
-                        } else {
-                            System.out.println(ANSI_RED + "[Error] " + errMsg + ANSI_RESET);
+                    System.out.println(ANSI_CYAN + ">> Semantic routing via LLM..." + ANSI_RESET);
+                    IntentRouter.RouteResult result = router.route(input);
+                    switch (result.intentType()) {
+                        case SYSTEM_COMMAND -> System.out.println(ANSI_CYAN + "  [SYSTEM_COMMAND] " + ANSI_RESET + result.response());
+                        case WORKFLOW_DEPLOY -> {
+                            System.out.println(ANSI_CYAN + "  [WORKFLOW_DEPLOY] " + ANSI_RESET + result.response());
+                            System.out.println(ANSI_GREEN + ">> Mother Agent dispatched." + ANSI_RESET);
                         }
+                        case SEMANTIC_SEARCH -> System.out.println(ANSI_CYAN + "  [SEMANTIC_SEARCH] " + ANSI_RESET + result.response());
+                        case CHAT -> System.out.println(ANSI_GREEN + result.response() + ANSI_RESET);
                     }
                 }
             } catch (Exception e) {

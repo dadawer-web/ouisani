@@ -2,6 +2,7 @@ package com.ouisani.aios.core;
 
 import com.ouisani.aios.core.llm.LlmProvider;
 import com.ouisani.aios.core.llm.OpenAiAdapter;
+import com.ouisani.aios.vfs.MutableFileNode;
 import com.ouisani.aios.vfs.ProcFsNode;
 import com.ouisani.aios.vfs.SemanticNode;
 import com.ouisani.aios.vfs.VectorNode;
@@ -677,6 +678,105 @@ public final class VfsManager {
      *
      * @return map of deviceId → vfsPath for all remote device nodes
      */
+    /**
+     * 便捷读取方法 — 从 VFS 读取文本内容。
+     * <p>
+     * 安全边界：只读取 VFS 虚拟文件系统中的内容，永远不接触宿主机真实文件系统。
+     * 如果节点不存在，返回 null。
+     *
+     * @param path VFS 虚拟路径
+     * @return 文件文本内容，不存在则返回 null
+     */
+    public String readText(String path) {
+        Optional<VfsNode> nodeOpt = resolve(path);
+        if (nodeOpt.isEmpty()) {
+            return null;
+        }
+        VfsNode node = nodeOpt.get();
+        if (!node.checkRead(0)) {
+            log.warn("[VFS] readText denied: no read permission on '{}'", path);
+            return null;
+        }
+        return node.read();
+    }
+
+    /**
+     * 便捷写入方法 — 向 VFS 写入文本内容。
+     * <p>
+     * 安全边界：只写入 VFS 虚拟文件系统，永远不接触宿主机真实文件系统。
+     * 如果文件不存在，自动创建 MutableFileNode 并挂载。
+     * 如果父目录不存在，自动创建中间目录。
+     *
+     * @param path    VFS 虚拟路径
+     * @param content 要写入的文本内容
+     * @return true 写入成功
+     */
+    public boolean writeText(String path, String content) {
+        rwLock.writeLock().lock();
+        try {
+            if (!initialized) {
+                log.warn("VFS not initialized, cannot writeText");
+                return false;
+            }
+
+            String resolved = translatePath(path, AGENT_ROOT.get());
+            if (resolved.isEmpty()) {
+                log.warn("[VFS] writeText denied: path escape detected '{}'", path);
+                return false;
+            }
+
+            VfsNode existing = pathTree.get(resolved);
+            if (existing != null) {
+                // 节点已存在，直接写入
+                if (!existing.checkWrite(0)) {
+                    log.warn("[VFS] writeText denied: no write permission on '{}'", resolved);
+                    return false;
+                }
+                boolean ok = existing.write(content);
+                if (ok) {
+                    log.debug("[VFS] writeText: {} chars -> '{}'", content.length(), resolved);
+                }
+                return ok;
+            }
+
+            // 节点不存在，创建 MutableFileNode 并挂载
+            // 先确保父目录存在
+            String parentPath = resolved.substring(0, resolved.lastIndexOf('/'));
+            if (parentPath.isEmpty()) parentPath = "/";
+            ensureDirectoryExists(parentPath);
+
+            MutableFileNode newNode = new MutableFileNode(resolved);
+            newNode.write(content);
+            pathTree.put(resolved, newNode);
+            log.info("[VFS] writeText: created new MutableFileNode '{}', {} chars", resolved, content.length());
+            return true;
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * 检查 VFS 路径是否存在。
+     *
+     * @param path VFS 虚拟路径
+     * @return true 路径存在
+     */
+    public boolean exists(String path) {
+        return resolve(path).isPresent();
+    }
+
+    /** 递归确保目录路径存在 */
+    private void ensureDirectoryExists(String dirPath) {
+        if (pathTree.containsKey(dirPath)) return;
+        // 先确保父目录
+        int lastSlash = dirPath.lastIndexOf('/');
+        if (lastSlash > 0) {
+            String parent = dirPath.substring(0, lastSlash);
+            ensureDirectoryExists(parent);
+        }
+        pathTree.put(dirPath, new VfsNode.DirectoryNode(dirPath));
+    }
+
     public Map<String, String> listRemoteDevices() {
         Map<String, String> devices = new LinkedHashMap<>();
         String prefix = "/dev/remote/";

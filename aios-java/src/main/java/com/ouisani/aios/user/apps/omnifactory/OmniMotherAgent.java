@@ -4,8 +4,11 @@ import com.ouisani.aios.core.ProcessPriority;
 import com.ouisani.aios.core.compact.CompactService;
 import com.ouisani.aios.core.context.ClaudeMdLoader;
 import com.ouisani.aios.core.context.SystemPromptBuilder;
+import com.ouisani.aios.core.cost.CostTracker;
 import com.ouisani.aios.core.dream.AutoDreamService;
 import com.ouisani.aios.core.hook.HookManager;
+import com.ouisani.aios.core.lsp.LspManager;
+import com.ouisani.aios.core.memory.MemoryDir;
 import com.ouisani.aios.core.memory.SessionMemoryService;
 import com.ouisani.aios.core.permission.PermissionMode;
 import com.ouisani.aios.core.plugin.WebSearchTool;
@@ -15,6 +18,7 @@ import com.ouisani.aios.core.task.DreamTask;
 import com.ouisani.aios.core.task.TaskScheduler;
 import com.ouisani.aios.core.telemetry.TelemetryService;
 import com.ouisani.aios.core.tool.QueryEngine;
+import com.ouisani.aios.core.tool.ToolExecutionPipeline;
 import com.ouisani.aios.core.tool.ToolRegistry;
 import com.ouisani.aios.user.bin.AiosAppManager;
 import com.ouisani.aios.user.sdk.AbstractAgent;
@@ -106,23 +110,52 @@ public class OmniMotherAgent extends AbstractAgent {
                         "node", node.instanceId(), "query", searchIntent));
             }
 
-            // ── Claude Code: QueryEngine 工具增强代码生成 ──
+            // ── Claude Code: QueryEngine 自治 SWE 闭环 ──
             String codePrompt = buildCodePrompt(node, context);
 
-            String code;
-            if (!ToolRegistry.instance().all().isEmpty()) {
-                code = queryEngine.query(codePrompt);
+            System.out.println("[Mother Agent] Initiating Claude Code REPL for node: " + node.instanceId());
+
+            // ── CostTracker: 记录推理开始 ──
+            long nodeStartTokens = CostTracker.instance().getTotalTokens();
+
+            // ── ToolExecutionPipeline: 通过管线执行（Hook→权限→执行→遥测） ──
+            String result = queryEngine.query(codePrompt); // 大模型会在内部自主调用工具、修改、测试
+            if (!result.contains("NODE_VERIFIED_AND_READY")) {
+                System.err.println("[Mother Agent] Warning: Node " + node.instanceId()
+                        + " might not be fully verified. Final response: " + result);
             } else {
-                code = sdk.think(this.agentId, codePrompt);
+                System.out.println("[Mother Agent]   ├─ Node '" + node.instanceId() + "' VERIFIED_AND_READY ✓");
             }
 
-            sdk.writeFile(this.agentId, "/factory/" + node.instanceId() + ".py", code);
+            // ── CostTracker: 记录本节点消耗 ──
+            long nodeTokens = CostTracker.instance().getTotalTokens() - nodeStartTokens;
+            CostTracker.CostLevel costLevel = CostTracker.instance().checkThreshold();
+
+            // ── MemoryDir: 将节点生成记录保存到跨会话记忆 ──
+            MemoryDir.instance().save(new MemoryDir.MemoryEntry(
+                    node.instanceId(), MemoryDir.MemoryType.PROJECT,
+                    "Role: " + node.role() + " | Verified: " + result.contains("NODE_VERIFIED_AND_READY"),
+                    System.currentTimeMillis(), new String[]{"omnifactory", node.instanceId()}
+            ));
+
+            // ── LspManager: 对生成的 Python 文件做语法检查 ──
+            List<LspManager.LspDiagnostic> diagnostics =
+                    LspManager.instance().getDiagnostics("/factory/" + node.instanceId() + ".py");
+            if (!diagnostics.isEmpty()) {
+                System.out.println("[Mother Agent]   ├─ LSP diagnostics for " + node.instanceId()
+                        + ": " + diagnostics.size() + " issues");
+            }
+
+            // ── CoordinatorMode: 如果节点数 > 3，启用协作模式分配 Worker ──
+            if (manifest.nodes().size() > 3) {
+                coordinator.addWorker(node.instanceId(), node.role());
+            }
 
             // ── 遥测：记录节点生成 ──
             TelemetryService.instance().logEvent("node_forged", Map.of(
                     "node_id", node.instanceId(),
                     "role", node.role(),
-                    "code_length", code.length()
+                    "verified", result.contains("NODE_VERIFIED_AND_READY")
             ));
 
             shellScriptBuilder.append("export NODE_ID=").append(node.instanceId()).append("\n");
@@ -132,8 +165,8 @@ public class OmniMotherAgent extends AbstractAgent {
 
             agentfileBuilder.append("SPAWN ").append(node.instanceId()).append(" 1\n");
 
-            System.out.printf("[Mother Agent]   ├─ Node '%s' forged → %d chars%n",
-                    node.instanceId(), code.length());
+            System.out.printf("[Mother Agent]   ├─ Node '%s' forged via autonomous SWE loop%n",
+                    node.instanceId());
 
             // ── SessionMemory: 记录节点生成到会话记忆 ──
             sessionMemory.setSection(SessionMemoryService.Section.FILES_AND_FUNCTIONS,
@@ -181,6 +214,7 @@ public class OmniMotherAgent extends AbstractAgent {
         long elapsed = System.currentTimeMillis() - startTime;
         TelemetryService.instance().recordApiDuration(elapsed);
         System.out.println("[Mother Agent] Total time: " + elapsed + "ms");
+        System.out.println("[Mother Agent] " + CostTracker.instance().formatReport());
         log.info("[Mother Agent] Cost report:\n{}", TelemetryService.instance().formatCostReport());
 
         this.exit();
@@ -250,11 +284,27 @@ public class OmniMotherAgent extends AbstractAgent {
         // ── 9. AutoDream — 记录新会话 ──
         AutoDreamService.recordNewSession();
 
-        log.info("[Mother Agent] Claude Code capabilities initialized");
+        // ── 10. CostTracker — 成本追踪 ──
+        CostTracker.instance().reset();
+
+        // ── 11. ToolExecutionPipeline — 工具执行管线 ──
+        ToolExecutionPipeline.instance(); // 初始化单例
+
+        // ── 12. MemoryDir — 跨会话记忆 ──
+        MemoryDir.instance().scan();
+
+        // ── 13. LspManager — LSP 代码智能 ──
+        LspManager.instance();
+
+        log.info("[Mother Agent] Claude Code capabilities initialized (15 modules)");
     }
 
     /**
-     * 构建代码生成 Prompt — 集成 RAG + CLAUDE.md + BaseAgent 模板。
+     * 构建自治 SWE Prompt — 赋予大模型 Claude Code 级别的自治能力。
+     * <p>
+     * 大模型将自主使用 file_write、bash、file_edit 等工具，
+     * 完成代码编写→测试→修复→验证的完整闭环。
+     * 只有当测试通过后，才回复 NODE_VERIFIED_AND_READY。
      */
     private String buildCodePrompt(WorkflowNode node, String searchContext) {
         // 加载 CLAUDE.md 作为额外上下文
@@ -273,13 +323,17 @@ public class OmniMotherAgent extends AbstractAgent {
             prompt.append("【项目指令 (CLAUDE.md)】\n").append(claudeMdContext).append("\n\n");
         }
 
-        // 代码生成指令
-        prompt.append("你是一个程序员。系统已经为你提供了强壮的基类 /factory/templates/BaseAgent.py。")
-              .append("请直接使用 Python 的继承机制：\n")
-              .append("1. import BaseAgent\n")
-              .append("2. 继承它并重写 process_data(self, data) 方法以实现功能：[").append(node.role()).append("]。\n")
-              .append("3. 不要写主循环，不要写文件读写，底层框架已经全部做好了！只输出纯代码！\n")
-              .append("4. 如果需要查看现有代码或搜索文件，你可以使用 file_read、grep、glob 等工具。");
+        // 自治 SWE 协议 — 核心指令
+        prompt.append("你是一个自治软件工程师 (Autonomous SWE)。你需要为节点 [")
+              .append(node.instanceId()).append("] 实现功能：[").append(node.role()).append("]。\n")
+              .append("【工作流强制规则】：\n")
+              .append("1. 你必须使用 file_write 或 bash 工具创建 /factory/")
+              .append(node.instanceId()).append(".py 文件。\n")
+              .append("2. 该代码必须 import BaseAgent 并继承它重写 process_data(self, data) 方法。\n")
+              .append("3. 极其重要：写完代码后，你必须使用 bash 工具执行 'python /factory/")
+              .append(node.instanceId()).append(".py' 来测试是否存在语法错误或缺包 (ModuleNotFoundError)。\n")
+              .append("4. 如果 bash 返回报错，请使用 file_edit 或 bash (pip install) 修复问题，再次运行测试。\n")
+              .append("5. 只有当测试运行没有报错时，你才能回复纯文本：'NODE_VERIFIED_AND_READY'。");
 
         return prompt.toString();
     }

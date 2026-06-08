@@ -203,6 +203,16 @@ public class LlmRouter implements LlmProvider {
         return !backendProviders.isEmpty();
     }
 
+    /**
+     * 获取指定名称的 LlmProvider。
+     *
+     * @param name 提供者名称
+     * @return LlmProvider，不存在则返回 null
+     */
+    public LlmProvider getProvider(String name) {
+        return backendProviders.get(name);
+    }
+
     // ════════════════════════════════════════════════════════════════
     //  核心路由逻辑 — big.LITTLE 调度器
     // ════════════════════════════════════════════════════════════════

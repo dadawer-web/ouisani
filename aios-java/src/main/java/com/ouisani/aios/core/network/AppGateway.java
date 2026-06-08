@@ -38,6 +38,10 @@ public class AppGateway {
 
     private static final Logger log = LoggerFactory.getLogger(AppGateway.class);
 
+    private static final AppGateway INSTANCE = new AppGateway();
+
+    public static AppGateway getInstance() { return INSTANCE; }
+
     /** 跟踪每个应用的已连接客户端，用于清理 */
     private static final ConcurrentHashMap<String, Set<WsContext>> appClients = new ConcurrentHashMap<>();
 
@@ -468,6 +472,24 @@ public class AppGateway {
             params.put(kvMatcher.group(1), kvMatcher.group(2));
         }
         return params;
+    }
+
+    /**
+     * 语义搜索 — 由 IntentRouter 的 SEMANTIC_SEARCH 意图分发调用。
+     * <p>
+     * 通过 Jina Search 搜索互联网，返回结果摘要。
+     *
+     * @param query 搜索查询
+     * @return 搜索结果
+     */
+    public String handleSemanticSearch(String query) {
+        try {
+            String result = com.ouisani.aios.core.plugin.WebSearchTool.searchForAgent(query);
+            return result.isEmpty() ? "No search results found." : result;
+        } catch (Exception e) {
+            log.warn("[Gateway] Semantic search failed: {}", e.getMessage());
+            return "Semantic search unavailable: " + e.getMessage();
+        }
     }
 
     /**
