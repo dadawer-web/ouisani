@@ -12,6 +12,23 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.Arrays;
 
+/**
+ * 追踪代理工厂 — 为 LLM 接口创建 JDK 动态代理，拦截所有方法调用。
+ * <p>
+ * 在方法调用前后注入横切关注点：
+ * <ul>
+ *   <li>REPLAY 模式：从时间机器回放历史调用结果（strace 重放）</li>
+ *   <li>RECORD 模式：将调用请求/响应记录到 TraceManager（strace 录制）</li>
+ *   <li>语义 eBPF 防火墙：拦截 think() 调用，评估 prompt 安全性</li>
+ *   <li>语义缓存：对 think() 调用检查缓存命中，避免重复 LLM 请求</li>
+ *   <li>Cgroup Token 计费：对 LLM 响应估算并消耗 Token 配额</li>
+ * </ul>
+ * <p>
+ * OS 类比: strace + eBPF + page cache 的组合体，在内核边界拦截系统调用。
+ *
+ * @see TraceManager
+ * @see TraceMode
+ */
 public class TraceProxyFactory {
 
     private static final Logger log = LoggerFactory.getLogger(TraceProxyFactory.class);

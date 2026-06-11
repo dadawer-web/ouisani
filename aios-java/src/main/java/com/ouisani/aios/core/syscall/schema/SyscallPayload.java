@@ -1,15 +1,13 @@
 package com.ouisani.aios.core.syscall.schema;
 
 /**
- * Top-level marker interface for all standardized syscall payloads.
+ * Syscall 载荷顶层标记接口 — 所有标准化 syscall 载荷的公共基类。
  * <p>
- * Every namespace-specific payload (LLM, Memory, Storage, Tool, etc.)
- * must implement this interface, enabling compile-time type safety
- * and generic constraints across the AIOS kernel ABI.
+ * 每个命名空间的载荷（LLM、Memory、Storage、Tool 等）必须实现此接口，
+ * 实现编译时类型安全和泛型约束，跨越 AIOS 内核 ABI。
  * <p>
- * Analogous to POSIX's {@code struct} definitions for syscall arguments —
- * each payload is a strongly-typed contract between user-space Agents
- * and the kernel.
+ * OS 类比: POSIX 的 {@code struct} 定义——每个载荷是用户空间 Agent 与内核之间的
+ * 强类型契约，等价于 Linux syscall 的参数结构体。
  */
 public interface SyscallPayload {
 }

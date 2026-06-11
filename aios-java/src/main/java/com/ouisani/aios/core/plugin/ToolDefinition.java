@@ -3,32 +3,25 @@ package com.ouisani.aios.core.plugin;
 import java.util.Map;
 
 /**
- * Tool Definition — the JSON Schema descriptor for a dynamically
- * loadable tool (kernel module).
+ * 工具定义 — 动态可加载工具（内核模块）的 JSON Schema 描述符。
  * <p>
- * In a traditional OS, each kernel module exposes a set of symbols
- * (functions, ioctls) that user-space can call. In AIOS, each tool
- * module exposes a {@link ToolDefinition} that describes:
+ * 在传统 OS 中，每个内核模块暴露一组符号（函数、ioctl）供用户空间调用。
+ * 在 AIOS 中，每个工具模块暴露一个 {@link ToolDefinition}，描述：
  * <ul>
- *   <li><b>name</b> — the module's syscall name (e.g., "web_search")</li>
- *   <li><b>description</b> — natural language description for LLM understanding</li>
- *   <li><b>parameters</b> — JSON Schema of the tool's input parameters</li>
- *   <li><b>type</b> — the execution backend (WASM, MCP, Docker, Native)</li>
- *   <li><b>tokenCost</b> — estimated token overhead when loaded into context</li>
+ *   <li><b>name</b> — 模块的 syscall 名称（如 "web_search"）</li>
+ *   <li><b>description</b> — 自然语言描述，供 LLM 理解工具用途</li>
+ *   <li><b>parameters</b> — 工具输入参数的 JSON Schema</li>
+ *   <li><b>type</b> — 执行后端类型（WASM、MCP、Docker、Native）</li>
+ *   <li><b>tokenCost</b> — 加载到上下文窗口时的预估 Token 开销</li>
  * </ul>
  * <p>
- * <h3>OS Analogy: /proc/modules</h3>
- * Just as {@code cat /proc/modules} lists all loaded kernel modules
- * with their size and dependency count, a {@code ToolDefinition} is
- * the metadata entry that appears when an Agent queries its active
- * tool chain.
+ * <h3>OS 类比: /proc/modules</h3>
+ * 就像 {@code cat /proc/modules} 列出所有已加载内核模块及其大小和依赖数，
+ * {@code ToolDefinition} 是 Agent 查询其活跃工具链时出现的元数据条目。
  * <p>
- * <h3>Token Economy</h3>
- * Each loaded tool consumes tokens in the LLM's context window
- * (its JSON Schema must be included in the prompt). The
- * {@code tokenCost} field enables the Agent to make informed
- * decisions about which tools to keep loaded — analogous to how
- * a kernel tracks module memory footprint.
+ * <h3>Token 经济学</h3>
+ * 每个已加载的工具消耗 LLM 上下文窗口中的 Token（其 JSON Schema 必须注入到 prompt 中）。
+ * {@code tokenCost} 字段使 Agent 能够做出明智的工具加载决策——类似于内核跟踪模块内存占用。
  *
  * @see PluginManager
  * @see AgentToolContext

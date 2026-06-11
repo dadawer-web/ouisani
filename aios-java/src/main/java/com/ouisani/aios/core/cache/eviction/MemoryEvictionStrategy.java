@@ -5,17 +5,15 @@ import com.ouisani.aios.core.cache.SemanticCacheManager.CacheEntry;
 import java.util.List;
 
 /**
- * Memory Eviction Strategy — the policy engine that decides which cache
- * entries to evict when the semantic cache exceeds its capacity.
+ * 内存驱逐策略 — 语义缓存超容量时决定驱逐哪些条目的策略引擎。
  * <p>
- * Inspired by the OS virtual memory page replacement algorithms, this
- * interface abstracts the eviction decision from the cache manager itself,
- * allowing different strategies to be plugged in at runtime.
+ * 灵感来自 OS 虚拟内存页面替换算法，此接口将驱逐决策从缓存管理器中抽象出来，
+ * 允许在运行时插入不同策略。
  * <p>
- * Implementations:
+ * 实现类：
  * <ul>
- *   <li>{@link StrictTokenEvictionStrategy} — LRU/LFU style, pure OS discipline</li>
- *   <li>{@link BionicCognitiveStrategy} — Ebbinghaus forgetting curve + activation weight</li>
+ *   <li>{@link StrictTokenEvictionStrategy} — LRU/LFU 风格，纯 OS 纪律</li>
+ *   <li>{@link BionicCognitiveStrategy} — 艾宾浩斯遗忘曲线 + 激活权重</li>
  * </ul>
  *
  * @see SemanticCacheManager

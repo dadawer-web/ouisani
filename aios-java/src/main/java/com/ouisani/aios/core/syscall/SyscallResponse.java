@@ -1,12 +1,13 @@
 package com.ouisani.aios.core.syscall;
 
 /**
- * A strongly-typed system call response — the sole legal return value
- * from the AIOS kernel to an Agent.
+ * 系统调用响应 — AIOS 内核返回给 Agent 的唯一合法返回值。
+ * <p>
+ * OS 类比: Linux syscall 的返回值——成功返回数据，失败返回 errno。
  *
- * @param success      whether the syscall succeeded
- * @param data         the response data (JSON string, plain text, etc.)
- * @param errorMessage error description if success is false, null otherwise
+ * @param success      syscall 是否成功
+ * @param data         响应数据（JSON 字符串、纯文本等）
+ * @param errorMessage 失败时的错误描述，成功时为 null
  */
 public record SyscallResponse(
         boolean success,

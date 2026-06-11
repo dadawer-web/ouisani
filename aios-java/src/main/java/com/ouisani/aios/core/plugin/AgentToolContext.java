@@ -7,28 +7,24 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Agent Tool Context — the per-process tool chain (active modules).
+ * Agent 工具上下文 — 每进程工具链（活跃模块集合）。
  * <p>
- * In a traditional OS, each process has its own set of open file
- * descriptors and loaded shared libraries. In AIOS, each Agent
- * process has its own {@link AgentToolContext} — an isolated list
- * of actively loaded tools whose JSON Schemas are injected into
- * the LLM's context window.
+ * 在传统 OS 中，每个进程拥有自己的文件描述符表和已加载共享库。
+ * 在 AIOS 中，每个 Agent 进程拥有自己的 {@link AgentToolContext}——
+ * 一个隔离的已加载工具列表，其 JSON Schema 被注入到 LLM 的上下文窗口中。
  * <p>
- * <h3>OS Analogy: Process Address Space</h3>
- * Just as each process has its own virtual address space with
- * different memory-mapped libraries, each Agent has its own tool
- * context with different loaded modules. This isolation ensures:
+ * <h3>OS 类比: 进程地址空间</h3>
+ * 就像每个进程拥有不同的虚拟地址空间和不同的内存映射库，
+ * 每个 Agent 拥有不同的工具上下文和不同的已加载模块。这种隔离确保：
  * <ul>
- *   <li>Token efficiency — only load tools relevant to the current task</li>
- *   <li>Security — agents can't access tools they haven't loaded</li>
- *   <li>Flexibility — agents can insmod/rmmod at runtime</li>
+ *   <li>Token 效率 — 只加载与当前任务相关的工具</li>
+ *   <li>安全性 — Agent 无法访问未加载的工具</li>
+ *   <li>灵活性 — Agent 可在运行时 insmod/rmmod</li>
  * </ul>
  * <p>
- * <h3>Token Budget</h3>
- * Each loaded tool consumes tokens (its JSON Schema). The context
- * tracks the total token cost and can enforce a budget — analogous
- * to how the kernel tracks RSS (Resident Set Size) per process.
+ * <h3>Token 预算</h3>
+ * 每个已加载的工具消耗 Token（其 JSON Schema）。上下文跟踪总 Token 开销
+ * 并可强制执行预算——类似于内核跟踪每个进程的 RSS（常驻内存集大小）。
  *
  * @see ToolDefinition
  * @see PluginManager

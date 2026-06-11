@@ -1,17 +1,17 @@
-package com.ouisani.aios.core.tool;
+package com.ouisani.aios.user.apps.omnifactory.tools;
 
-import com.ouisani.aios.core.permission.PermissionMode;
+import com.ouisani.aios.core.tool.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * 计划模式工具 — 对标 Claude Code 的 EnterPlanModeTool + ExitPlanModeTool。
  * <p>
+ * 已从内核空间 (core.tool) 迁移至用户空间 (omnifactory.tools)。
+ * 此工具属于母体的高级认知能力，不属于内核系统调用。
+ * <p>
  * EnterPlanMode: 切换到只读计划模式，只允许读取操作
  * ExitPlanMode: 退出计划模式，恢复写权限
- * <p>
- * OS 类比：相当于 Linux 的 single-user mode 切换 — 安全模式下只读检查，
- * 确认方案后再回到正常模式执行。
  */
 public class PlanModeTool implements Tool<PlanModeTool.Input> {
 

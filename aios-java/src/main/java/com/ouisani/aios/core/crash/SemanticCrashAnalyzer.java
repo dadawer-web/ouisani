@@ -388,13 +388,26 @@ public final class SemanticCrashAnalyzer {
 
     /**
      * 收集安全令牌信息。
+     * <p>
+     * 只提取纯文本字段，绝不直接序列化 SecurityToken 对象，
+     * 防止双向引用导致 toString() 栈溢出。
      */
     private String collectSecurityContext(AgentTask task) {
         if (task == null) return "unknown";
-        SecurityToken token = task.primaryToken();
-        if (token == null) return "no_token";
-        return token.ownerId() + "(level=" + token.privilegeLevel()
-                + ", capabilities=" + token.capabilities() + ")";
+        try {
+            SecurityToken token = task.primaryToken();
+            if (token == null) return "no_token";
+            String capStr;
+            try {
+                capStr = String.valueOf(token.capabilities());
+            } catch (Exception e) {
+                capStr = "(capabilities toString failed: " + e.getClass().getSimpleName() + ")";
+            }
+            return token.ownerId() + "(level=" + token.privilegeLevel()
+                    + ", capabilities=" + capStr + ")";
+        } catch (Exception e) {
+            return "(security context extraction failed: " + e.getClass().getSimpleName() + ")";
+        }
     }
 
     /**
@@ -446,7 +459,19 @@ public final class SemanticCrashAnalyzer {
                     reflectionProvider != null ? "Reflection LLM" : "Kernel Debugger LLM", agentId);
 
             try {
-                String dumpJson = coreDump.toJson();
+                String dumpJson;
+                try {
+                    dumpJson = coreDump.toJson();
+                } catch (Exception toJsonError) {
+                    log.warn("[CrashAnalyzer] coreDump.toJson() failed during diagnosis: {}",
+                            toJsonError.getMessage());
+                    dumpJson = "{\"crashInfo\":{\"agentId\":\"" + escJson(agentId)
+                            + "\",\"exceptionMessage\":\"toJson() failed during diagnosis\"}}";
+                }
+                // 截断防止 Prompt 过长
+                if (dumpJson.length() > 6000) {
+                    dumpJson = dumpJson.substring(0, 6000) + "\n... (truncated)";
+                }
                 String prompt = buildDiagnosisPrompt(dumpJson);
 
                 String diagnosis = diagnoser.think(prompt,
@@ -877,16 +902,35 @@ public final class SemanticCrashAnalyzer {
 
     /**
      * 将核心转储写入 VFS: /var/crash/dump_{pid}.aios
+     * <p>
+     * 防元崩溃保护：如果 toJson() 本身抛出异常（如字段提取触发了二次崩溃），
+     * 写入一条最小化的 fallback 转储，确保崩溃处理主流程不会被打断。
      */
     private void writeDumpToVfs(String agentId, SemanticCoreDump coreDump) {
         String crashPath = "/var/crash/dump_" + agentId + ".aios";
         try {
-            String dumpJson = coreDump.toJson();
+            String dumpJson;
+            try {
+                dumpJson = coreDump.toJson();
+            } catch (Exception toJsonError) {
+                // toJson 自身崩溃 — 写入最小化 fallback
+                log.warn("[CrashAnalyzer] coreDump.toJson() failed, writing minimal fallback: {}",
+                        toJsonError.getMessage());
+                dumpJson = "{\"crashInfo\":{\"agentId\":\"" + escJson(agentId)
+                        + "\",\"exceptionClass\":\"" + escJson(coreDump.crashInfo().exceptionClass())
+                        + "\",\"exceptionMessage\":\"toJson() failed: "
+                        + escJson(toJsonError.getClass().getSimpleName()) + "\"}}";
+            }
+
+            // 防止超大 JSON 写入 VFS 导致 OOM
+            if (dumpJson.length() > 100_000) {
+                dumpJson = dumpJson.substring(0, 100_000) + "\n... (truncated at 100KB)";
+            }
+
             var nodeOpt = VfsManager.instance().resolve(crashPath);
             if (nodeOpt.isPresent()) {
                 nodeOpt.get().write(dumpJson);
             } else {
-                // 自动创建转储文件
                 MutableFileNode dumpNode = new MutableFileNode(crashPath);
                 dumpNode.write(dumpJson);
                 VfsManager.instance().mount("/var/crash", "dump_" + agentId + ".aios", dumpNode);
@@ -897,6 +941,12 @@ public final class SemanticCrashAnalyzer {
         } catch (Exception e) {
             log.warn("[CrashAnalyzer] Failed to write core dump to VFS: {}", e.getMessage());
         }
+    }
+
+    private static String escJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "").replace("\t", "\\t");
     }
 
     /**

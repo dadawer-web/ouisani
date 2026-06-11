@@ -59,8 +59,7 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
     );
 
     // ── 片段提取的正则模式 ──
-
-    private static final Pattern JSON_OBJECT_PATTERN = Pattern.compile("\\{[^{}]*\\}");
+    // 注意：JSON_OBJECT_PATTERN 已从正则替换为 indexOf 线性扫描，防止 StackOverflowError
     private static final Pattern KEY_VALUE_PATTERN = Pattern.compile(
             "\"(\\w+)\"\\s*:\\s*(?:\"([^\"]*)\"|(\\d+)|(true|false|null))");
     private static final Pattern CHINESE_KEY_VALUE_PATTERN = Pattern.compile(
@@ -148,14 +147,56 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
         T result = tryParseJson(json, targetClass);
         if (result != null) return result;
 
-        // 尝试查找最内层的 JSON 对象
-        Matcher m = JSON_OBJECT_PATTERN.matcher(cleaned);
-        while (m.find()) {
-            String candidate = m.group();
-            result = tryParseJson(candidate, targetClass);
-            if (result != null) return result;
-        }
+        // 线性扫描查找 JSON 对象（indexOf 替代正则，防止 StackOverflowError）
+        result = findJsonObjectsLinear(cleaned, targetClass);
+        if (result != null) return result;
 
+        return null;
+    }
+
+    /**
+     * 使用 indexOf 线性扫描查找文本中的 JSON 对象，O(N) 时间复杂度。
+     * <p>
+     * 替代原来的 JSON_OBJECT_PATTERN 正则，避免在大段 LLM 输出上触发 StackOverflowError。
+     */
+    private <T> T findJsonObjectsLinear(String text, Class<T> targetClass) {
+        int searchStart = 0;
+        while (searchStart < text.length()) {
+            int braceStart = text.indexOf('{', searchStart);
+            if (braceStart < 0) break;
+
+            // 找到匹配的闭合花括号
+            int depth = 0;
+            int pos = braceStart;
+            boolean inString = false;
+            boolean escape = false;
+
+            while (pos < text.length()) {
+                char c = text.charAt(pos);
+                if (escape) {
+                    escape = false;
+                } else if (c == '\\' && inString) {
+                    escape = true;
+                } else if (c == '"' && !escape) {
+                    inString = !inString;
+                } else if (!inString) {
+                    if (c == '{') depth++;
+                    else if (c == '}') {
+                        depth--;
+                        if (depth == 0) {
+                            // 找到完整的 JSON 对象
+                            String candidate = text.substring(braceStart, pos + 1);
+                            T result = tryParseJson(candidate, targetClass);
+                            if (result != null) return result;
+                            break;
+                        }
+                    }
+                }
+                pos++;
+            }
+
+            searchStart = braceStart + 1;
+        }
         return null;
     }
 

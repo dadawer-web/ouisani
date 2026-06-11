@@ -1,5 +1,6 @@
 package com.ouisani.aios.core.telemetry;
 
+import com.ouisani.aios.core.AgentTask;
 import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.cgroup.CgroupManager;
 import com.ouisani.aios.core.cgroup.CgroupNode;
@@ -7,23 +8,25 @@ import com.ouisani.aios.core.network.EventBus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * System Monitor Daemon — periodic telemetry heartbeat that collects
- * system-wide metrics and broadcasts them via the global EventBus.
+ * 系统监控守护进程 — 周期性遥测心跳，采集全系统指标并通过 EventBus 广播。
  * <p>
- * Runs a scheduled task every 1 second to gather:
+ * 每 1 秒执行一次定时任务，采集：
  * <ul>
- *   <li>Active Agent count from {@link TaskScheduler}</li>
- *   <li>Total Token consumption from {@link CgroupManager}</li>
- *   <li>ZRAM compression ratio estimation</li>
+ *   <li>活跃 Agent 数量（来自 {@link TaskScheduler}）</li>
+ *   <li>总 Token 消耗量（来自 {@link CgroupManager}）</li>
+ *   <li>ZRAM 压缩比估算</li>
  * </ul>
- * The resulting JSON is broadcast as a {@code system_metrics} event,
- * allowing any SSE-connected dashboard to render real-time telemetry.
+ * 结果以 JSON 格式广播为 {@code system_metrics} 事件，
+ * 允许任何 SSE 连接的大屏渲染实时遥测。
+ * <p>
+ * OS 类比: Linux 的 vmstat/iostat 守护进程 + perf 采样。
  */
 public final class SystemMonitorDaemon {
 
@@ -128,8 +131,8 @@ public final class SystemMonitorDaemon {
             // 4. Build JSON payload
             String json = buildMetricsJson(activeAgents, totalTokensConsumed, totalTokensQuota, zramCompression);
 
-            // 5. Broadcast via EventBus
-            EventBus.instance().broadcast("system_metrics", json);
+            // 5. Broadcast via EventBus — 主题名 sys.telemetry.metrics，前端直接消费
+            EventBus.instance().broadcast("sys.telemetry.metrics", json);
 
             // 6. Log to ETW
             SemanticEtw.getInstance().logEvent("MONITOR", "HEARTBEAT",
@@ -146,7 +149,53 @@ public final class SystemMonitorDaemon {
 
     private String buildMetricsJson(int activeAgents, long totalTokensConsumed,
                                      long totalTokensQuota, String zramCompression) {
-        return "{\"active_agents\":" + activeAgents
+        // 构建进程列表
+        StringBuilder processesJson = new StringBuilder("[");
+        if (taskScheduler != null) {
+            boolean first = true;
+            for (Map.Entry<Integer, AgentTask> entry : taskScheduler.activeTasks().entrySet()) {
+                if (!first) processesJson.append(",");
+                AgentTask t = entry.getValue();
+                String statusStr = switch (t.status()) {
+                    case RUNNING -> "Running";
+                    case READY -> "Sleeping";
+                    case BLOCKED -> "Blocked";
+                    case CRASHED -> "Crashed";
+                    case KILLED, OOM_KILLED, DEADLINE_EXCEEDED -> "Killed";
+                };
+                String sandboxType = t.cgroup() != null && t.cgroup().contains("wasm") ? "Wasm" : "Docker";
+                // CPU 估算：基于 cgroup 消耗占比
+                int cpuPct = 0;
+                CgroupNode agentCgroup = CgroupManager.instance().getOrCreateAgentCgroup(t.pid());
+                if (agentCgroup != null && agentCgroup.tokenQuota() > 0) {
+                    cpuPct = (int) (agentCgroup.tokenConsumed() * 100 / agentCgroup.tokenQuota());
+                }
+                long ram = agentCgroup != null ? agentCgroup.tokenConsumed() : 0;
+                processesJson.append("{\"pid\":").append(t.pid())
+                        .append(",\"agentName\":\"").append(t.cgroup() != null ? t.cgroup() : "agent-" + t.pid()).append("\"")
+                        .append(",\"sandboxType\":\"").append(sandboxType).append("\"")
+                        .append(",\"status\":\"").append(statusStr).append("\"")
+                        .append(",\"cpu\":").append(cpuPct)
+                        .append(",\"ram\":").append(ram)
+                        .append("}");
+                first = false;
+            }
+        }
+        processesJson.append("]");
+
+        // CPU 使用率估算
+        int cpuUsage = 0;
+        if (totalTokensQuota > 0) {
+            cpuUsage = (int) (totalTokensConsumed * 100 / totalTokensQuota);
+        }
+        int ramUsage = cpuUsage; // 简化：RAM 使用率与 Token 使用率成正比
+
+        return "{\"type\":\"SYS_METRICS\""
+                + ",\"cpuUsage\":" + cpuUsage
+                + ",\"ramUsage\":" + ramUsage
+                + ",\"activeProcesses\":" + activeAgents
+                + ",\"processes\":" + processesJson
+                + ",\"active_agents\":" + activeAgents
                 + ",\"total_tokens\":" + totalTokensConsumed
                 + ",\"total_quota\":" + totalTokensQuota
                 + ",\"zram_compression\":\"" + zramCompression + "\""

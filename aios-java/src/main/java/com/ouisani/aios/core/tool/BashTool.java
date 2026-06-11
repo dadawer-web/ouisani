@@ -26,9 +26,6 @@ public class BashTool implements Tool<BashTool.Input> {
 
     public record Input(String command, int timeoutSeconds) implements ToolInput {
         public Input {
-            if (command == null || command.isBlank()) {
-                throw new IllegalArgumentException("command must not be empty");
-            }
             if (timeoutSeconds <= 0) timeoutSeconds = DEFAULT_TIMEOUT_SECONDS;
         }
 
@@ -37,7 +34,7 @@ public class BashTool implements Tool<BashTool.Input> {
         }
 
         @Override public String toJson() {
-            return "{\"command\":\"" + command.replace("\"", "\\\"") + "\",\"timeout\":" + timeoutSeconds + "}";
+            return "{\"command\":\"" + (command == null ? "" : command.replace("\"", "\\\"")) + "\",\"timeout\":" + timeoutSeconds + "}";
         }
     }
 
@@ -53,12 +50,24 @@ public class BashTool implements Tool<BashTool.Input> {
 
     @Override
     public ToolOutput call(Input input, ToolContext context) {
+        // ── 入参防御：绝不允许空命令默不作声地死掉 ──
+        if (input.command() == null || input.command().isBlank()) {
+            String errorMsg = "ERROR: Invalid tool call format. The 'command' parameter must not be empty. "
+                    + "Please retry with standard format: <tool_call><function=bash><parameter=command>your_command_here</parameter></function=bash></tool_call>";
+            System.err.println("[BashTool] Rejected empty command — feeding error back to LLM for self-correction");
+            return ToolOutput.fail(errorMsg);
+        }
+
         try {
             ProcessBuilder pb = new ProcessBuilder("bash", "-c", input.command());
             if (context.workingDir() != null) {
                 pb.directory(new java.io.File(context.workingDir()));
             }
             pb.redirectErrorStream(true);
+            // 强制非交互模式 — 防止 sudo/apt 等命令等待用户输入导致死锁
+            pb.environment().put("DEBIAN_FRONTEND", "noninteractive");
+            pb.environment().put("APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE", "1");
+            pb.environment().put("PIP_NO_INPUT", "1");
 
             Process process = pb.start();
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { AIOS_WS_URL, AIOS_API_URL } from "./config";
 import {
   ReactFlow,
   Background,
@@ -10,12 +11,15 @@ import {
   type OnNodesChange,
   type OnEdgesChange,
 } from "@xyflow/react";
-import { CheckCircle2, AlertCircle, X, AlertTriangle, Code, Monitor } from "lucide-react";
+import { CheckCircle2, AlertCircle, X, AlertTriangle, Code, Monitor, Eye, EyeOff } from "lucide-react";
 import "@xyflow/react/dist/style.css";
 
 import AgentNode from "@/components/AgentNode";
 import Sidebar from "@/components/Sidebar";
+import KernelStatusBar from "@/components/KernelStatusBar";
+import KernelMonitor from "@/components/KernelMonitor";
 import { useWorkflowStore } from "@/store/workflowStore";
+import { useSystemStore } from "@/store/systemStore";
 
 const nodeTypes = { agentNode: AgentNode };
 
@@ -33,6 +37,9 @@ export default function App() {
   const setControlWs = useWorkflowStore((s) => s.setControlWs);
 
   const [debugCode, setDebugCode] = useState<string | null>(null);
+
+  // ── 上帝视角：内核监控抽屉开关 ──
+  const [isMonitorOpen, setIsMonitorOpen] = useState(false);
 
   // ── 全息视界：UI Sandbox 渲染状态 ──
   const [htmlPayload, setHtmlPayload] = useState<string>(
@@ -55,7 +62,7 @@ export default function App() {
 
   // ── WebSocket: 监听内核自愈告警 + UI_RENDER 渲染信号 ──
   useEffect(() => {
-    const ws = new WebSocket("ws://localhost:8080/api/dashboard/alerts?token=AIOS-SUPER-SECRET-KEY");
+    const ws = new WebSocket(`${AIOS_WS_URL}/api/dashboard/alerts?token=AIOS-SUPER-SECRET-KEY`);
 
     ws.onopen = () => {
       console.log("[AIOS] Dashboard alert WebSocket connected");
@@ -94,7 +101,7 @@ export default function App() {
 
   // ── WebSocket: God Hand 控制通道（热补丁参数） ──
   useEffect(() => {
-    const ws = new WebSocket("ws://localhost:8080/api/workflow/control?token=AIOS-SUPER-SECRET-KEY");
+    const ws = new WebSocket(`${AIOS_WS_URL}/api/workflow/control?token=AIOS-SUPER-SECRET-KEY`);
 
     ws.onopen = () => {
       console.log("[AIOS] God Hand control WebSocket connected");
@@ -116,12 +123,17 @@ export default function App() {
     };
   }, [setControlWs]);
 
+  // ── 连接内核监控流 ──
+  useEffect(() => {
+    useSystemStore.getState().connectKernel();
+  }, []);
+
   // ── 查看现场：从 VFS 读取节点代码 ──
   const handleOpenDebugView = async () => {
     const nodeId = systemAlert.nodeId;
     try {
       const response = await fetch(
-        `http://localhost:8080/api/vfs/read?path=/factory/${nodeId}.py&token=AIOS-SUPER-SECRET-KEY`
+        `${AIOS_API_URL}/api/vfs/read?path=/factory/${nodeId}.py&token=AIOS-SUPER-SECRET-KEY`
       );
       if (response.ok) {
         const text = await response.text();
@@ -135,9 +147,14 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#0a0a0f]">
-      {/* 左侧边栏 */}
-      <Sidebar />
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#0a0a0f]">
+      {/* 顶部内核状态栏 */}
+      <KernelStatusBar />
+
+      {/* 主内容区 */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* 左侧边栏 */}
+        <Sidebar />
 
       {/* 中间：React Flow 画布 */}
       <div className="relative flex-1">
@@ -173,7 +190,7 @@ export default function App() {
       </div>
 
       {/* ════════════════════════════════════════════════════════════════
-          右侧：全息视界 (UI Sandbox) — 实时渲染智能体前端代码
+          右侧：全息视界 (Agent UI Sandbox)
          ════════════════════════════════════════════════════════════════ */}
       <div className="flex w-96 flex-col border-l border-cyan-500/20 bg-[#080810]/95">
         {/* 标题栏 */}
@@ -203,6 +220,57 @@ export default function App() {
           <span className="text-[9px] font-medium tracking-wider text-zinc-500 uppercase">
             Listening for UI_RENDER signals
           </span>
+        </div>
+      </div>
+
+      {/* ════════════════════════════════════════════════════════════════
+          悬浮按钮：上帝视角开关
+         ════════════════════════════════════════════════════════════════ */}
+      <button
+        onClick={() => setIsMonitorOpen((v) => !v)}
+        className={`fixed bottom-6 right-[26rem] z-40 flex items-center gap-2 rounded-full border px-4 py-2.5 font-mono text-[10px] font-bold uppercase tracking-widest shadow-2xl backdrop-blur-md transition-all duration-300 ${
+          isMonitorOpen
+            ? "border-emerald-500/40 bg-emerald-950/80 text-emerald-300 shadow-[0_0_20px_rgba(52,211,153,0.3)]"
+            : "border-cyan-500/30 bg-[#0a0a1a]/90 text-cyan-400 shadow-[0_0_15px_rgba(0,255,255,0.15)] hover:border-cyan-400/50 hover:shadow-[0_0_25px_rgba(0,255,255,0.25)]"
+        }`}
+      >
+        {isMonitorOpen ? (
+          <EyeOff className="h-3.5 w-3.5" />
+        ) : (
+          <Eye className="h-3.5 w-3.5" />
+        )}
+        {isMonitorOpen ? "Close God's Eye" : "God's Eye"}
+      </button>
+
+      {/* ════════════════════════════════════════════════════════════════
+          底部抽屉：内核监控大屏 — 从底部滑出，占 40% 高度
+         ════════════════════════════════════════════════════════════════ */}
+      <div
+        className={`fixed inset-x-0 bottom-0 z-30 transition-transform duration-500 ease-out ${
+          isMonitorOpen ? "translate-y-0" : "translate-y-full"
+        }`}
+        style={{ height: "40vh" }}
+      >
+        {/* 顶部拖拽条 + 关闭按钮 */}
+        <div className="flex items-center justify-between border-t border-emerald-500/30 bg-emerald-950/40 px-4 py-1.5 backdrop-blur-md">
+          <div className="flex items-center gap-2">
+            <div className="h-1 w-8 rounded-full bg-emerald-500/30" />
+          </div>
+          <span className="text-[9px] font-bold uppercase tracking-[0.3em] text-emerald-400/60">
+            Kernel Monitor — God's Eye
+          </span>
+          <button
+            onClick={() => setIsMonitorOpen(false)}
+            className="rounded p-1 text-emerald-500/40 transition-colors hover:bg-emerald-900/30 hover:text-emerald-300"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        {/* 监控面板主体 */}
+        <div className="h-[calc(100%-2rem)] border-t border-emerald-500/20 bg-[#050510]/95 backdrop-blur-xl"
+             style={{ boxShadow: "0 -10px 40px rgba(0,255,0,0.05)" }}>
+          <KernelMonitor />
         </div>
       </div>
 
@@ -303,6 +371,7 @@ export default function App() {
           </div>
         </div>
       )}
+      </div>{/* 主内容区 */}
     </div>
   );
 }

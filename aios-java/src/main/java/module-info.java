@@ -11,6 +11,8 @@ module com.ouisani.aios {
     exports com.ouisani.aios.core.cache;
     exports com.ouisani.aios.core.cache.eviction;
     exports com.ouisani.aios.core.cgroup;
+    exports com.ouisani.aios.drivers.llm;
+    exports com.ouisani.aios.drivers.memory;
     exports com.ouisani.aios.core.cluster;
     exports com.ouisani.aios.core.compact;
     exports com.ouisani.aios.core.config;
@@ -33,7 +35,7 @@ module com.ouisani.aios {
     exports com.ouisani.aios.core.remote;
     exports com.ouisani.aios.core.rtos;
     exports com.ouisani.aios.core.sandbox;
-    exports com.ouisani.aios.core.sandbox.rpa;
+    // core.sandbox.rpa 已迁移至 user.bridge.rpa（物理级沙箱逃逸后门降级）
     exports com.ouisani.aios.core.security;
     exports com.ouisani.aios.core.skill;
     exports com.ouisani.aios.core.snapshot;
@@ -49,7 +51,9 @@ module com.ouisani.aios {
     exports com.ouisani.aios.core.vfs;
     exports com.ouisani.aios.user;
     exports com.ouisani.aios.user.apps.omnifactory;
+    exports com.ouisani.aios.user.apps.omnifactory.tools;
     exports com.ouisani.aios.user.bin;
+    exports com.ouisani.aios.user.bridge.rpa;
     exports com.ouisani.aios.user.cli;
     exports com.ouisani.aios.user.container;
     exports com.ouisani.aios.user.init;
@@ -82,7 +86,7 @@ module com.ouisani.aios {
     opens com.ouisani.aios.core.remote;
     opens com.ouisani.aios.core.rtos;
     opens com.ouisani.aios.core.sandbox;
-    opens com.ouisani.aios.core.sandbox.rpa;
+    // opens com.ouisani.aios.core.sandbox.rpa; // 已迁移至 user.bridge.rpa
     opens com.ouisani.aios.core.security;
     opens com.ouisani.aios.core.skill;
     opens com.ouisani.aios.core.snapshot;

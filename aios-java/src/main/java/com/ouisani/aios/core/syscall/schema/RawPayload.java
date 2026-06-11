@@ -4,14 +4,14 @@ import java.util.Collections;
 import java.util.Map;
 
 /**
- * Raw/legacy payload — wraps an untyped {@code Map<String, Object>} for
- * namespaces that have not yet been migrated to a strongly-typed schema.
+ * 原始/遗留载荷 — 包装无类型 {@code Map<String, Object>}，用于尚未迁移到强类型 schema 的命名空间。
  * <p>
- * This exists for backward compatibility with existing syscalls (vfs, handle,
- * coreutils, apt, bin) during the transition period. New code should prefer
- * the typed payloads ({@link LlmPayload}, {@link MemoryPayload}, etc.).
+ * 此类在过渡期间为现有 syscall（vfs、handle、coreutils、apt、bin）提供向后兼容。
+ * 新代码应优先使用类型化载荷（{@link LlmPayload}、{@link MemoryPayload} 等）。
+ * <p>
+ * OS 类比: 旧版 ioctl 的 void* 参数——能用但不安全，最终应被淘汰。
  *
- * @param parameters the raw key-value parameters
+ * @param parameters 原始键值参数
  */
 public record RawPayload(
         Map<String, Object> parameters

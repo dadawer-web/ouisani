@@ -1,6 +1,7 @@
-package com.ouisani.aios.core.tool;
+package com.ouisani.aios.user.apps.omnifactory.tools;
 
 import com.ouisani.aios.core.VfsManager;
+import com.ouisani.aios.core.tool.*;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -14,16 +15,11 @@ import java.util.Map;
 /**
  * Notebook 编辑工具 — 编辑 Jupyter Notebook 单元格。
  * <p>
+ * 已从内核空间 (core.tool) 迁移至用户空间 (omnifactory.tools)。
+ * 此工具属于母体的高级认知能力，不属于内核系统调用。
+ * <p>
  * 通过 VFS 读取 .ipynb 文件（JSON 格式），解析后对单元格执行
  * 替换、插入、删除操作，再写回 VFS。
- * <p>
- * 支持三种编辑模式：
- * - replace：替换指定单元格的内容和/或类型
- * - insert：在指定位置插入新单元格
- * - delete：删除指定单元格
- * <p>
- * OS 类比：相当于对 /proc/notebook 的 ioctl 操作 — 精确控制
- * Notebook 文件的内部结构，而非粗暴地整体覆写。
  */
 public class NotebookEditTool implements Tool<NotebookEditTool.Input> {
 
@@ -259,10 +255,6 @@ public class NotebookEditTool implements Tool<NotebookEditTool.Input> {
 
     /**
      * 根据 cell_id 查找单元格在数组中的索引。
-     *
-     * @param cells  单元格数组
-     * @param cellId 目标单元格 ID
-     * @return 索引位置，未找到返回 -1
      */
     private int findCellIndex(ArrayNode cells, String cellId) {
         for (int i = 0; i < cells.size(); i++) {
@@ -277,12 +269,6 @@ public class NotebookEditTool implements Tool<NotebookEditTool.Input> {
 
     /**
      * 将修改后的 Notebook 写回 VFS。
-     *
-     * @param vfs          VFS 管理器
-     * @param path         Notebook 路径
-     * @param nbRoot       修改后的 Notebook JSON 根节点
-     * @param successMsg   成功消息
-     * @return 工具输出结果
      */
     private ToolOutput writeBack(VfsManager vfs, String path, ObjectNode nbRoot, String successMsg) {
         try {

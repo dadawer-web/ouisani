@@ -10,6 +10,22 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 
+/**
+ * MCP 协议服务器 — AIOS 内核的 Model Context Protocol 实现。
+ * <p>
+ * 提供标准 MCP 接口，允许外部 AI 客户端通过 JSON-RPC 2.0 协议
+ * 访问 AIOS 内核能力，包括：
+ * <ul>
+ *   <li>VFS 资源读写（resources/list, resources/read）</li>
+ *   <li>WASM 沙箱执行（tools/call: execute_wasm_sandbox）</li>
+ *   <li>VFS 节点操作（tools/call: vfs_read, vfs_write）</li>
+ * </ul>
+ * <p>
+ * OS 类比: 内核的 /proc 和 /dev 接口——外部程序通过标准协议访问内核状态。
+ *
+ * @see McpRequest
+ * @see McpResponse
+ */
 public class McpServer {
 
     private static final Logger log = LoggerFactory.getLogger(McpServer.class);

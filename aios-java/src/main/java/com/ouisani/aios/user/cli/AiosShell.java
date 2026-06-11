@@ -5,7 +5,9 @@ import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.cgroup.CgroupManager;
 import com.ouisani.aios.core.llm.LlmRouter;
-import com.ouisani.aios.core.llm.OpenAiAdapter;
+import com.ouisani.aios.core.mcp.McpServer;
+import com.ouisani.aios.core.network.SyscallServer;
+import com.ouisani.aios.drivers.llm.OpenAiAdapter;
 import com.ouisani.aios.core.security.ObjectManager;
 import com.ouisani.aios.core.syscall.SyscallDispatcher;
 import com.ouisani.aios.core.syscall.SyscallRequest;
@@ -268,7 +270,9 @@ public class AiosShell extends AbstractAgent {
         // 1. TaskScheduler
         TaskScheduler scheduler = new TaskScheduler();
         scheduler.start();
+        com.ouisani.aios.user.bin.AiosAppManager.configure(scheduler);
         System.out.println("  ✓ TaskScheduler started");
+        System.out.println("  ✓ [InitDaemon] AiosAppManager explicitly configured with TaskScheduler.");
 
         // 2. LLM Router
         LlmRouter llmRouter = new LlmRouter();
@@ -286,6 +290,15 @@ public class AiosShell extends AbstractAgent {
             System.out.println("  ⚠ No OPENAI_API_KEY — LLM unavailable");
         }
 
+        // 2.5 WebSearchTool — 注入 Serper API Key
+        String serperKey = env.getOrDefault("SERPER_API_KEY", System.getenv().getOrDefault("SERPER_API_KEY", ""));
+        if (!serperKey.isBlank()) {
+            com.ouisani.aios.core.plugin.WebSearchTool.configureSerperApiKey(serperKey);
+            System.out.println("  ✓ WebSearch: Serper API configured");
+        } else {
+            System.out.println("  ⚠ No SERPER_API_KEY — web search will try Jina (may timeout in China)");
+        }
+
         // 3. VfsManager
         VfsManager.instance().configureTaskScheduler(scheduler);
         VfsManager.instance().init();
@@ -301,6 +314,18 @@ public class AiosShell extends AbstractAgent {
             IntentRouter.getInstance().configure(llmRouter, SyscallDispatcher.getInstance());
             System.out.println("  ✓ SyscallDispatcher + IntentRouter configured");
         }
+
+        // 6. SyscallServer (HTTP/WebSocket 网关 — 前端连接端口 8080)
+        int httpPort = Integer.parseInt(env.getOrDefault("AIOS_HTTP_PORT", "8080"));
+        McpServer mcpServer = new McpServer();
+        SyscallServer syscallServer = new SyscallServer(scheduler, mcpServer);
+        syscallServer.start(httpPort);
+        System.out.printf("  ✓ SyscallServer started on port %d (HTTP + WebSocket + SSE)%n", httpPort);
+
+        // 7. SystemMonitorDaemon (遥测心跳 — 每秒采集系统指标)
+        com.ouisani.aios.core.telemetry.SystemMonitorDaemon.getInstance().configure(scheduler);
+        com.ouisani.aios.core.telemetry.SystemMonitorDaemon.getInstance().start();
+        System.out.println("  ✓ SystemMonitorDaemon started (1s telemetry interval)");
 
         System.out.println();
         System.out.println("Welcome to AIOS. Type your intent naturally, or use '/' for raw syscalls.");

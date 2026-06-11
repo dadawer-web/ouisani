@@ -7,16 +7,17 @@ import com.ouisani.aios.core.syscall.schema.SyscallPayload;
 import java.util.Map;
 
 /**
- * A strongly-typed system call request — the sole legal credential
- * for an Agent to interact with the AIOS kernel.
+ * 系统调用请求 — Agent 与 AIOS 内核交互的唯一合法凭证。
  * <p>
- * Follows the POSIX convention of {@code namespace.action} for syscall
- * identification, with a strongly-typed {@link SyscallPayload} replacing
- * the former untyped {@code Map<String, Object>}.
+ * 遵循 POSIX 的 {@code namespace.action} 约定进行 syscall 标识，
+ * 使用强类型 {@link SyscallPayload} 替代了原先的无类型 {@code Map<String, Object>}。
+ * <p>
+ * OS 类比: Linux 的 syscall(number, args...)，namespace.action 等同于 syscall 编号，
+ * payload 等同于 syscall 参数结构体。
  *
- * @param namespace the syscall namespace (e.g. "llm", "memory", "storage", "tool", "vfs")
- * @param action    the action within the namespace (e.g. "think", "store", "read")
- * @param payload   the strongly-typed syscall payload
+ * @param namespace syscall 命名空间（如 "llm"、"memory"、"storage"、"tool"、"vfs"）
+ * @param action    命名空间内的操作（如 "think"、"store"、"read"）
+ * @param payload   强类型 syscall 载荷
  */
 public record SyscallRequest(
         String namespace,

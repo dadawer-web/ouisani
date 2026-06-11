@@ -148,6 +148,19 @@ public class LlmRouter implements LlmProvider {
         try {
             String result = provider.think(prompt, systemPrompt);
 
+            // ── 安全断言：绝不允许空响应穿透 ──
+            if (result == null || result.isBlank()) {
+                log.error("[LLM Router] FATAL: Provider '{}' returned null/blank response! core={}, backend={}",
+                        provider.name(), decision.targetCore, decision.backendName);
+                if (decision.targetCore == ComputeCore.E_CORE) {
+                    log.warn("[LLM Router] E_CORE returned empty, forcing Turbo Boost to P_CORE");
+                    return turboBoost(prompt, systemPrompt, decision, null);
+                }
+                // P_CORE 也返回空 — 致命错误，绝不允许系统带着空智能体代码往下走
+                throw new RuntimeException("Turbo Boost returned empty payload: P_CORE provider '"
+                        + provider.name() + "' returned null/blank response");
+            }
+
             // 检测是否需要 Turbo Boost（E_CORE 返回质量不足时拉升）
             if (decision.targetCore == ComputeCore.E_CORE && needsTurboBoost(result)) {
                 return turboBoost(prompt, systemPrompt, decision, result);
@@ -155,7 +168,11 @@ public class LlmRouter implements LlmProvider {
 
             return result;
 
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
+            // 空响应断言抛出的 RuntimeException 必须穿透，不能被 Turbo Boost 吞掉
+            if (e.getMessage() != null && e.getMessage().startsWith("Turbo Boost returned empty payload")) {
+                throw e;
+            }
             // E_CORE 失败时自动 Turbo Boost 到 P_CORE
             if (decision.targetCore == ComputeCore.E_CORE) {
                 log.warn("[LLM Router] E_CORE failed, Turbo Boost to P_CORE: {}", e.getMessage());
@@ -184,7 +201,25 @@ public class LlmRouter implements LlmProvider {
         log.info("[LLM Router] Route history: messages={}, core={}, backend={}",
                 messages.size(), decision.targetCore, decision.backendName);
 
-        return provider.thinkWithHistory(messages, systemPrompt);
+        String result = provider.thinkWithHistory(messages, systemPrompt);
+
+        // ── 安全断言：绝不允许空响应穿透 ──
+        if (result == null || result.isBlank()) {
+            log.error("[LLM Router] FATAL: thinkWithHistory returned null/blank! provider={}, core={}",
+                    provider.name(), decision.targetCore);
+            if (decision.targetCore == ComputeCore.E_CORE) {
+                LlmProvider pCoreProvider = firstAvailable(ComputeCore.P_CORE);
+                if (pCoreProvider != null) {
+                    log.warn("[LLM Router] E_CORE thinkWithHistory empty, Turbo Boost to P_CORE");
+                    String pCoreResult = pCoreProvider.thinkWithHistory(messages, systemPrompt);
+                    if (pCoreResult != null && !pCoreResult.isBlank()) return pCoreResult;
+                }
+            }
+            throw new RuntimeException("Turbo Boost returned empty payload: thinkWithHistory provider '"
+                    + provider.name() + "' returned null/blank response");
+        }
+
+        return result;
     }
 
     @Override
@@ -377,13 +412,19 @@ public class LlmRouter implements LlmProvider {
         // 查找 P_CORE Provider
         LlmProvider pCoreProvider = firstAvailable(ComputeCore.P_CORE);
         if (pCoreProvider != null) {
-            return pCoreProvider.think(prompt, systemPrompt);
+            String pCoreResult = pCoreProvider.think(prompt, systemPrompt);
+            // ── 安全断言：P_CORE 也不允许返回空 ──
+            if (pCoreResult == null || pCoreResult.isBlank()) {
+                throw new RuntimeException("Turbo Boost returned empty payload: P_CORE provider '"
+                        + pCoreProvider.name() + "' returned null/blank response after Turbo Boost");
+            }
+            return pCoreResult;
         }
 
-        // 无 P_CORE 可用，返回 E_CORE 结果（如果有）
-        if (eCoreResult != null) return eCoreResult;
+        // 无 P_CORE 可用，检查 E_CORE 结果
+        if (eCoreResult != null && !eCoreResult.isBlank()) return eCoreResult;
 
-        throw new RuntimeException("Turbo Boost failed: no P_CORE provider available");
+        throw new RuntimeException("Turbo Boost failed: no P_CORE provider available and E_CORE result is empty");
     }
 
     /**

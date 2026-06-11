@@ -13,6 +13,18 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * 追踪管理器 — AIOS 的 strace/ftrace 内核追踪子系统。
+ * <p>
+ * 类比 Linux 的 strace（系统调用追踪）和 ftrace（内核函数追踪）：
+ * TraceManager 记录 Agent 执行过程中的关键事件（系统调用、信号、上下文切换等），
+ * 生成结构化的追踪磁带（trace tape），用于事后分析和调试。
+ * <p>
+ * 追踪数据以 JSON 格式持久化到 {@code /tmp/aios_trace} 目录，
+ * 每个追踪会话生成一个独立的磁带文件。
+ *
+ * @see com.ouisani.aios.core.telemetry.SemanticEtw
+ */
 public final class TraceManager {
 
     private static final Logger log = LoggerFactory.getLogger(TraceManager.class);

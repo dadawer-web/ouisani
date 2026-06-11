@@ -16,30 +16,29 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Dynamic Tool Registration Center — the AIOS kernel's module loader.
+ * 插件管理器 — AIOS 内核的模块加载器（insmod/rmmod/modprobe）。
  * <p>
- * Manages the lifecycle of loadable tool modules (kernel modules),
- * supporting three sources:
+ * 类比 Linux 的内核模块管理器：管理可加载工具模块的生命周期，
+ * 支持三种来源：
  * <ul>
- *   <li><b>WASM plugins</b> — local bytecode loaded via {@code insmod}</li>
- *   <li><b>MCP server tools</b> — remote tools discovered via JSON-RPC</li>
- *   <li><b>Native tools</b> — built-in kernel syscalls (always available)</li>
+ *   <li><b>WASM 插件</b> — 通过 {@code insmod} 加载的本地字节码</li>
+ *   <li><b>MCP 服务端工具</b> — 通过 JSON-RPC 发现的远程工具</li>
+ *   <li><b>原生工具</b> — 内核内置系统调用（始终可用）</li>
  * </ul>
- * <p>
- * <h3>OS Analogy: insmod / rmmod / modprobe</h3>
+ *
+ * <h3>OS 类比：insmod / rmmod / modprobe</h3>
  * <ul>
- *   <li>{@code sys_insmod(query)} → {@code modprobe}: semantic search for a tool
- *       and load it into the Agent's context (like loading a kernel module)</li>
- *   <li>{@code sys_rmmod(toolName)} → {@code rmmod}: unload a tool from the
- *       Agent's context to free token budget (like unloading a module)</li>
- *   <li>{@code semanticSearch(query)} → {@code modprobe -l}: fuzzy semantic
- *       matching across all available tools (like listing available modules)</li>
+ *   <li>{@code sys_insmod(query)} → {@code modprobe}：语义搜索工具并加载到 Agent 上下文
+ *       （类比加载内核模块）</li>
+ *   <li>{@code sys_rmmod(toolName)} → {@code rmmod}：从 Agent 上下文卸载工具以释放 Token 预算
+ *       （类比卸载内核模块）</li>
+ *   <li>{@code semanticSearch(query)} → {@code modprobe -l}：跨所有可用工具的模糊语义匹配
+ *       （类比列出可用模块）</li>
  * </ul>
- * <p>
- * <h3>Token Economy</h3>
- * Each loaded tool consumes tokens in the LLM's context window.
- * The {@code insmod/rmmod} mechanism enables Agents to load tools
- * on demand and unload them when done — "按需加载、用完即弃".
+ *
+ * <h3>Token 经济学</h3>
+ * 每个已加载的工具消耗 LLM 上下文窗口中的 Token。
+ * {@code insmod/rmmod} 机制使 Agent 能够按需加载工具、用完即弃。
  *
  * @see ToolDefinition
  * @see AgentToolContext

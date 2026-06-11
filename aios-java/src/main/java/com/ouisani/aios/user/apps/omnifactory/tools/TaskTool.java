@@ -1,9 +1,10 @@
-package com.ouisani.aios.core.tool;
+package com.ouisani.aios.user.apps.omnifactory.tools;
 
 import com.ouisani.aios.core.task.AiosTask;
 import com.ouisani.aios.core.task.TaskRegistry;
 import com.ouisani.aios.core.task.TaskScheduler;
 import com.ouisani.aios.core.task.TaskStatus;
+import com.ouisani.aios.core.tool.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,6 +15,9 @@ import java.util.stream.Collectors;
  * 任务管理工具 — 对标 Claude Code 的 TaskCreateTool / TaskGetTool / TaskListTool /
  * TaskOutputTool / TaskStopTool / TaskUpdateTool，统一合并为一个工具。
  * <p>
+ * 已从内核空间 (core.tool) 迁移至用户空间 (omnifactory.tools)。
+ * 此工具属于母体的高级认知能力，不属于内核系统调用。
+ * <p>
  * 通过 action 字段区分六种操作：
  * - CREATE：创建后台任务，返回任务 ID
  * - GET：按 ID 查询任务状态
@@ -21,8 +25,6 @@ import java.util.stream.Collectors;
  * - OUTPUT：获取任务输出/结果
  * - STOP：终止运行中的任务
  * - UPDATE：更新任务描述/状态
- * <p>
- * OS 类比：相当于 Linux 的 kill / ps / wait 等进程管理命令的统一入口。
  */
 public class TaskTool implements Tool<TaskTool.Input> {
 
@@ -35,12 +37,6 @@ public class TaskTool implements Tool<TaskTool.Input> {
 
     /**
      * 任务工具输入 — 通过 action 字段路由到不同操作。
-     *
-     * @param action      操作类型（必填）
-     * @param taskId      任务 ID（GET/OUTPUT/STOP/UPDATE 时必填）
-     * @param description 任务描述（CREATE 时可选，UPDATE 时用于更新描述）
-     * @param prompt      任务提示词（CREATE 时必填）
-     * @param status      目标状态（UPDATE 时可选，用于标记任务状态）
      */
     public record Input(
             Action action,
@@ -107,11 +103,6 @@ public class TaskTool implements Tool<TaskTool.Input> {
         };
     }
 
-    /**
-     * CREATE：创建后台任务。
-     * <p>
-     * 通过 TaskScheduler 提交一个沙箱化的 Agent 任务，返回任务 ID。
-     */
     private ToolOutput handleCreate(Input input, ToolContext context) {
         if (input.prompt().isBlank()) {
             return ToolOutput.fail("CREATE 操作需要提供 prompt 参数");
@@ -120,7 +111,6 @@ public class TaskTool implements Tool<TaskTool.Input> {
         String agentId = "task_" + System.currentTimeMillis();
         String description = input.description().isBlank() ? input.prompt() : input.description();
 
-        // 通过 TaskScheduler 提交沙箱化 Agent 任务
         TaskScheduler.SandboxAgentTask task = TaskScheduler.instance().submitAgentTask(
                 input.prompt(), agentId, context.workingDir(), context.sdk());
 
@@ -132,9 +122,6 @@ public class TaskTool implements Tool<TaskTool.Input> {
                 + "输出通道: sys.sandbox.agent." + task.taskId());
     }
 
-    /**
-     * GET：按 ID 查询任务状态。
-     */
     private ToolOutput handleGet(Input input) {
         if (input.taskId().isBlank()) {
             return ToolOutput.fail("GET 操作需要提供 taskId 参数");
@@ -150,9 +137,6 @@ public class TaskTool implements Tool<TaskTool.Input> {
                 .orElse(ToolOutput.fail("未找到任务: " + input.taskId()));
     }
 
-    /**
-     * LIST：列出所有任务。
-     */
     private ToolOutput handleList() {
         Collection<AiosTask> tasks = TaskRegistry.instance().all();
 
@@ -172,9 +156,6 @@ public class TaskTool implements Tool<TaskTool.Input> {
                 + TaskRegistry.instance().summary());
     }
 
-    /**
-     * OUTPUT：获取任务输出/结果。
-     */
     private ToolOutput handleOutput(Input input) {
         if (input.taskId().isBlank()) {
             return ToolOutput.fail("OUTPUT 操作需要提供 taskId 参数");
@@ -184,7 +165,6 @@ public class TaskTool implements Tool<TaskTool.Input> {
                 .map(task -> {
                     String result = task.result();
                     if (result == null || result.isBlank()) {
-                        // 任务尚未产生输出
                         if (task.status() == TaskStatus.RUNNING || task.status() == TaskStatus.PENDING) {
                             return ToolOutput.ok("任务 " + task.taskId() + " 尚未完成，当前状态: " + task.status());
                         }
@@ -195,9 +175,6 @@ public class TaskTool implements Tool<TaskTool.Input> {
                 .orElse(ToolOutput.fail("未找到任务: " + input.taskId()));
     }
 
-    /**
-     * STOP：终止运行中的任务。
-     */
     private ToolOutput handleStop(Input input) {
         if (input.taskId().isBlank()) {
             return ToolOutput.fail("STOP 操作需要提供 taskId 参数");
@@ -212,13 +189,6 @@ public class TaskTool implements Tool<TaskTool.Input> {
                 + "（任务不存在或已处于终态）");
     }
 
-    /**
-     * UPDATE：更新任务描述/状态。
-     * <p>
-     * 由于 AiosTask 接口的 description 和 status 不可变，
-     * UPDATE 操作仅记录日志并返回当前状态。未来可扩展为
-     * 支持可变任务元数据的更新。
-     */
     private ToolOutput handleUpdate(Input input) {
         if (input.taskId().isBlank()) {
             return ToolOutput.fail("UPDATE 操作需要提供 taskId 参数");
@@ -228,14 +198,12 @@ public class TaskTool implements Tool<TaskTool.Input> {
                 .map(task -> {
                     StringBuilder msg = new StringBuilder("任务更新 [" + task.taskId() + "]\n");
 
-                    // 更新描述（仅记录日志，AiosTask.description 不可变）
                     if (!input.description().isBlank()) {
                         log.info("[TaskTool] 更新任务描述: taskId={}, newDescription={}",
                                 task.taskId(), input.description());
                         msg.append("描述更新请求已记录: ").append(input.description()).append("\n");
                     }
 
-                    // 更新状态（仅记录日志，AiosTask.status 由内部状态机管理）
                     if (!input.status().isBlank()) {
                         log.info("[TaskTool] 更新任务状态请求: taskId={}, requestedStatus={}",
                                 task.taskId(), input.status());

@@ -4,13 +4,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * API Gateway Authentication Manager — simulated JWT verification.
+ * 认证管理器 — AIOS 的 PAM 认证子系统。
  * <p>
- * In production, this would integrate with a real OAuth2 / JWT provider.
- * For now, it validates against a shared secret to demonstrate the
- * gateway auth pattern.
- *
- * <h3>Token format:</h3>
+ * 类比 Linux 的 PAM (Pluggable Authentication Modules)：
+ * AuthManager 负责验证外部请求的身份凭证，决定是否允许访问内核系统调用。
+ * 当前实现使用共享密钥模拟 JWT 验证，生产环境应集成真实的 OAuth2/JWT 提供者。
+ * <p>
+ * Token 格式：
  * <ul>
  *   <li>Header: {@code Authorization: Bearer AIOS-SUPER-SECRET-KEY}</li>
  *   <li>WebSocket query: {@code ?token=AIOS-SUPER-SECRET-KEY}</li>

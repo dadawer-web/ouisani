@@ -1,14 +1,14 @@
 package com.ouisani.aios.core.syscall.schema;
 
 /**
- * LLM namespace payload — strongly-typed contract for all LLM syscalls.
+ * LLM 命名空间载荷 — 所有 LLM syscall 的强类型契约。
  * <p>
- * Analogous to POSIX's {@code struct aiocb} for async I/O control:
- * every field is explicit, typed, and validated at the kernel boundary.
+ * OS 类比: POSIX 的 {@code struct aiocb}（异步 I/O 控制块）——
+ * 每个字段都是显式的、类型化的、在内核边界经过校验的。
  *
- * @param prompt      the user prompt to send to the LLM
- * @param temperature sampling temperature (0.0 = deterministic, 1.0 = creative)
- * @param maxTokens   maximum number of tokens to generate
+ * @param prompt      发送给 LLM 的用户 prompt
+ * @param temperature 采样温度（0.0 = 确定性，1.0 = 创造性）
+ * @param maxTokens   最大生成 Token 数
  */
 public record LlmPayload(
         String prompt,

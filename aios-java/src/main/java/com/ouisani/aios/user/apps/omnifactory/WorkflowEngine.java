@@ -115,7 +115,7 @@ public class WorkflowEngine {
             }
 
             masterScript.append(envPrefix)
-                    .append("python /factory/").append(node.instanceId()).append(".py &\n");
+                    .append("python3 /factory/").append(node.instanceId()).append(".py &\n");
         }
         masterScript.append("wait\n");
 

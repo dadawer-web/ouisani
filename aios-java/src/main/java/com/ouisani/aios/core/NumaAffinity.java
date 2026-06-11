@@ -1,18 +1,16 @@
 package com.ouisani.aios.core;
 
 /**
- * NUMA affinity policy for AIOS Agent scheduling.
+ * NUMA 亲和性策略 — AIOS Agent 调度的 NUMA 节点绑定策略。
  * <p>
- * Controls whether an agent's LLM requests may be routed to remote
- * (expensive/slow) model nodes or must stay on local (cheap/fast) nodes.
- *
+ * 控制 Agent 的 LLM 请求是否可以路由到远程（昂贵/慢速）模型节点，
+ * 还是必须留在本地（廉价/快速）节点上。
+ * <p>
+ * OS 类比: Linux 的 numactl --preferred/--interleave 策略。
  * <ul>
- *   <li>{@link #LOCAL_ONLY} — Only the local/cheap model is allowed.
- *       No cross-node traffic regardless of prompt complexity.</li>
- *   <li>{@link #PREFER_LOCAL} — Prefer the local model; route to remote
- *       only when the prompt exceeds the smart threshold.</li>
- *   <li>{@link #ANY} — Allow cross-node routing to the remote model,
- *       subject to budget constraints.</li>
+ *   <li>{@link #LOCAL_ONLY} — 只允许本地/廉价模型，无论 prompt 复杂度如何都不跨节点。</li>
+ *   <li>{@link #PREFER_LOCAL} — 优先本地模型；仅当 prompt 超过智能阈值时路由到远程。</li>
+ *   <li>{@link #ANY} — 允许跨节点路由到远程模型，受预算约束。</li>
  * </ul>
  */
 public enum NumaAffinity {

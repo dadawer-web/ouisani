@@ -11,7 +11,9 @@ import com.ouisani.aios.core.plugin.AgentToolContext;
 import com.ouisani.aios.core.plugin.PluginManager;
 import com.ouisani.aios.core.plugin.ToolDefinition;
 import com.ouisani.aios.core.sandbox.DockerSandboxProvider;
-import com.ouisani.aios.core.sandbox.rpa.HostRpaManager;
+import com.ouisani.aios.user.bridge.rpa.HostRpaManager;
+import com.ouisani.aios.user.bridge.rpa.SecurityToken;
+import com.ouisani.aios.user.bridge.rpa.PermissionDeniedException;
 import com.ouisani.aios.core.security.BpfManager;
 import com.ouisani.aios.core.security.ObjectManager;
 import com.ouisani.aios.core.security.SyscallFilter;
@@ -179,6 +181,11 @@ public final class SyscallDispatcher {
 
         log.info("[Syscall Dispatcher] Completed action '{}' for Agent '{}': success={}, latency={}ms",
                 fullAction, agentId, response.success(), elapsedMs);
+
+        // ── 喂狗 — 每次成功 syscall 执行后向 WatchdogDaemon 报告系统存活 ──
+        if (response.success()) {
+            com.ouisani.aios.core.rtos.WatchdogDaemon.instance().ping("syscall");
+        }
 
         return response;
     }
@@ -545,14 +552,27 @@ public final class SyscallDispatcher {
     private SyscallResponse executeRpaTool(String agentId, String toolName, Map<String, Object> args) {
         HostRpaManager rpa = HostRpaManager.getInstance();
 
-        // ── Security: HEADLESS mode check and physical pointer warning ──
+        // ── Security: HEADLESS mode check ──
         boolean headless = java.awt.GraphicsEnvironment.isHeadless();
         if (headless) {
             log.error("[Kernel Security] RPA tool '{}' rejected: system is in HEADLESS mode", toolName);
             return SyscallResponse.fail("RPA tools are not available in HEADLESS mode");
         }
 
-        log.warn("[Kernel Security] WARNING: Agent {} is manipulating the host physical pointer!", agentId);
+        // ── Security: SYS_ADMIN Token 鉴权 ──
+        // 从 args 中提取 SecurityToken（必须由启动时签发的受信组件传入）
+        Object tokenObj = args.get("_security_token");
+        SecurityToken token = (tokenObj instanceof SecurityToken st) ? st : null;
+
+        try {
+            rpa.requireSysAdmin(token);
+        } catch (PermissionDeniedException e) {
+            log.error("[Kernel Security] RPA tool '{}' DENIED for Agent '{}': {}", toolName, agentId, e.getMessage());
+            return SyscallResponse.fail("Permission denied: " + e.getMessage());
+        }
+
+        log.warn("[Kernel Security] WARNING: Agent {} is manipulating the host physical pointer! (token={})",
+                agentId, token != null ? token.id() : "null");
         System.out.println("[Kernel Security] WARNING: Agent " + agentId + " is manipulating the host physical pointer!");
 
         if (!rpa.isAvailable()) {
@@ -561,7 +581,7 @@ public final class SyscallDispatcher {
 
         return switch (toolName) {
             case "rpa.screenshot" -> {
-                String base64 = rpa.takeScreenshotBase64();
+                String base64 = rpa.takeScreenshotBase64(token);
                 log.info("[Dispatcher] RPA screenshot captured for Agent '{}': base64Len={}", agentId, base64.length());
                 yield SyscallResponse.ok(base64);
             }
@@ -571,17 +591,17 @@ public final class SyscallDispatcher {
                 if (x < 0 || y < 0) {
                     yield SyscallResponse.fail("rpa.mouse_move requires integer 'x' and 'y' arguments");
                 }
-                rpa.mouseMove(x, y);
+                rpa.mouseMove(token, x, y);
                 log.info("[Dispatcher] RPA mouse_move for Agent '{}': ({}, {})", agentId, x, y);
                 yield SyscallResponse.ok("Mouse moved to (" + x + ", " + y + ")");
             }
             case "rpa.click" -> {
-                rpa.mouseClick();
+                rpa.mouseClick(token);
                 log.info("[Dispatcher] RPA click for Agent '{}'", agentId);
                 yield SyscallResponse.ok("Mouse clicked");
             }
             case "rpa.right_click" -> {
-                rpa.mouseRightClick();
+                rpa.mouseRightClick(token);
                 log.info("[Dispatcher] RPA right_click for Agent '{}'", agentId);
                 yield SyscallResponse.ok("Right-clicked");
             }
@@ -591,13 +611,13 @@ public final class SyscallDispatcher {
                 if (x < 0 || y < 0) {
                     yield SyscallResponse.fail("rpa.click_at requires integer 'x' and 'y' arguments");
                 }
-                rpa.mouseClickAt(x, y);
+                rpa.mouseClickAt(token, x, y);
                 log.info("[Dispatcher] RPA click_at for Agent '{}': ({}, {})", agentId, x, y);
                 yield SyscallResponse.ok("Clicked at (" + x + ", " + y + ")");
             }
             case "rpa.scroll" -> {
                 int amount = toInt(args.get("amount"), 1);
-                rpa.mouseScroll(amount);
+                rpa.mouseScroll(token, amount);
                 log.info("[Dispatcher] RPA scroll for Agent '{}': amount={}", agentId, amount);
                 yield SyscallResponse.ok("Scrolled by " + amount);
             }
@@ -606,7 +626,7 @@ public final class SyscallDispatcher {
                 if (text == null || text.isEmpty()) {
                     yield SyscallResponse.fail("rpa.type requires a 'text' argument");
                 }
-                rpa.keyboardType(text);
+                rpa.keyboardType(token, text);
                 log.info("[Dispatcher] RPA type for Agent '{}': textLen={}", agentId, text.length());
                 yield SyscallResponse.ok("Typed " + text.length() + " characters");
             }
@@ -616,7 +636,7 @@ public final class SyscallDispatcher {
                 if (keyCode < 0) {
                     yield SyscallResponse.fail("rpa.key_combo requires a 'keyCode' argument");
                 }
-                rpa.keyCombo(modifiers, keyCode);
+                rpa.keyCombo(token, modifiers, keyCode);
                 log.info("[Dispatcher] RPA key_combo for Agent '{}': keyCode={}, modifiers={}", agentId, keyCode, modifiers);
                 yield SyscallResponse.ok("Key combo executed");
             }

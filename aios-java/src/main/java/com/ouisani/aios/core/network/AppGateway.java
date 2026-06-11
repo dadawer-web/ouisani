@@ -313,14 +313,14 @@ public class AppGateway {
         app.options("/api/workflow/deploy", ctx -> {
             ctx.header("Access-Control-Allow-Origin", "*");
             ctx.header("Access-Control-Allow-Methods", "POST, OPTIONS");
-            ctx.header("Access-Control-Allow-Headers", "Content-Type");
+            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
             ctx.result("");
         });
 
         // 为所有 /api/* 路由添加 CORS 头
         app.before("/api/*", ctx -> {
             ctx.header("Access-Control-Allow-Origin", "*");
-            ctx.header("Access-Control-Allow-Headers", "Content-Type");
+            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
         });
 
         log.info("[App Gateway] Workflow Deploy API attached: POST /api/workflow/deploy");

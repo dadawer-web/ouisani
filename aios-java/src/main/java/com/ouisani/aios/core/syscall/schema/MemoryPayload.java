@@ -3,18 +3,20 @@ package com.ouisani.aios.core.syscall.schema;
 import java.util.Set;
 
 /**
- * Memory namespace payload — strongly-typed contract for vector memory syscalls.
+ * Memory 命名空间载荷 — 向量内存 syscall 的强类型契约。
  * <p>
- * Provides CRUD operations over the AIOS semantic memory subsystem:
+ * 提供 AIOS 语义内存子系统的 CRUD 操作：
  * <ul>
- *   <li>{@code store} — persist a memory entry</li>
- *   <li>{@code retrieve} — recall memories by semantic query</li>
- *   <li>{@code delete} — remove a memory entry</li>
+ *   <li>{@code store} — 持久化一条记忆条目</li>
+ *   <li>{@code retrieve} — 通过语义查询召回记忆</li>
+ *   <li>{@code delete} — 删除一条记忆条目</li>
  * </ul>
+ * <p>
+ * OS 类比: 共享内存的 shmctl/shmget 操作参数结构体。
  *
- * @param operation      the memory operation: "store", "retrieve", or "delete"
- * @param query          the semantic query for retrieval, or the key for delete
- * @param memoryContent  the content to store (only used with "store" operation)
+ * @param operation     内存操作类型: "store"、"retrieve" 或 "delete"
+ * @param query         检索时的语义查询，或删除时的键
+ * @param memoryContent 存储的内容（仅 "store" 操作使用）
  */
 public record MemoryPayload(
         String operation,

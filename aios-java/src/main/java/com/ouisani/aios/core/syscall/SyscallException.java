@@ -1,7 +1,9 @@
 package com.ouisani.aios.core.syscall;
 
 /**
- * Thrown when an Agent issues an unknown or unsupported system call action.
+ * 系统调用异常 — Agent 发出未知或不支持的 syscall 时抛出。
+ * <p>
+ * OS 类比: Linux 的 ENOSYS (Function not implemented) 错误码。
  */
 public class SyscallException extends RuntimeException {
 

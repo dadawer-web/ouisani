@@ -240,11 +240,30 @@ public final class WatchdogDaemon {
      * 这是 AIOS 的最后一道防线。当大模型 API 彻底卡死或
      * 发生底层死锁时，没有任何代码能执行 ping()，看门狗
      * 超时后直接触发系统重置。
+     * <p>
+     * 判定逻辑：只要任意一个 ping source 仍在存活窗口内，
+     * 就认为系统未死。避免因单一来源的竞态条件误触发重置。
      */
     private void checkSystemWatchdog() {
         long now = System.currentTimeMillis();
-        long elapsed = now - lastPingTimeMs;
 
+        // 检查是否有任意 ping source 仍然存活
+        boolean anySourceAlive = false;
+        for (Long lastPing : pingSources.values()) {
+            if ((now - lastPing) < watchdogTimeoutMs) {
+                anySourceAlive = true;
+                break;
+            }
+        }
+
+        // 如果有存活的 source，更新全局 lastPingTimeMs 并跳过
+        if (anySourceAlive) {
+            lastPingTimeMs = now;
+            return;
+        }
+
+        // 所有 source 都超时 或 无任何 source（仅靠全局 lastPingTimeMs）
+        long elapsed = now - lastPingTimeMs;
         if (elapsed > watchdogTimeoutMs && !systemResetTriggered) {
             systemResetTriggered = true;
             totalSystemResets.incrementAndGet();

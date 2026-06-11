@@ -17,15 +17,15 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Write-Ahead Log (WAL) / Journaling system for the AIOS VFS.
+ * VFS 写前日志（WAL）— AIOS 虚拟文件系统的日志系统。
  * <p>
- * Every mutating VFS operation is first appended to a durable journal file
- * using {@code DSYNC} before being applied to in-memory structures.
- * On startup, {@link #recoverAll()} replays the journal to restore
- * crash consistency.
+ * 每次变更 VFS 的操作先以 {@code DSYNC} 模式追加到持久化日志文件，
+ * 然后才应用到内存结构。启动时 {@link #recoverAll()} 重放日志以恢复崩溃一致性。
  * <p>
- * Journal file: {@code /tmp/aios_vfs.journal}<br>
- * Record format: {@code TIMESTAMP|NODE_PATH|OPERATION|PAYLOAD\n}
+ * 日志文件: {@code /tmp/aios_vfs.journal}<br>
+ * 记录格式: {@code TIMESTAMP|NODE_PATH|OPERATION|PAYLOAD\n}
+ * <p>
+ * OS 类比: ext4 的 jbd2 日志系统 / PostgreSQL 的 WAL 机制。
  */
 public final class VfsJournal {
 

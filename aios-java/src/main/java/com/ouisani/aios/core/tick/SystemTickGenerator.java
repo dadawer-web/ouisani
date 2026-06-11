@@ -4,6 +4,7 @@ import com.ouisani.aios.core.AgentTask;
 import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.ipc.SignalType;
 import com.ouisani.aios.core.network.EventBus;
+import com.ouisani.aios.core.rtos.WatchdogDaemon;
 import com.ouisani.aios.core.telemetry.SemanticEtw;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -218,6 +219,9 @@ public final class SystemTickGenerator {
                 tick, now - bootTimeMs, drift, tickIntervalMs);
 
         EventBus.instance().broadcast("sig_tick", tickPayload);
+
+        // ── Phase 1.5: 喂狗 — 每个 tick 向 WatchdogDaemon 报告系统存活 ──
+        WatchdogDaemon.instance().ping("systick");
 
         // ── Phase 2: 向所有活跃 AgentTask 发送 SIG_TICK ──
         int signalCount = broadcastToActiveAgents(tick);

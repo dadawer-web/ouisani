@@ -1,10 +1,10 @@
 package com.ouisani.aios.core.memory;
 
 import com.ouisani.aios.core.config.SemanticRegistry;
-import com.ouisani.aios.core.memory.providers.Mem0Provider;
 import com.ouisani.aios.core.memory.providers.MemoryProvider;
 import com.ouisani.aios.core.memory.providers.TokenZramProvider;
-import com.ouisani.aios.core.memory.providers.ZepProvider;
+import com.ouisani.aios.drivers.memory.Mem0Provider;
+import com.ouisani.aios.drivers.memory.ZepProvider;
 import com.ouisani.aios.core.syscall.SyscallResponse;
 import com.ouisani.aios.core.syscall.schema.MemoryPayload;
 import org.slf4j.Logger;

@@ -1,7 +1,7 @@
 package com.ouisani.aios.core;
 
 import com.ouisani.aios.core.llm.LlmProvider;
-import com.ouisani.aios.core.llm.OpenAiAdapter;
+import com.ouisani.aios.drivers.llm.OpenAiAdapter;
 import com.ouisani.aios.vfs.MutableFileNode;
 import com.ouisani.aios.vfs.ProcFsNode;
 import com.ouisani.aios.vfs.SemanticNode;
@@ -63,6 +63,8 @@ public final class VfsManager {
     private final Map<String, VfsNode> pathTree = new ConcurrentHashMap<>();
     /** Agent 命名空间映射 — agentId → VFS 根路径 */
     private final Map<Integer, String> agentNamespaces = new ConcurrentHashMap<>();
+    /** 物理工作目录映射 — VFS 路径前缀 → 物理目录路径，用于将 VFS 写入桥接到物理磁盘 */
+    private final Map<String, String> physicalWorkspaceMap = new ConcurrentHashMap<>();
     private volatile boolean initialized = false;
     private volatile LlmProvider defaultLlmProvider;
     private volatile TaskScheduler taskScheduler;
@@ -79,6 +81,37 @@ public final class VfsManager {
     public void configureTaskScheduler(TaskScheduler scheduler) {
         this.taskScheduler = scheduler;
         log.info("TaskScheduler configured for /proc filesystem");
+    }
+
+    /**
+     * 注册物理工作目录映射 — 将 VFS 路径前缀绑定到物理磁盘目录。
+     * <p>
+     * 注册后，所有通过 writeText 写入该前缀下的新文件，
+     * 将自动创建 HostSourceNode 并写入物理磁盘，而非内存中的 MutableFileNode。
+     * 类比 Linux 的 bind mount：mount --bind /physical/dir /vfs/dir
+     *
+     * @param vfsPrefix    VFS 路径前缀（如 "/factory"）
+     * @param physicalDir  物理磁盘目录（如 "/home/user/aios_workspace_app1"）
+     */
+    public void registerPhysicalWorkspace(String vfsPrefix, String physicalDir) {
+        physicalWorkspaceMap.put(vfsPrefix, physicalDir);
+        log.info("[VFS] Physical workspace registered: {} → {}", vfsPrefix, physicalDir);
+        System.out.println("  🔗 [VFS] Physical workspace: " + vfsPrefix + " → " + physicalDir);
+    }
+
+    /**
+     * 查找 VFS 路径对应的物理工作目录。
+     *
+     * @param vfsPath VFS 路径（如 "/factory/agent_1.py"）
+     * @return 物理目录路径，如果没有映射则返回 null
+     */
+    public String findPhysicalWorkspace(String vfsPath) {
+        for (Map.Entry<String, String> entry : physicalWorkspaceMap.entrySet()) {
+            if (vfsPath.startsWith(entry.getKey())) {
+                return entry.getValue();
+            }
+        }
+        return null;
     }
 
     public TaskScheduler getTaskScheduler() {
@@ -739,8 +772,32 @@ public final class VfsManager {
                 return ok;
             }
 
-            // 节点不存在，创建 MutableFileNode 并挂载
-            // 先确保父目录存在
+            // 节点不存在，检查是否有物理工作目录映射
+            String physicalDir = findPhysicalWorkspace(resolved);
+            if (physicalDir != null) {
+                // 有物理工作目录映射 → 创建 HostSourceNode，写入物理磁盘
+                String parentPath = resolved.substring(0, resolved.lastIndexOf('/'));
+                if (parentPath.isEmpty()) parentPath = "/";
+                ensureDirectoryExists(parentPath);
+
+                // 计算物理文件路径：physicalDir + VFS 路径去掉前缀
+                String relativePath = resolved;
+                for (Map.Entry<String, String> entry : physicalWorkspaceMap.entrySet()) {
+                    if (resolved.startsWith(entry.getKey())) {
+                        relativePath = resolved.substring(entry.getKey().length());
+                        break;
+                    }
+                }
+                String physicalFilePath = physicalDir + relativePath;
+
+                HostSourceNode hostNode = new HostSourceNode(resolved, physicalFilePath);
+                boolean ok = hostNode.write(content);
+                pathTree.put(resolved, hostNode);
+                log.info("[VFS] writeText: created HostSourceNode '{}', {} chars → physical: {}", resolved, content.length(), physicalFilePath);
+                return ok;
+            }
+
+            // 无物理映射 → 创建 MutableFileNode（内存）
             String parentPath = resolved.substring(0, resolved.lastIndexOf('/'));
             if (parentPath.isEmpty()) parentPath = "/";
             ensureDirectoryExists(parentPath);
@@ -786,5 +843,29 @@ public final class VfsManager {
             }
         }
         return devices;
+    }
+
+    /**
+     * 列出 VFS 中指定前缀下的所有文件路径（非目录节点）。
+     * <p>
+     * 类比 Linux 的 {@code find /factory -type f}。
+     *
+     * @param prefix 路径前缀（如 "/factory"）
+     * @return 匹配的文件路径列表（仅包含可读内容的节点）
+     */
+    public List<String> listFilesUnder(String prefix) {
+        List<String> files = new ArrayList<>();
+        rwLock.readLock().lock();
+        try {
+            for (Map.Entry<String, VfsNode> entry : pathTree.entrySet()) {
+                String path = entry.getKey();
+                if (path.startsWith(prefix) && entry.getValue().nodeType() == VfsNode.VfsNodeType.FILE) {
+                    files.add(path);
+                }
+            }
+        } finally {
+            rwLock.readLock().unlock();
+        }
+        return files;
     }
 }

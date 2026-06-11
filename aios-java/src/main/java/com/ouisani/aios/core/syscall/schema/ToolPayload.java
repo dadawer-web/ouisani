@@ -4,15 +4,15 @@ import java.util.Collections;
 import java.util.Map;
 
 /**
- * Tool namespace payload — strongly-typed contract for dynamic tool/plugin syscalls.
+ * Tool 命名空间载荷 — 动态工具/插件 syscall 的强类型契约。
  * <p>
- * Each tool invocation is identified by name and parameterized by
- * an arbitrary key-value argument map, enabling the AIOS kernel
- * to dispatch to WASM plugins, Docker sandboxes, or any registered
- * tool backend.
+ * 每次工具调用通过名称标识，以任意键值对参数化，
+ * 使 AIOS 内核能够分发到 WASM 插件、Docker 沙箱或任何已注册的工具后端。
+ * <p>
+ * OS 类比: ioctl(fd, request, args) 的参数结构体。
  *
- * @param toolName  the registered tool name (e.g. "math", "run_docker")
- * @param arguments the tool arguments as key-value pairs
+ * @param toolName  已注册的工具名称（如 "math"、"run_docker"）
+ * @param arguments 工具参数键值对
  */
 public record ToolPayload(
         String toolName,

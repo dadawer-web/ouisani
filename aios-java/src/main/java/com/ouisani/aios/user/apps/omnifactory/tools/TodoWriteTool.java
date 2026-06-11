@@ -1,7 +1,8 @@
-package com.ouisani.aios.core.tool;
+package com.ouisani.aios.user.apps.omnifactory.tools;
 
 import com.ouisani.aios.core.permission.PermissionChecker;
 import com.ouisani.aios.core.permission.PermissionMode;
+import com.ouisani.aios.core.tool.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -11,12 +12,13 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Todo 写入工具 — 对标 Claude Code 的 TodoWriteTool。
  * <p>
+ * 已从内核空间 (core.tool) 迁移至用户空间 (omnifactory.tools)。
+ * 此工具属于母体的高级认知能力，不属于内核系统调用。
+ * <p>
  * 任务追踪：帮助模型组织工作、展示进度。
  * - 全部完成自动清空
  * - 验证提醒机制
  * - 按 Agent 隔离
- * <p>
- * OS 类比：相当于 Linux 的 /proc 进程状态追踪。
  */
 public class TodoWriteTool implements Tool<TodoWriteTool.Input> {
 

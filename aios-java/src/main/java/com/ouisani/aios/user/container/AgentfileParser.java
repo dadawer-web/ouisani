@@ -390,6 +390,7 @@ public class AgentfileParser {
      *   <li>{@code BUDGET 5000}</li>
      *   <li>{@code MOUNT /shared/data:/var/mem}</li>
      *   <li>{@code ENTRYPOINT xxx}</li>
+     *   <li>{@code ENABLED_SKILLS skills.web_scraper skills.file_ops}</li>
      * </ul>
      */
     public static AppManifest parseManifest(String content) {
@@ -452,6 +453,22 @@ public class AgentfileParser {
                         sb.append(parts[i]);
                     }
                     builder.entrypoint(sb.toString());
+                }
+                case "ENABLED_SKILLS" -> {
+                    if (parts.length < 2) throw new IllegalArgumentException(
+                            "[Manifest] Line " + lineNumber + ": ENABLED_SKILLS requires at least one module");
+                    for (int i = 1; i < parts.length; i++) {
+                        builder.enabledSkill(parts[i]);
+                    }
+                    System.out.println("[Manifest Parser] ENABLED_SKILLS: " + java.util.Arrays.toString(java.util.Arrays.copyOfRange(parts, 1, parts.length)));
+                }
+                case "ENABLED_ROLES" -> {
+                    if (parts.length < 2) throw new IllegalArgumentException(
+                            "[Manifest] Line " + lineNumber + ": ENABLED_ROLES requires at least one role name");
+                    for (int i = 1; i < parts.length; i++) {
+                        builder.enabledRole(parts[i]);
+                    }
+                    System.out.println("[Manifest Parser] ENABLED_ROLES: " + java.util.Arrays.toString(java.util.Arrays.copyOfRange(parts, 1, parts.length)));
                 }
                 default -> throw new IllegalArgumentException(
                         "[Manifest] Line " + lineNumber + ": Unknown directive '" + parts[0] + "'");

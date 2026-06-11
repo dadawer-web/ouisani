@@ -18,13 +18,16 @@ import com.ouisani.aios.core.task.DreamTask;
 import com.ouisani.aios.core.task.TaskScheduler;
 import com.ouisani.aios.core.telemetry.TelemetryService;
 import com.ouisani.aios.core.tool.QueryEngine;
+import com.ouisani.aios.core.tool.Tool;
 import com.ouisani.aios.core.tool.ToolExecutionPipeline;
+import com.ouisani.aios.core.tool.ToolInput;
 import com.ouisani.aios.core.tool.ToolRegistry;
 import com.ouisani.aios.user.bin.AiosAppManager;
 import com.ouisani.aios.user.sdk.AbstractAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -97,18 +100,10 @@ public class OmniMotherAgent extends AbstractAgent {
             // ── God Hand Protocol: 预创建配置文件 ──
             sdk.writeFile(this.agentId, "/factory/configs/" + node.instanceId() + ".json", "{}");
 
-            // ── RAG: Jina Search 真实搜索 ──
-            String searchIntent = queryEngine.query(
-                    "为了编写这个 Python 节点：[" + node.role() + "]，你需要查阅什么 API 文档吗？"
-                    + "请给出一个精准的搜索词。如果完全不需要，请回复 'NONE'。");
-
+            // ── RAG: 网络搜索已禁用 — 国内 Jina 被墙，直接进入盲写模式 ──
+            // 母体拿到任务后直接进入 Claude Code REPL 写代码，不再等待网络搜索
             String context = "";
-            if (!"NONE".equalsIgnoreCase(searchIntent.trim())) {
-                System.out.println("[Mother Agent]   ├─ Jina Search: " + searchIntent);
-                context = WebSearchTool.searchForAgent(searchIntent);
-                TelemetryService.instance().logEvent("jina_search", Map.of(
-                        "node", node.instanceId(), "query", searchIntent));
-            }
+            System.out.println("[Mother Agent]   ├─ Web search skipped (offline mode), entering REPL directly");
 
             // ── Claude Code: QueryEngine 自治 SWE 闭环 ──
             String codePrompt = buildCodePrompt(node, context);
@@ -161,7 +156,7 @@ public class OmniMotherAgent extends AbstractAgent {
             shellScriptBuilder.append("export NODE_ID=").append(node.instanceId()).append("\n");
             shellScriptBuilder.append("export INPUT_TOPIC=").append(node.subscribeTopic()).append("\n");
             shellScriptBuilder.append("export OUTPUT_TOPIC=").append(node.publishTopic()).append("\n");
-            shellScriptBuilder.append("python /factory/").append(node.instanceId()).append(".py &\n");
+            shellScriptBuilder.append("python3 /factory/").append(node.instanceId()).append(".py &\n");
 
             agentfileBuilder.append("SPAWN ").append(node.instanceId()).append(" 1\n");
 
@@ -236,8 +231,9 @@ public class OmniMotherAgent extends AbstractAgent {
     // ════════════════════════════════════════════════════════════════
 
     private void initializeClaudeCodeCapabilities() {
-        // ── 1. QueryEngine — 工具增强推理循环 ──
-        this.queryEngine = new QueryEngine(sdk, this.agentId, workingDir);
+        // ── 1. QueryEngine — 工具增强推理循环（内核全局 + 母体专属工具） ──
+        List<Tool<? extends ToolInput>> motherTools = buildMotherToolList();
+        this.queryEngine = new QueryEngine(sdk, this.agentId, workingDir, motherTools);
 
         // ── 2. SessionMemory — 会话记忆 ──
         this.sessionMemory = new SessionMemoryService.SessionMemory();
@@ -296,7 +292,28 @@ public class OmniMotherAgent extends AbstractAgent {
         // ── 13. LspManager — LSP 代码智能 ──
         LspManager.instance();
 
+        // ── 14. 母体专属认知工具 — 通过 QueryEngine 独享，不污染全局注册表 ──
+        // (已在步骤1中通过 buildMotherToolList() 传入 QueryEngine)
+
         log.info("[Mother Agent] Claude Code capabilities initialized (15 modules)");
+    }
+
+    /**
+     * 构建母体专属工具列表 — 内核全局工具 + 用户空间高级认知工具。
+     * <p>
+     * 这些高级认知工具不属于内核全局注册表，仅母体独享。
+     * 其他普通 Agent 通过 QueryEngine 只能获得内核全局工具。
+     */
+    private List<Tool<? extends ToolInput>> buildMotherToolList() {
+        List<Tool<? extends ToolInput>> tools = new ArrayList<>();
+        tools.add(new com.ouisani.aios.user.apps.omnifactory.tools.TodoWriteTool());
+        tools.add(new com.ouisani.aios.user.apps.omnifactory.tools.NotebookEditTool());
+        tools.add(new com.ouisani.aios.user.apps.omnifactory.tools.PlanModeTool());
+        tools.add(new com.ouisani.aios.user.apps.omnifactory.tools.TaskTool());
+        tools.add(new com.ouisani.aios.user.apps.omnifactory.tools.SkillTool());
+        System.out.println("[Mother Agent] 5 exclusive cognitive tools mounted (TodoWrite, NotebookEdit, PlanMode, Task, Skill)");
+        log.info("[Mother Agent] Exclusive cognitive tools mounted: TodoWrite, NotebookEdit, PlanMode, Task, Skill");
+        return tools;
     }
 
     /**
@@ -330,10 +347,84 @@ public class OmniMotherAgent extends AbstractAgent {
               .append("1. 你必须使用 file_write 或 bash 工具创建 /factory/")
               .append(node.instanceId()).append(".py 文件。\n")
               .append("2. 该代码必须 import BaseAgent 并继承它重写 process_data(self, data) 方法。\n")
-              .append("3. 极其重要：写完代码后，你必须使用 bash 工具执行 'python /factory/")
+              .append("3. 极其重要：写完代码后，你必须使用 bash 工具执行 'python3 /factory/")
               .append(node.instanceId()).append(".py' 来测试是否存在语法错误或缺包 (ModuleNotFoundError)。\n")
               .append("4. 如果 bash 返回报错，请使用 file_edit 或 bash (pip install) 修复问题，再次运行测试。\n")
-              .append("5. 只有当测试运行没有报错时，你才能回复纯文本：'NODE_VERIFIED_AND_READY'。");
+              .append("5. 只有当测试运行没有报错时，你才能回复纯文本：'NODE_VERIFIED_AND_READY'。\n\n")
+              .append("【物理环境终极约束 (CRITICAL)】：\n")
+              .append("1. 当前操作系统的执行环境中，**绝对没有 `python` 命令**，只有 `python3`！\n")
+              .append("2. 你在生成任何执行脚本或使用 bash 工具进行测试时，**必须且只能使用 `python3` 命令**。\n")
+              .append("3. 严禁写入 `python agent.py`，必须写为 `python3 agent.py`！违者系统将发生严重错误！\n")
+              .append("4. 【绝对禁止交互式命令】：你正在一个无头 (Headless) 的自动化沙箱中运行！执行 bash 工具时，**绝对禁止使用 `sudo`**，绝对禁止使用任何需要人类输入或交互的命令（如 vim, nano, python -i 等）。\n")
+              .append("5. 如果需要安装 Python 依赖，必须使用 `pip3 install --user <package>` 规避权限问题，并加上 `-y` 或相关静默参数！违者将导致进程永久阻塞！\n")
+              .append("6. 【必须有控制台打印】：你编写的所有 `.py` 脚本，在执行完毕或者执行过程中，必须使用 `print()` 语句在控制台打印出极其明显的标记！例如 `print('AGENT_1_SUCCESS: Data fetched!')`，绝不允许没有任何输出就结束进程！\n")
+              .append("7. 【强制生成工序纪律】：你必须严格按照以下顺序执行任务，绝不允许跳步或敷衍！\n")
+              .append("    - 第一步：必须连续多次调用 `file_write` 工具，将所有节点的 Python 源码（如 `agent_1.py`, `agent_2.py` 等）依次完整生成到 `/factory` 目录下。\n")
+              .append("    - 第二步：在确认所有 `.py` 文件都已经通过 `file_write` 真实写入后，**最后一步**才能调用 `file_write` 生成 `run_all.sh` 和 `orchestrator.py`。\n")
+              .append("    - 严禁在未生成 Python 源码的情况下，凭空在 `run_all.sh` 或 `orchestrator.py` 中调用它们！你的这种偷懒行为会导致运行时严重错误！\n")
+              .append("8. 【工具调用绝对格式】：你如果需要调用工具，必须且只能使用以下极其严格的 XML 格式！\n")
+              .append("    <tool_call>\n")
+              .append("    <function=工具名><parameter=参数名>参数值</parameter></function=工具名>\n")
+              .append("    </tool_call>\n")
+              .append("    示例 — 写入文件：\n")
+              .append("    <tool_call>\n")
+              .append("    <function=file_write><parameter=path>/factory/agent_1.py</parameter><parameter=content>print('hello')</parameter></function=file_write>\n")
+              .append("    </tool_call>\n")
+              .append("    【严重警告】：绝对不允许发明诸如 `<tool_glob>`, `<tool_name>`, `<function_name>`, `<file_write>` 这样的假标签！只能用 `<function=xxx>` 和 `<parameter=yyy>`！格式错一个字符，系统将无法解析！\n\n")
+              .append("【AIOS 用户态工作流编排器 (Orchestrator) 绝对纪律与架构蓝图】\n")
+              .append("作为造物主智能体，你必须生成一个工业级的用户态调度中枢，绝不能用 shell 脚本瞎指挥。\n\n")
+              .append("1. 【核心入口唯一性】：你生成的 `run_all.sh` 脚本只能有唯一的一行代码：`python3 -u orchestrator.py`。严禁使用 `&` 或多行命令后台运行！\n\n")
+              .append("2. 【数据黑板传输协议 (Data Blackboard)】：节点间严禁通过 `stdout` 截取来传递数据！\n")
+              .append("    - 每个子节点（如 `agent_1.py`）必须将处理结果写入到它自己专属的 JSON 文件中（如 `agent_1_output.json`）。\n")
+              .append("    - 下游节点（如 `agent_2.py`）必须主动去读取前置节点生成的 `_output.json` 文件作为数据源。\n\n")
+              .append("3. 【Orchestrator.py 核心架构蓝图 (CRITICAL)】：\n")
+              .append("    你使用 `file_write` 生成的 `orchestrator.py`，必须且只能包含以下极其严密的逻辑框架（你可以细化，但绝不能删减核心能力）：\n\n")
+              .append("    - 步骤一：解析依赖。读取你生成的 `workflow.json`（其中包含了 `nodeId`, `scriptPath`, `dependsOn`），计算出无环图（DAG）的执行顺序。\n\n")
+              .append("    - 步骤二：拓扑执行循环。写一个循环，不断找出 `dependsOn` 为空或依赖已满足的就绪节点。\n\n")
+              .append("    - 步骤三：非阻塞实时监控拉起。对于每个就绪节点，必须使用以下代码范式拉起，并实时冲刷缓冲区，确保前端监控可用：\n")
+              .append("      ```python\n")
+              .append("      print(f\"[DAG_TRACE] >>> NODE_START: {node_id}\", flush=True)\n")
+              .append("      # 必须加 -u 参数\n")
+              .append("      process = subprocess.Popen([\"python3\", \"-u\", script_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)\n")
+              .append("      for line in process.stdout:\n")
+              .append("          print(f\"[{node_id}] {line}\", end=\"\", flush=True)\n")
+              .append("      process.wait()\n")
+              .append("      ```\n\n")
+              .append("    - 步骤四：【异常处理与状态汇报】。在 `process.wait()` 之后：\n")
+              .append("      - 如果 `process.returncode == 0`：\n")
+              .append("        打印 `print(f\"[DAG_TRACE] <<< NODE_SUCCESS: {node_id}\", flush=True)`。\n")
+              .append("      - 如果 `process.returncode != 0`：\n")
+              .append("        必须立刻打印 `print(f\"[DAG_TRACE] !!! NODE_FAILED: {node_id}\", flush=True)`。\n")
+              .append("        随后紧跟打印系统级异常日志 `print(\"🚨 [GenericAppAgent] SYSTEM ERROR. Process terminated to trigger AutoMedic.\", flush=True)`。\n")
+              .append("        最后调用 `sys.exit(1)` 安全退出当前编排进程，以释放系统资源。\n\n");
+
+        // ── AGI 动态技能发现与调用协议 — 按需装载，只调授权模块 ──
+        prompt.append("【AGI 动态技能发现与调用协议 (CRITICAL)】\n");
+        prompt.append("1. 你所在的沙箱环境中，已经挂载了按需裁剪的技能库。\n");
+        prompt.append("2. 【强制前置探查】：在接受任务后，你必须首先使用 `file_read` 读取位于本目录下的 `/factory/ACTIVE_SKILLS.md` 文件！\n");
+        prompt.append("3. 这个文件记录了用户**本次显式授权**你使用的外部技能。你只能调用该文件中列出的接口，绝对禁止去猜测或调用未授权的模块！\n");
+        prompt.append("4. 在随后生成的 Python 节点代码中（如 `agent_1.py`），如果任务涉及底层复杂操作（如网络 IO、文件解析），你必须优先通过 `import skills.xxx` 来复用这些高级组件，严禁从零开始使用标准库（如 `requests`, `urllib` 等）手写底层代码！\n");
+        prompt.append("5. 只有当 `ACTIVE_SKILLS.md` 中没有满足当前业务需求的工具时，你才可以自行实现基础逻辑。\n\n");
+
+        // ── 角色驱动与强类型工具协议 — MetaGPT 角色思维 + Dify 类型安全 ──
+        prompt.append("【角色驱动与强类型工具协议】\n");
+        prompt.append("1. 当你面对复杂任务时，必须先明确当前节点需要什么『专家角色』（如架构师、程序员、审查员）。如果 `/shared/roles/` 目录下有相关的 `.yaml` 角色卡，请将其内容硬编码进你生成的子 Agent 脚本的 Prompt 中。\n");
+        prompt.append("2. 你必须严格依照 `/factory/ACTIVE_SKILLS.md` 中的 JSON Schema 定义的参数类型去调用 `skills` 库中的函数，绝不能凭空捏造参数！\n\n");
+
+        // ── 多角色认知切换协议 — MetaGPT 式人格切片 ──
+        prompt.append("【多角色认知切换协议 (Cognitive Role-Playing)】\n");
+        prompt.append("1. 【强制认知读取】：在开始任务前，你必须使用 `file_read` 读取本目录下的 `/factory/ACTIVE_ROLES.md`。\n");
+        prompt.append("2. 这个文件里包含了你本次任务必须挂载的『专家人格卡片』。你必须将其中的规则视为最高指令！\n");
+        prompt.append("3. 【认知切片与运用】：\n");
+        prompt.append("   - 当你正在规划 `workflow.json` 和 `orchestrator.py` 时，你必须彻底代入『系统架构师 (System Architect)』的认知，严格执行高内聚低耦合与容错原则。\n");
+        prompt.append("   - 当你正在手撕具体的 `agent_1.py` 等原子脚本时，你必须瞬间切换为『高级底层码农 (Python Coder)』的认知，严格遵守防御性编程、强类型传参和 `flush=True` 的 I/O 冲刷铁律。\n");
+
+        // ── 强制 I/O 输出纪律 — 防止文件散落宿主机根目录 ──
+        prompt.append("【强制 I/O 输出纪律 (Strict I/O Protocol)】\n");
+        prompt.append("1. 沙箱为你提供了一个专门的统一输出目录：`/shared/outputs/`。\n");
+        prompt.append("2. 无论你生成的是什么最终交付物（如：数据抓取结果的 `.json`、最终生成的分析报告 `.md`、或是知识图谱的结构化数据），**必须且只能**保存到 `/shared/outputs/` 这个绝对路径下！\n");
+        prompt.append("3. 节点之间流转的中间临时文件（如 `agent_1` 传给 `agent_2` 的数据），可以保存在当前工作目录（即 `/factory/`）。\n");
+        prompt.append("4. 绝不允许使用相对路径（如 `./output.json`）或者写入任何沙箱之外的目录！\n");
 
         return prompt.toString();
     }

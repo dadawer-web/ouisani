@@ -1,5 +1,6 @@
-package com.ouisani.aios.core.memory.providers;
+package com.ouisani.aios.drivers.memory;
 
+import com.ouisani.aios.core.memory.providers.MemoryProvider;
 import com.ouisani.aios.core.syscall.SyscallException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,16 +14,12 @@ import java.time.Duration;
 /**
  * Mem0 云端记忆驱动 — 生产级 HTTP 客户端，直接对接 Mem0 向量数据库 API。
  * <p>
+ * 已从内核空间 (core.memory.providers) 迁移至驱动空间 (drivers.memory)。
+ * 内核只定义 {@link MemoryProvider} 抽象接口，具体厂商实现作为驱动动态加载。
+ * <p>
  * 这不是 Mock。每个方法都发出真实的网络请求到
  * {@code https://api.mem0.ai/v1/memories/}，使用 Java 11+ 原生
  * {@link HttpClient}。API 密钥从环境变量 {@code MEM0_API_KEY} 读取。
- *
- * <h3>API 契约</h3>
- * <ul>
- *   <li><b>store</b> → {@code POST /v1/memories/} JSON 载荷</li>
- *   <li><b>retrieve</b> → {@code POST /v1/memories/search/} 向量搜索载荷</li>
- *   <li><b>clear</b> → {@code DELETE /v1/memories/} 按 user_id 过滤</li>
- * </ul>
  *
  * @see MemoryProvider
  */
@@ -213,12 +210,6 @@ public class Mem0Provider implements MemoryProvider {
     //  JSON Response Parser
     // ════════════════════════════════════════════════════════════════
 
-    /**
-     * 从 Mem0 搜索响应中提取最相关的文本内容。
-     * <p>
-     * Mem0 搜索返回 JSON 数组，每个对象包含 {@code "memory"} 字段。
-     * 手动解析 JSON 以避免引入第三方依赖。
-     */
     private String extractSearchResults(String responseBody) {
         if (responseBody == null || responseBody.isEmpty() || responseBody.equals("[]")) {
             return "";
@@ -227,21 +218,16 @@ public class Mem0Provider implements MemoryProvider {
         StringBuilder result = new StringBuilder();
         int idx = 0;
 
-        // Parse the JSON array manually — no external dependencies required
-        // Find each "memory":"..." field in the response
         while (idx < responseBody.length()) {
             int memoryKeyStart = responseBody.indexOf("\"memory\"", idx);
             if (memoryKeyStart < 0) break;
 
-            // Find the colon after "memory"
             int colonPos = responseBody.indexOf(':', memoryKeyStart + 8);
             if (colonPos < 0) break;
 
-            // Find the opening quote of the value
             int valueStart = responseBody.indexOf('"', colonPos + 1);
             if (valueStart < 0) break;
 
-            // Find the closing quote (handle escaped quotes)
             int valueEnd = findClosingQuote(responseBody, valueStart + 1);
             if (valueEnd < 0) break;
 
@@ -259,13 +245,12 @@ public class Mem0Provider implements MemoryProvider {
         return result.toString();
     }
 
-    /** 查找 JSON 字符串值的闭合引号，处理转义引号。 */
     private int findClosingQuote(String json, int fromIndex) {
         int i = fromIndex;
         while (i < json.length()) {
             char c = json.charAt(i);
             if (c == '\\') {
-                i += 2; // skip escaped character
+                i += 2;
             } else if (c == '"') {
                 return i;
             } else {
@@ -290,7 +275,6 @@ public class Mem0Provider implements MemoryProvider {
         if (key != null && !key.isEmpty()) {
             return key;
         }
-        // Fallback: try system properties (for testing / -DMEM0_API_KEY=...)
         key = System.getProperty("MEM0_API_KEY");
         if (key != null && !key.isEmpty()) {
             return key;

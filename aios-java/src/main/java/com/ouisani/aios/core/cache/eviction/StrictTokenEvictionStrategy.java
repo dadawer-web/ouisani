@@ -9,23 +9,17 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * Strict Token Eviction Strategy — pure OS discipline.
+ * 严格 Token 驱逐策略 — 纯 OS 纪律的页面替换算法。
  * <p>
- * Models the classic OS virtual memory page replacement with a hybrid
- * LRU/LFU approach:
+ * 模拟经典 OS 虚拟内存页面替换，采用混合 LRU/LFU 策略：
  * <ul>
- *   <li><b>LRU</b>: Entries are ranked by {@code lastAccessTime} — the
- *       least recently used entry is evicted first.</li>
- *   <li><b>LFU</b>: Ties are broken by {@code accessCount} — entries
- *       that have been accessed fewer times lose.</li>
- *   <li><b>Token cost</b>: As a final tiebreaker, entries consuming more
- *       tokens (longer response text) are preferentially evicted, modeling
- *       the OS preference for freeing large memory pages first.</li>
+ *   <li><b>LRU</b>: 按 {@code lastAccessTime} 排序——最久未访问的条目优先驱逐</li>
+ *   <li><b>LFU</b>: 同分按 {@code accessCount} 决胜——访问次数少的优先驱逐</li>
+ *   <li><b>Token 开销</b>: 最终决胜按 Token 消耗量——大页面优先释放，模拟 OS 偏好</li>
  * </ul>
  * <p>
- * This strategy represents the cold, mechanical precision of a traditional
- * operating system's memory manager. No sentiment, no forgetting curves —
- * just raw utilitarian optimization.
+ * 此策略代表传统操作系统内存管理器的冷酷、机械精度。
+ * 没有情感，没有遗忘曲线——只有纯粹的功利优化。
  */
 public final class StrictTokenEvictionStrategy implements MemoryEvictionStrategy {
 

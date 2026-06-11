@@ -23,7 +23,9 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -31,6 +33,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 /**
  * AIOS 系统调用网关服务器 — 基于 Javalin 的 HTTP/WebSocket 服务器，
@@ -71,6 +74,10 @@ public class SyscallServer {
     private final Map<String, RemoteDeviceMountNode> remoteDevices = new ConcurrentHashMap<>();
     private final Map<String, SseClient> mcpSessions = new ConcurrentHashMap<>();
     private final Set<WsContext> monitorClients = ConcurrentHashMap.newKeySet();
+    /** 系统监控流客户端 — 接收 SYS_METRICS + EVENT_BUS_LOG */
+    private final Set<WsContext> systemStreamClients = ConcurrentHashMap.newKeySet();
+    /** 每个 WebSocket 连接对应的 EventBus 订阅处理器，用于断开时注销 */
+    private final Map<String, List<Consumer<String>>> systemStreamSubscriptions = new ConcurrentHashMap<>();
     private Javalin app;
 
     public SyscallServer(TaskScheduler scheduler) {
@@ -81,8 +88,8 @@ public class SyscallServer {
         this.scheduler = scheduler;
         this.mcpServer = mcpServer;
 
-        // Subscribe to EventBus system_metrics channel and forward to WebSocket dashboard clients
-        EventBus.instance().subscribe("system_metrics", payload -> {
+        // Subscribe to EventBus sys.telemetry.metrics channel and forward to WebSocket dashboard clients
+        EventBus.instance().subscribe("sys.telemetry.metrics", payload -> {
             for (WsContext client : monitorClients) {
                 try {
                     client.send(payload);
@@ -102,12 +109,25 @@ public class SyscallServer {
             });
             // Static file hosting for web dashboard HTML
             config.staticFiles.add("src/main/resources/web", io.javalin.http.staticfiles.Location.EXTERNAL);
+
+            // 全局 CORS 配置 — 确保浏览器跨域请求正常
+            config.bundledPlugins.enableCors(cors -> {
+                cors.addRule(it -> {
+                    it.anyHost();
+                    it.allowCredentials = false;
+                });
+            });
         });
 
         // ── API Gateway Auth: global before-handler ──
         AuthManager authManager = AuthManager.instance();
         app.before(ctx -> {
             String path = ctx.path();
+
+            // CORS preflight 由 Javalin CORS 插件自动处理，此处跳过
+            if (io.javalin.http.HandlerType.OPTIONS.equals(ctx.method())) {
+                return;
+            }
 
             // Allow static resources (dashboard HTML/CSS/JS) without auth
             if (isStaticResource(path)) {
@@ -127,8 +147,12 @@ public class SyscallServer {
             if (!authManager.verifyToken(token)) {
                 log.warn("[API Gateway] Connection rejected due to missing or invalid security token. path={}", path);
                 System.out.printf("  🚫 [API Gateway] Connection rejected due to missing or invalid security token. path=%s%n", path);
+                ctx.header("Access-Control-Allow-Origin", "*");
                 ctx.status(401).result("Unauthorized access to AIOS Kernel");
             }
+
+            // 为所有通过认证的请求添加 CORS 头
+            ctx.header("Access-Control-Allow-Origin", "*");
         });
 
         // ── WebSocket Monitor: real-time system metrics for dashboard ──
@@ -665,8 +689,197 @@ public class SyscallServer {
             }
         });
 
+        // ── Kernel Status API — 前端状态栏轮询 ──
+        app.get("/api/kernel/status", ctx -> {
+            ctx.contentType("application/json");
+            try {
+                Map<String, Object> status = new LinkedHashMap<>();
+
+                // 系统运行时间
+                try {
+                    long uptimeMs = com.ouisani.aios.core.tick.SystemTickGenerator.instance().uptimeMs();
+                    status.put("uptimeMs", uptimeMs);
+                    status.put("uptimeHuman", formatUptime(uptimeMs));
+                } catch (Exception e) {
+                    status.put("uptimeMs", 0);
+                    status.put("uptimeHuman", "N/A");
+                }
+
+                // 活跃 Agent 数量
+                int activeCount = 0;
+                int runningCount = 0;
+                int blockedCount = 0;
+                try {
+                    Map<Integer, AgentTask> activeTasks = scheduler.activeTasks();
+                    for (AgentTask task : activeTasks.values()) {
+                        if (task.status() == AgentTask.TaskStatus.RUNNING) runningCount++;
+                        else if (task.status() == AgentTask.TaskStatus.BLOCKED) blockedCount++;
+                        activeCount++;
+                    }
+                } catch (Exception ignored) {}
+                status.put("activeAgents", activeCount);
+                status.put("runningAgents", runningCount);
+                status.put("blockedAgents", blockedCount);
+
+                // Token 消耗
+                long tokensUsed = 0;
+                try {
+                    com.ouisani.aios.core.cgroup.CgroupNode agentsCgroup =
+                            com.ouisani.aios.core.cgroup.CgroupManager.instance().getNode("agents");
+                    tokensUsed = agentsCgroup != null ? agentsCgroup.usage().consumed() : 0L;
+                } catch (Exception ignored) {}
+                status.put("tokensUsed", tokensUsed);
+
+                // 看门狗状态
+                boolean watchdogHealthy = false;
+                long watchdogMs = -1;
+                try {
+                    com.ouisani.aios.core.rtos.WatchdogDaemon watchdog =
+                            com.ouisani.aios.core.rtos.WatchdogDaemon.instance();
+                    watchdogHealthy = watchdog.isSystemHealthy();
+                    watchdogMs = watchdog.msSinceLastPing();
+                } catch (Exception ignored) {}
+                status.put("watchdogHealthy", watchdogHealthy);
+                status.put("watchdogMsSinceLastPing", watchdogMs);
+
+                // SysTick
+                long currentTick = 0;
+                try {
+                    currentTick = com.ouisani.aios.core.tick.SystemTickGenerator.instance().currentTick();
+                } catch (Exception ignored) {}
+                status.put("systemTick", currentTick);
+
+                // LLM Router 状态
+                boolean llmAvailable = false;
+                try {
+                    llmAvailable = VfsManager.instance().getLlmProvider() != null;
+                } catch (Exception ignored) {}
+                status.put("llmAvailable", llmAvailable);
+
+                ctx.result(objectMapper.writeValueAsString(status));
+            } catch (Exception e) {
+                log.error("[Kernel Status] Failed to serialize: {}", e.getMessage());
+                ctx.result("{\"error\":\"" + e.getMessage() + "\"}");
+            }
+        });
+
         // ── App Gateway: bridge external UIs to application stdin/stdout ──
         AppGateway.attachTo(app);
+
+        // ── System Stream: 全局系统状态监控 WebSocket ──
+        // 每个前端连接在 onConnect 时动态注册 EventBus 监听器，
+        // 在 onClose 时注销，防止连接断开后 EventBus 继续推送导致 OOM。
+        app.ws("/api/system/stream", ws -> {
+            ws.onConnect(ctx -> {
+                String token = ctx.queryParam("token");
+                if (!authManager.verifyToken(token)) {
+                    log.warn("[System Stream] Unauthorized connection rejected");
+                    ctx.session.close();
+                    return;
+                }
+
+                String sessionId = ctx.sessionId();
+                systemStreamClients.add(ctx);
+
+                // ── 为当前连接注册 EventBus 监听器 ──
+                List<Consumer<String>> handlers = new ArrayList<>();
+
+                // 订阅 sys.telemetry.metrics → 推送 SYS_METRICS（展平到顶层，前端直接读 data.cpuUsage）
+                Consumer<String> metricsHandler = payload -> {
+                    try {
+                        if (ctx.session.isOpen()) {
+                            ctx.send(payload);
+                        }
+                    } catch (Exception e) {
+                        log.debug("[System Stream] Failed to push SYS_METRICS: {}", e.getMessage());
+                    }
+                };
+                EventBus.instance().subscribe("sys.telemetry.metrics", metricsHandler);
+                handlers.add(metricsHandler);
+
+                // 订阅 sys.eventbus.logs → 推送 EVENT_BUS_LOG
+                Consumer<String> logsHandler = payload -> {
+                    try {
+                        if (ctx.session.isOpen()) {
+                            ctx.send(payload);
+                        }
+                    } catch (Exception e) {
+                        log.debug("[System Stream] Failed to push EVENT_BUS_LOG: {}", e.getMessage());
+                    }
+                };
+                EventBus.instance().subscribe("sys.eventbus.logs", logsHandler);
+                handlers.add(logsHandler);
+
+                // 保存此连接的所有 handler，断开时批量注销
+                systemStreamSubscriptions.put(sessionId, handlers);
+
+                log.info("[System Stream] Client connected with EventBus listeners. Total: {}, sessionId: {}",
+                        systemStreamClients.size(), sessionId);
+                System.out.printf("  📡 [System Stream] Client connected with EventBus listeners. Total: %d%n",
+                        systemStreamClients.size());
+            });
+
+            ws.onClose(ctx -> {
+                String sessionId = ctx.sessionId();
+                systemStreamClients.remove(ctx);
+
+                // ── 注销此连接的所有 EventBus 监听器，防止内存泄漏 ──
+                List<Consumer<String>> handlers = systemStreamSubscriptions.remove(sessionId);
+                if (handlers != null) {
+                    String[] channels = {"sys.telemetry.metrics", "sys.eventbus.logs"};
+                    for (int i = 0; i < handlers.size() && i < channels.length; i++) {
+                        EventBus.instance().unsubscribe(channels[i], handlers.get(i));
+                    }
+                    log.info("[System Stream] Unsubscribed {} EventBus handlers for session: {}",
+                            handlers.size(), sessionId);
+                }
+
+                log.info("[System Stream] Client disconnected. Total: {}", systemStreamClients.size());
+                System.out.printf("  📡 [System Stream] Client disconnected. Total: %d%n",
+                        systemStreamClients.size());
+            });
+
+            ws.onError(ctx -> {
+                String sessionId = ctx.sessionId();
+                systemStreamClients.remove(ctx);
+
+                // 连接异常时也要注销监听器
+                List<Consumer<String>> handlers = systemStreamSubscriptions.remove(sessionId);
+                if (handlers != null) {
+                    String[] channels = {"sys.telemetry.metrics", "sys.eventbus.logs"};
+                    for (int i = 0; i < handlers.size() && i < channels.length; i++) {
+                        EventBus.instance().unsubscribe(channels[i], handlers.get(i));
+                    }
+                    log.info("[System Stream] Unsubscribed {} EventBus handlers after error for session: {}",
+                            handlers.size(), sessionId);
+                }
+
+                log.warn("[System Stream] Error: {}", ctx.error() != null ? ctx.error().getMessage() : "unknown");
+            });
+
+            // ── 处理前端心跳 PING，回复 PONG 防止 Idle Timeout ──
+            ws.onMessage(ctx -> {
+                String msg = ctx.message();
+                if (msg != null && msg.contains("\"PING\"")) {
+                    ctx.send("{\"type\":\"PONG\"}");
+                }
+            });
+        });
+
+        // ── EventBus 日志桥接：将内核事件统一转发到 sys.eventbus.logs 频道 ──
+        // 前端订阅 sys.eventbus.logs 即可收到所有 EVENT_BUS_LOG 格式的事件
+        String[] logChannels = {"sig_tick", "emergency_halt", "sys.human_intervention_required",
+                "sys.kernel.panic", "agent_spawn", "agent_log", "device_mount", "device_unmount",
+                "ws_connect", "ws_disconnect", "spontaneous_idea", "ui_render", "ui_action"};
+        for (String channel : logChannels) {
+            EventBus.instance().subscribe(channel, payload -> {
+                String logJson = "{\"type\":\"EVENT_BUS_LOG\",\"timestamp\":" + System.currentTimeMillis()
+                        + ",\"topic\":\"" + channel + "\""
+                        + ",\"payload\":" + (isJson(payload) ? payload : "\"" + escapeJson(payload) + "\"")
+                        + "}";
+                EventBus.instance().broadcast("sys.eventbus.logs", logJson);
+            });
+        }
 
         // ── Template Manager: inject BaseAgent.py into VFS ──
         com.ouisani.aios.user.apps.omnifactory.TemplateManager.initTemplates();
@@ -698,6 +911,32 @@ public class SyscallServer {
         System.out.println();
 
         log.info("[Syscall Gateway] Listening on port {} with Virtual Threads", port);
+    }
+
+    private static String formatUptime(long uptimeMs) {
+        long seconds = uptimeMs / 1000;
+        long minutes = seconds / 60;
+        long hours = minutes / 60;
+        if (hours > 0) return String.format("%dh %dm", hours, minutes % 60);
+        if (minutes > 0) return String.format("%dm %ds", minutes, seconds % 60);
+        return String.format("%ds", seconds);
+    }
+
+    /**
+     * 简单的 JSON 字符串转义。
+     */
+    private static String escapeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
+    }
+
+    /**
+     * 判断字符串是否像 JSON（以 { 或 [ 开头）。
+     */
+    private static boolean isJson(String s) {
+        if (s == null || s.isEmpty()) return false;
+        char c = s.charAt(0);
+        return c == '{' || c == '[';
     }
 
     private void handleSpawn(Context ctx) {
@@ -777,10 +1016,6 @@ public class SyscallServer {
             app.stop();
             log.info("[Syscall Gateway] Server stopped");
         }
-    }
-
-    private static String escapeJson(String s) {
-        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
     }
 
     /**

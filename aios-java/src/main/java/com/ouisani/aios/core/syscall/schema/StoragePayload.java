@@ -3,18 +3,20 @@ package com.ouisani.aios.core.syscall.schema;
 import java.util.Set;
 
 /**
- * Storage namespace payload — strongly-typed contract for VFS/storage syscalls.
+ * Storage 命名空间载荷 — VFS/存储 syscall 的强类型契约。
  * <p>
- * Standardizes all file-system-like operations under a single ABI:
+ * 将所有类文件系统操作标准化为统一 ABI：
  * <ul>
- *   <li>{@code read} — read data from a path</li>
- *   <li>{@code write} — write data to a path (overwrite)</li>
- *   <li>{@code append} — append data to a path</li>
+ *   <li>{@code read} — 从路径读取数据</li>
+ *   <li>{@code write} — 向路径写入数据（覆盖）</li>
+ *   <li>{@code append} — 向路径追加数据</li>
  * </ul>
+ * <p>
+ * OS 类比: Linux 的 pread/pwrite 系统调用参数结构体。
  *
- * @param path  the VFS path to operate on (e.g. "/dev/shm/blackboard")
- * @param data  the data to write/append (null for read operations)
- * @param mode  the I/O mode: "read", "write", or "append"
+ * @param path 操作的 VFS 路径（如 "/dev/shm/blackboard"）
+ * @param data 写入/追加的数据（读操作时为 null）
+ * @param mode I/O 模式: "read"、"write" 或 "append"
  */
 public record StoragePayload(
         String path,

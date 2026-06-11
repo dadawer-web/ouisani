@@ -1,6 +1,14 @@
 import { useState } from "react";
-import { Plus, Rocket, Workflow, Sparkles, Loader2 } from "lucide-react";
+import { Plus, Rocket, Workflow, Sparkles, Loader2, Cpu } from "lucide-react";
 import { useWorkflowStore } from "@/store/workflowStore";
+
+/** 可用技能字典 — 与后端 aios_skills/ 目录同步 */
+const AVAILABLE_SKILLS = [
+  { id: "skills.web_scraper", name: "网页深度爬取", icon: "🌐", desc: "抓取和清洗网页纯文本" },
+  { id: "skills.search_tool", name: "DuckDuckGo 搜索", icon: "🔍", desc: "实时搜索互联网信息" },
+  { id: "skills.file_ops", name: "原子文件读写", icon: "💾", desc: "安全读写文件（防路径穿越）" },
+  { id: "skills.code_executor", name: "代码安全执行", icon: "⚡", desc: "子进程隔离执行 Python 代码" },
+];
 
 /** 左侧边栏 — 工作流操作面板（专家 + 傻瓜双模式） */
 export default function Sidebar() {
@@ -12,6 +20,8 @@ export default function Sidebar() {
   const deploying = useWorkflowStore((s) => s.deploying);
   const addNode = useWorkflowStore((s) => s.addNode);
   const autoCompile = useWorkflowStore((s) => s.autoCompile);
+  const enabledSkills = useWorkflowStore((s) => s.enabledSkills);
+  const toggleSkill = useWorkflowStore((s) => s.toggleSkill);
 
   const [userIdea, setUserIdea] = useState("");
   const [autoCompiling, setAutoCompiling] = useState(false);
@@ -96,6 +106,59 @@ export default function Sidebar() {
         <div className="flex-1 rounded border border-zinc-800/50 bg-zinc-900/30 px-2 py-1.5 text-center">
           <div className="text-lg font-bold text-violet-400">{edgeCount}</div>
           <div className="text-[9px] text-zinc-500 uppercase">Edges</div>
+        </div>
+      </div>
+
+      {/* ════════════════════════════════════════════════════════════════
+          技能插拔选择器 (Skill Selector) — 按需装载技能模块
+         ════════════════════════════════════════════════════════════════ */}
+      <div className="border-b border-zinc-800/50 px-4 py-3">
+        <label className="mb-2 flex items-center gap-1.5 text-[10px] font-medium tracking-wider text-emerald-400/80 uppercase">
+          <Cpu className="h-3 w-3" /> Skill Selector
+        </label>
+        <div className="flex flex-col gap-1.5">
+          {AVAILABLE_SKILLS.map((skill) => {
+            const active = enabledSkills.includes(skill.id);
+            return (
+              <button
+                key={skill.id}
+                onClick={() => toggleSkill(skill.id)}
+                className={`group flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-all duration-200 ${
+                  active
+                    ? "border-emerald-400/60 bg-emerald-500/10 shadow-[0_0_12px_rgba(16,185,129,0.15)]"
+                    : "border-zinc-800/60 bg-zinc-900/30 hover:border-zinc-700/60 hover:bg-zinc-800/30"
+                }`}
+              >
+                <span className={`text-base ${active ? "" : "grayscale opacity-50"}`}>
+                  {skill.icon}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div
+                    className={`text-[11px] font-semibold ${
+                      active ? "text-emerald-300" : "text-zinc-500"
+                    }`}
+                  >
+                    {skill.name}
+                  </div>
+                  <div className="truncate text-[9px] text-zinc-600">{skill.desc}</div>
+                </div>
+                {/* Toggle indicator */}
+                <div
+                  className={`h-4 w-4 rounded-full border-2 transition-all duration-200 ${
+                    active
+                      ? "border-emerald-400 bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.5)]"
+                      : "border-zinc-700 bg-zinc-900"
+                  }`}
+                />
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-2 text-[9px] text-zinc-600">
+          已选 {enabledSkills.length}/{AVAILABLE_SKILLS.length} 个技能
+          {enabledSkills.length === 0 && (
+            <span className="ml-1 text-amber-500/80">（未挂载任何技能）</span>
+          )}
         </div>
       </div>
 

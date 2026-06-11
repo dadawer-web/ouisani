@@ -15,21 +15,23 @@ import org.slf4j.LoggerFactory;
 import java.util.*;
 
 /**
- * Semantic Cache Manager — the AIOS cognitive memory substrate.
+ * 语义缓存管理器 — AIOS 的 Page Cache（认知记忆基底）。
  * <p>
- * Stores LLM query-response pairs with their vector embeddings and
- * supports semantic lookup via cosine similarity. When the cache
- * exceeds its capacity, a pluggable {@link MemoryEvictionStrategy}
- * decides which entries to evict.
+ * 类比 Linux 的 Page Cache：操作系统将磁盘数据缓存在内存中加速访问，
+ * AIOS 将 LLM 的查询-响应对连同向量嵌入缓存在语义缓存中，
+ * 当新查询与缓存条目的余弦相似度超过阈值时，直接返回缓存结果，
+ * 避免重复调用 LLM。
  * <p>
- * <h3>Operating Modes</h3>
+ * 当缓存超出容量时，由可插拔的 {@link MemoryEvictionStrategy} 决定淘汰策略。
+ *
+ * <h3>运行模式</h3>
  * <ul>
- *   <li>{@link EvictionMode#STRICT_OS_MODE} — Pure OS discipline: LRU/LFU
- *       with token-cost tiebreaking. No sentiment, no forgetting curves.</li>
- *   <li>{@link EvictionMode#BIONIC_AGENT_MODE} — Biologically-inspired:
- *       Ebbinghaus forgetting curve + activation weight + emotional valence.</li>
- *   <li>{@link EvictionMode#HYBRID_MODE} — Weighted blend of both strategies.
- *       The hybrid score is: {@code α * strictScore + (1-α) * bionicScore}.</li>
+ *   <li>{@link EvictionMode#STRICT_OS_MODE} — 纯 OS 纪律：LRU/LFU + Token 成本决胜，
+ *       无情感因素，无遗忘曲线</li>
+ *   <li>{@link EvictionMode#BIONIC_AGENT_MODE} — 仿生模式：艾宾浩斯遗忘曲线 +
+ *       激活权重 + 情感效价</li>
+ *   <li>{@link EvictionMode#HYBRID_MODE} — 混合模式：两种策略的加权融合，
+ *       混合评分 = {@code α * strictScore + (1-α) * bionicScore}</li>
  * </ul>
  *
  * @see MemoryEvictionStrategy

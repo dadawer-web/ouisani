@@ -1,7 +1,8 @@
-package com.ouisani.aios.core.tool;
+package com.ouisani.aios.user.apps.omnifactory.tools;
 
 import com.ouisani.aios.core.skill.SkillLoader;
 import com.ouisani.aios.core.skill.SkillLoader.SkillDef;
+import com.ouisani.aios.core.tool.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,10 +13,11 @@ import java.util.stream.Collectors;
 /**
  * 技能工具 — 对标 Claude Code 的 SkillTool.ts，调用斜杠命令技能。
  * <p>
+ * 已从内核空间 (core.tool) 迁移至用户空间 (omnifactory.tools)。
+ * 此工具属于母体的高级认知能力，不属于内核系统调用。
+ * <p>
  * 从 SkillLoader 查找指定技能，若找到则通过 QueryEngine 执行其提示词，
  * 若未找到则返回失败并列出可用技能。
- * <p>
- * OS 类比：相当于 Linux 的 modprobe 调用 — 按名称查找内核模块并加载执行。
  */
 public class SkillTool implements Tool<SkillTool.Input> {
 
@@ -23,9 +25,6 @@ public class SkillTool implements Tool<SkillTool.Input> {
 
     /**
      * 输入参数 — 技能名称和可选参数。
-     *
-     * @param skill 技能名称（如 "commit"、"review"）
-     * @param args  可选参数，传递给技能提示词
      */
     public record Input(
             String skill,
@@ -73,7 +72,6 @@ public class SkillTool implements Tool<SkillTool.Input> {
         Optional<SkillDef> opt = SkillLoader.get(skillName);
 
         if (opt.isEmpty()) {
-            // 技能未找到 — 返回失败并列出可用技能
             String available = formatAvailableSkills();
             log.warn("[SkillTool] 技能未找到: {}", skillName);
             return ToolOutput.fail("技能未找到: " + skillName + "\n可用技能列表:\n" + available);
@@ -110,23 +108,19 @@ public class SkillTool implements Tool<SkillTool.Input> {
     private String buildSkillPrompt(SkillDef skillDef, String args) {
         StringBuilder sb = new StringBuilder();
 
-        // 技能描述
         sb.append("## 技能: ").append(skillDef.name()).append("\n");
         if (skillDef.description() != null && !skillDef.description().isEmpty()) {
             sb.append(skillDef.description()).append("\n\n");
         }
 
-        // 技能内容（SKILL.md 正文）
         if (skillDef.content() != null && !skillDef.content().isEmpty()) {
             sb.append(skillDef.content()).append("\n\n");
         }
 
-        // 允许使用的工具列表
         if (skillDef.allowedTools() != null && !skillDef.allowedTools().isEmpty()) {
             sb.append("允许使用的工具: ").append(String.join(", ", skillDef.allowedTools())).append("\n\n");
         }
 
-        // 用户参数
         if (args != null && !args.isEmpty()) {
             sb.append("用户参数: ").append(args).append("\n");
         }

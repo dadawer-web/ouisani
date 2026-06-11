@@ -1,7 +1,9 @@
 package com.ouisani.aios.user.container;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -25,6 +27,8 @@ public class AppManifest {
     private final int tokenBudget;
     private final Map<String, String> mounts;
     private final String entrypoint;
+    private final List<String> enabledSkills;
+    private final List<String> enabledRoles;
 
     private AppManifest(Builder builder) {
         this.appName = builder.appName;
@@ -32,6 +36,8 @@ public class AppManifest {
         this.tokenBudget = builder.tokenBudget;
         this.mounts = Collections.unmodifiableMap(new LinkedHashMap<>(builder.mounts));
         this.entrypoint = builder.entrypoint;
+        this.enabledSkills = Collections.unmodifiableList(new ArrayList<>(builder.enabledSkills));
+        this.enabledRoles = Collections.unmodifiableList(new ArrayList<>(builder.enabledRoles));
     }
 
     public String appName() {
@@ -54,6 +60,30 @@ public class AppManifest {
         return entrypoint;
     }
 
+    /**
+     * 获取按需装载的技能模块列表。
+     * <p>
+     * 例如 ["skills.web_scraper", "skills.file_ops"] 表示只挂载这两个技能模块。
+     * 空列表表示不挂载任何外部技能。
+     *
+     * @return 不可修改的技能模块名列表
+     */
+    public List<String> enabledSkills() {
+        return enabledSkills;
+    }
+
+    /**
+     * 获取按需装载的角色列表。
+     * <p>
+     * 例如 ["System_Architect", "Python_Coder"] 表示只挂载这两个角色。
+     * 空列表表示不挂载任何特殊工程角色。
+     *
+     * @return 不可修改的角色名列表
+     */
+    public List<String> enabledRoles() {
+        return enabledRoles;
+    }
+
     @Override
     public String toString() {
         return "AppManifest{" +
@@ -62,6 +92,8 @@ public class AppManifest {
                 ", tokenBudget=" + tokenBudget +
                 ", mounts=" + mounts +
                 ", entrypoint='" + entrypoint + '\'' +
+                ", enabledSkills=" + enabledSkills +
+                ", enabledRoles=" + enabledRoles +
                 '}';
     }
 
@@ -75,6 +107,8 @@ public class AppManifest {
         private int tokenBudget = 10000;
         private final Map<String, String> mounts = new LinkedHashMap<>();
         private String entrypoint = "";
+        private final List<String> enabledSkills = new ArrayList<>();
+        private final List<String> enabledRoles = new ArrayList<>();
 
         public Builder appName(String appName) {
             this.appName = appName;
@@ -98,6 +132,26 @@ public class AppManifest {
 
         public Builder entrypoint(String entrypoint) {
             this.entrypoint = entrypoint;
+            return this;
+        }
+
+        public Builder enabledSkill(String skillModule) {
+            this.enabledSkills.add(skillModule);
+            return this;
+        }
+
+        public Builder enabledSkills(List<String> skills) {
+            this.enabledSkills.addAll(skills);
+            return this;
+        }
+
+        public Builder enabledRole(String roleName) {
+            this.enabledRoles.add(roleName);
+            return this;
+        }
+
+        public Builder enabledRoles(List<String> roles) {
+            this.enabledRoles.addAll(roles);
             return this;
         }
 

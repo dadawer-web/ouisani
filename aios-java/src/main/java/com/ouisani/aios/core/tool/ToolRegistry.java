@@ -92,6 +92,7 @@ public class ToolRegistry {
      */
     public static void registerBuiltinTools() {
         var reg = instance();
+        // ── 内核级系统调用（全局注册） ──
         reg.register(new BashTool());
         reg.register(new FileReadTool());
         reg.register(new FileEditTool());
@@ -100,18 +101,21 @@ public class ToolRegistry {
         reg.register(new GlobTool());
         reg.register(new WebFetchTool());
         reg.register(new AgentTool());
-        reg.register(new TodoWriteTool());
-        reg.register(new AskUserQuestionTool());
-        reg.register(new PlanModeTool());
-        reg.register(new TaskTool());
-        reg.register(new SkillTool());
+        // AskUserQuestionTool 已删除 — 阻塞式人类 I/O 违反异步 IPC 原则
+        // 智能体如需与人类交互，必须通过 SendMessageTool 发送 type:user_prompt 到 EventBus UI 频道
         reg.register(new SendMessageTool());
         reg.register(new LspTool());
         reg.register(new ConfigTool());
-        reg.register(new NotebookEditTool());
         reg.register(new McpTool());
         // WebSearchTool 已有独立实现 (com.ouisani.aios.core.plugin.WebSearchTool)
-        log.info("[ToolRegistry] {} builtin tools registered", reg.tools.size());
-        System.out.println("[ToolRegistry] " + reg.tools.size() + " builtin tools registered");
+        // ── 以下工具已迁移至用户空间 (omnifactory.tools)，内核不再全局注册 ──
+        // TodoWriteTool, NotebookEditTool, PlanModeTool, TaskTool, SkillTool
+        // 由 OmniMotherAgent 在用户空间按需注册
+        log.info("[Kernel] Advanced cognitive tools relocated to OmniMother user space.");
+        log.info("[Syscall] Blocking human-I/O tools removed. Asynchronous EventBus pattern enforced.");
+        log.info("[ToolRegistry] {} builtin kernel tools registered", reg.tools.size());
+        System.out.println("[Kernel] Advanced cognitive tools relocated to OmniMother user space.");
+        System.out.println("[Syscall] Blocking human-I/O tools removed. Asynchronous EventBus pattern enforced.");
+        System.out.println("[ToolRegistry] " + reg.tools.size() + " builtin kernel tools registered");
     }
 }

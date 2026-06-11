@@ -9,12 +9,13 @@ import java.util.NavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 
 /**
- * Global Semantic Registry — a fusion of Windows Registry and Linux /proc philosophy.
+ * 语义配置注册表 — AIOS 的 /etc 配置注册表。
  * <p>
- * Maintains a sorted global configuration tree using {@link ConcurrentSkipListMap},
- * accessible both via Java API and through VFS at {@code /proc/registry}.
+ * 类比 Linux 的 /etc 配置目录与 Windows 注册表的融合：
+ * 使用 {@link ConcurrentSkipListMap} 维护一个有序的全局配置树，
+ * 既可通过 Java API 访问，也可通过 VFS 的 {@code /proc/registry} 路径访问。
  * <p>
- * Default keys are initialized at startup with AIOS kernel configuration.
+ * 默认键值在系统启动时由 AIOS 内核配置初始化。
  */
 public final class SemanticRegistry {
 

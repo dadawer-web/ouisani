@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { AIOS_API_URL } from "../config";
 import {
   type Node,
   type Edge,
@@ -33,6 +34,7 @@ export interface CompiledWorkflowNode {
 export interface CompiledWorkflowManifest {
   workflowName: string;
   nodes: CompiledWorkflowNode[];
+  enabledSkills: string[];
 }
 
 /** Toast 状态 */
@@ -59,6 +61,9 @@ interface WorkflowStore {
   systemAlert: SystemAlert;
   deploying: boolean;
   controlWs: WebSocket | null;
+  enabledSkills: string[];
+  setEnabledSkills: (skills: string[]) => void;
+  toggleSkill: (skillId: string) => void;
   setNodes: (nodes: Node[]) => void;
   setEdges: (edges: Edge[]) => void;
   addNode: (position: XYPosition) => void;
@@ -89,6 +94,14 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   systemAlert: { visible: false, nodeId: "", dump: "" },
   deploying: false,
   controlWs: null,
+  enabledSkills: ["skills.web_scraper"],
+  setEnabledSkills: (skills) => set({ enabledSkills: skills }),
+  toggleSkill: (skillId) =>
+    set((state) => ({
+      enabledSkills: state.enabledSkills.includes(skillId)
+        ? state.enabledSkills.filter((s) => s !== skillId)
+        : [...state.enabledSkills, skillId],
+    })),
 
   setNodes: (nodes) => set({ nodes }),
   setEdges: (edges) => set({ edges }),
@@ -309,6 +322,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     const manifest: CompiledWorkflowManifest = {
       workflowName,
       nodes: compiledNodes,
+      enabledSkills: get().enabledSkills,
     };
 
     return manifest;
@@ -329,9 +343,12 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
 
       // 发送到 AIOS 后端
       const response = await axios.post(
-        "http://localhost:8080/api/workflow/deploy",
+        `${AIOS_API_URL}/api/workflow/deploy`,
         manifest,
-        { timeout: 30000 }
+        {
+          timeout: 30000,
+          headers: { Authorization: "Bearer AIOS-SUPER-SECRET-KEY" },
+        }
       );
 
       console.log("[AIOS] Deploy response:", response.data);

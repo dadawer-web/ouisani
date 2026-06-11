@@ -3,6 +3,11 @@ package com.ouisani.aios.core.mcp;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+/**
+ * MCP 协议错误 — JSON-RPC 2.0 错误结构。
+ * <p>
+ * OS 类比: errno 错误码——标准化的错误标识，包含 code 和 message。
+ */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record McpError(
         int code,

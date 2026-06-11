@@ -1,4 +1,4 @@
-package com.ouisani.aios.core.llm;
+package com.ouisani.aios.drivers.llm;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
@@ -7,6 +7,9 @@ import com.google.gson.JsonParser;
 import com.ouisani.aios.core.AgentTask;
 import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.ipc.SignalInterceptor;
+import com.ouisani.aios.core.llm.ComputeCore;
+import com.ouisani.aios.core.llm.LlmProvider;
+import com.ouisani.aios.core.llm.LlmProvider.ChatMessage;
 import com.ouisani.aios.core.telemetry.SemanticEtw;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,22 +22,18 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * OpenAI API 适配器 — AIOS 的"设备驱动实现"。
+ * OpenAI API 适配器 — AIOS 用户空间设备驱动实现。
+ * <p>
+ * 已从内核空间 (core.llm) 迁移至驱动空间 (drivers.llm)。
+ * 内核只定义 {@link LlmProvider} 抽象接口，具体厂商实现作为驱动动态加载。
  * <p>
  * 类比操作系统中的具体设备驱动：正如 ext4 驱动实现了 VFS 接口来操作磁盘，
  * OpenAiAdapter 实现了 {@link LlmProvider} 接口来访问 OpenAI 的 API。
- * 上层（如 {@link LlmRouter}）只依赖 LlmProvider 接口，不感知底层是 OpenAI 还是其他 LLM 服务。
- *
- * <h3>OS 类比</h3>
- * <table>
- *   <tr><th>OS 概念</th><th>AIOS 概念</th><th>说明</th></tr>
- *   <tr><td>设备驱动</td><td>OpenAiAdapter</td><td>具体硬件/模型的驱动实现</td></tr>
- *   <tr><td>VFS 接口</td><td>LlmProvider</td><td>统一的抽象接口</td></tr>
- *   <tr><td>中断注入</td><td>SignalInterceptor</td><td>在 I/O 前检查挂起信号</td></tr>
- * </table>
+ * 上层（如 {@link com.ouisani.aios.core.llm.LlmRouter}）只依赖 LlmProvider 接口，
+ * 不感知底层是 OpenAI 还是其他 LLM 服务。
  *
  * @see LlmProvider
- * @see LlmRouter
+ * @see com.ouisani.aios.core.llm.LlmRouter
  */
 public class OpenAiAdapter implements LlmProvider {
 
@@ -84,9 +83,10 @@ public class OpenAiAdapter implements LlmProvider {
                 this.embeddingApiKey != null && !this.embeddingApiKey.isBlank());
     }
 
-    /** 简化构造器，默认超时 120 秒 */
+    /** 简化构造器，默认超时 300 秒（大模型生成长代码耗时极长，120s 不够） */
     public OpenAiAdapter(String apiKey, String baseUrl, String model) {
-        this(apiKey, baseUrl, model, 120);
+        this(apiKey, baseUrl, model, 300);
+        log.info("[OpenAiAdapter] LLM Request timeout extended to 300s to prevent generation truncation.");
     }
 
     /** 最简构造器，默认使用 OpenAI 官方地址和 gpt-4o-mini 模型 */
@@ -100,7 +100,7 @@ public class OpenAiAdapter implements LlmProvider {
      */
     private HttpClient createHttpClient() {
         return HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
+                .connectTimeout(Duration.ofSeconds(300))
                 .build();
     }
 
@@ -184,6 +184,11 @@ public class OpenAiAdapter implements LlmProvider {
         return "OpenAI-" + model;
     }
 
+    @Override
+    public ComputeCore computeCore() {
+        return ComputeCore.E_CORE; // 默认为 E_CORE，由 LlmRouter 决定路由
+    }
+
     /**
      * 向 LLM 发送推理请求（含系统提示词）。
      * 在发送前会检查是否有挂起的信号（SIGUSR1），如有则注入中断前缀。
@@ -202,9 +207,7 @@ public class OpenAiAdapter implements LlmProvider {
     @Override
     public String thinkWithHistory(List<ChatMessage> messages, String systemPrompt) {
         if (apiKey == null || apiKey.isBlank()) {
-            String error = "[LLM ERROR] No API key configured";
-            log.error(error);
-            return error;
+            throw new RuntimeException("[LLM FATAL] No API key configured — cannot perform inference");
         }
 
         // 信号拦截：在发出真实 LLM 请求前检查挂起的信号
@@ -228,7 +231,7 @@ public class OpenAiAdapter implements LlmProvider {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 log.warn("[SignalInterceptor] Agent#{} interrupted by signal before LLM call", currentTask.pid());
-                return "[LLM INTERRUPTED] " + e.getMessage();
+                throw new RuntimeException("LLM request interrupted by signal", e);
             }
         }
 
@@ -280,21 +283,20 @@ public class OpenAiAdapter implements LlmProvider {
                 String errorBody = response.body().length() > 300
                         ? response.body().substring(0, 300) + "..."
                         : response.body();
-                String errorMsg = "[LLM ERROR] HTTP " + response.statusCode() + ": " + errorBody;
                 log.error("API returned non-200: status={}, body={}", response.statusCode(), errorBody);
-                return errorMsg;
+                throw new RuntimeException("LLM request failed: HTTP " + response.statusCode() + ": " + errorBody);
             }
 
             return parseResponse(response.body());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            String errorMsg = "[LLM ERROR] Request interrupted";
             log.warn("Request interrupted");
-            return errorMsg;
+            throw new RuntimeException("LLM request interrupted", e);
+        } catch (RuntimeException e) {
+            throw e; // 重新抛出我们自己的 RuntimeException
         } catch (Exception e) {
-            String errorMsg = "[LLM ERROR] Request failed: " + e.getMessage();
             log.error("Request failed: {}", e.getMessage(), e);
-            return errorMsg;
+            throw new RuntimeException("LLM request failed: " + e.getMessage(), e);
         }
     }
 
@@ -349,7 +351,7 @@ public class OpenAiAdapter implements LlmProvider {
         } catch (Exception e) {
             log.error("JSON parse error: {} | body={}", e.getMessage(),
                     responseBody.length() > 200 ? responseBody.substring(0, 200) + "..." : responseBody);
-            return "[LLM ERROR] Invalid JSON response";
+            throw new RuntimeException("LLM response parse error: " + e.getMessage(), e);
         }
     }
 

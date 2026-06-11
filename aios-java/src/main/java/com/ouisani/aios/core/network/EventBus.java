@@ -56,11 +56,29 @@ public class EventBus {
      *
      * @param eventType the event channel to subscribe to (e.g. "system_metrics")
      * @param handler   callback invoked with the payload
+     * @return a subscription ID that can be used to unsubscribe
      */
-    public void subscribe(String eventType, Consumer<String> handler) {
+    public String subscribe(String eventType, Consumer<String> handler) {
         subscribers.computeIfAbsent(eventType, k -> new CopyOnWriteArrayList<>()).add(handler);
-        log.info("[EventBus] Subscriber registered for channel '{}' (total subscribers: {})",
-                eventType, subscribers.get(eventType).size());
+        String subId = eventType + ":" + System.identityHashCode(handler);
+        log.info("[EventBus] Subscriber registered for channel '{}' (total subscribers: {}), subId={}",
+                eventType, subscribers.get(eventType).size(), subId);
+        return subId;
+    }
+
+    /**
+     * Unsubscribe a handler from a specific event channel.
+     * Must be called when a WebSocket connection closes to prevent memory leaks.
+     *
+     * @param eventType the event channel to unsubscribe from
+     * @param handler   the exact handler instance to remove
+     */
+    public void unsubscribe(String eventType, Consumer<String> handler) {
+        List<Consumer<String>> handlers = subscribers.get(eventType);
+        if (handlers != null && handlers.remove(handler)) {
+            log.info("[EventBus] Subscriber removed from channel '{}' (remaining: {})",
+                    eventType, handlers.size());
+        }
     }
 
     public void broadcast(String eventType, String payload) {

@@ -1,5 +1,6 @@
-package com.ouisani.aios.core.memory.providers;
+package com.ouisani.aios.drivers.memory;
 
+import com.ouisani.aios.core.memory.providers.MemoryProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -7,7 +8,10 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Zep 云端记忆后端 — 集成 Zep 长期记忆服务器。
+ * Zep 云端记忆驱动 — 集成 Zep 长期记忆服务器。
+ * <p>
+ * 已从内核空间 (core.memory.providers) 迁移至驱动空间 (drivers.memory)。
+ * 内核只定义 {@link MemoryProvider} 抽象接口，具体厂商实现作为驱动动态加载。
  * <p>
  * Zep 提供事实提取、知识图谱构建和带自动摘要的时序记忆管理。
  * <p>
@@ -33,7 +37,6 @@ public class ZepProvider implements MemoryProvider {
                 agentId, memoryContent != null ? memoryContent.length() : 0);
 
         // TODO: Replace with actual HTTP call to Zep API
-        // POST /api/v1/memory { "user_id": agentId, "messages": [{"content": memoryContent}] }
         List<String> entries = mockStore.computeIfAbsent(agentId, k -> new java.util.ArrayList<>());
         entries.add(memoryContent);
 
@@ -46,8 +49,6 @@ public class ZepProvider implements MemoryProvider {
         log.info("[Zep] Syncing with external vector database... operation=retrieve, agent='{}', query='{}'",
                 agentId, query);
 
-        // TODO: Replace with actual HTTP call to Zep API
-        // GET /api/v1/memory?user_id=agentId
         List<String> entries = mockStore.get(agentId);
         if (entries == null || entries.isEmpty()) {
             log.info("[Zep] No memories found for agent='{}'", agentId);
@@ -71,8 +72,6 @@ public class ZepProvider implements MemoryProvider {
     public void clear(String agentId) {
         log.info("[Zep] Syncing with external vector database... operation=clear, agent='{}'", agentId);
 
-        // TODO: Replace with actual HTTP call to Zep API
-        // DELETE /api/v1/memory?user_id=agentId
         List<String> removed = mockStore.remove(agentId);
         int count = removed != null ? removed.size() : 0;
         log.info("[Zep] Clear completed (mock): agent='{}', entriesRemoved={}", agentId, count);
