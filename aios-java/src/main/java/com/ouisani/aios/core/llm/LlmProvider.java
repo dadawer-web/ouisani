@@ -1,5 +1,8 @@
 package com.ouisani.aios.core.llm;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+
 import java.util.List;
 
 /**
@@ -51,9 +54,15 @@ public interface LlmProvider {
         return think(prompt, "");
     }
 
-    /** 聊天消息记录，包含角色和内容 */
-    record ChatMessage(String role, String content) {
-        /** 创建用户消息 */
+    /**
+     * 聊天消息记录，支持纯文本和多模态内容。
+     * <p>
+     * content 可以是纯文本字符串，也可以是 OpenAI 多模态格式的 JsonArray
+     * （包含 text 和 image_url 类型的内容块）。
+     */
+    record ChatMessage(String role, Object content) {
+
+        /** 创建用户消息（纯文本） */
         public static ChatMessage user(String content) {
             return new ChatMessage("user", content);
         }
@@ -66,6 +75,58 @@ public interface LlmProvider {
         /** 创建助手消息 */
         public static ChatMessage assistant(String content) {
             return new ChatMessage("assistant", content);
+        }
+
+        /**
+         * 创建包含图片的用户消息（OpenAI 多模态格式）。
+         *
+         * @param text      文本描述
+         * @param imageBase64 图片的 Base64 编码（JPEG/PNG）
+         * @param imageUrl   图片 URL（与 imageBase64 二选一）
+         * @return 多模态用户消息
+         */
+        public static ChatMessage userWithImage(String text, String imageBase64, String imageUrl) {
+            JsonArray contentArray = new JsonArray();
+
+            JsonObject textBlock = new JsonObject();
+            textBlock.addProperty("type", "text");
+            textBlock.addProperty("text", text);
+            contentArray.add(textBlock);
+
+            JsonObject imageBlock = new JsonObject();
+            imageBlock.addProperty("type", "image_url");
+            JsonObject imageUrlObj = new JsonObject();
+            if (imageBase64 != null && !imageBase64.isEmpty()) {
+                imageUrlObj.addProperty("url", "data:image/jpeg;base64," + imageBase64);
+            } else if (imageUrl != null && !imageUrl.isEmpty()) {
+                imageUrlObj.addProperty("url", imageUrl);
+            }
+            imageBlock.add("image_url", imageUrlObj);
+            contentArray.add(imageBlock);
+
+            return new ChatMessage("user", contentArray);
+        }
+
+        /** 获取纯文本内容（兼容旧代码） */
+        public String contentAsString() {
+            if (content instanceof String s) return s;
+            if (content instanceof JsonArray arr) {
+                // 提取第一个 text 块
+                for (var elem : arr) {
+                    if (elem.isJsonObject()) {
+                        JsonObject obj = elem.getAsJsonObject();
+                        if ("text".equals(obj.get("type").getAsString())) {
+                            return obj.get("text").getAsString();
+                        }
+                    }
+                }
+            }
+            return content != null ? content.toString() : "";
+        }
+
+        /** 是否为多模态消息（包含图片） */
+        public boolean isMultimodal() {
+            return content instanceof JsonArray;
         }
     }
 

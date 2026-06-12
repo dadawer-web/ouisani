@@ -13,22 +13,26 @@ import com.ouisani.aios.core.tool.QueryEngine;
 import com.ouisani.aios.core.tool.Tool;
 import com.ouisani.aios.core.tool.ToolInput;
 import com.ouisani.aios.core.tool.ToolRegistry;
-import com.ouisani.aios.openclaw.PluginLoader;
-import com.ouisani.aios.openclaw.PluginRegistry;
-import com.ouisani.aios.openclaw.ToolAssembler;
-import com.ouisani.aios.openclaw.ToolAssemblyContext;
-import com.ouisani.aios.openclaw.channel.ChannelRegistry;
-import com.ouisani.aios.openclaw.gateway.GatewayClient;
-import com.ouisani.aios.openclaw.gateway.GatewayToolBridge;
-import com.ouisani.aios.openclaw.secrets.SecretRef;
-import com.ouisani.aios.openclaw.secrets.SecretsSnapshot;
-import com.ouisani.aios.openclaw.session.AgentMessage;
-import com.ouisani.aios.openclaw.session.CompactionService;
-import com.ouisani.aios.openclaw.session.SessionContext;
-import com.ouisani.aios.openclaw.session.SessionManager;
-import com.ouisani.aios.openclaw.tools.GatewayControlTool;
-import com.ouisani.aios.openclaw.tools.MessageTool;
-import com.ouisani.aios.openclaw.tools.NodesTool;
+import com.ouisani.aios.operator.PluginLoader;
+import com.ouisani.aios.operator.PluginRegistry;
+import com.ouisani.aios.operator.ToolAssembler;
+import com.ouisani.aios.operator.ToolAssemblyContext;
+import com.ouisani.aios.operator.channel.ChannelRegistry;
+import com.ouisani.aios.operator.gateway.GatewayClient;
+import com.ouisani.aios.operator.gateway.GatewayToolBridge;
+import com.ouisani.aios.operator.secrets.SecretRef;
+import com.ouisani.aios.operator.secrets.SecretsSnapshot;
+import com.ouisani.aios.operator.session.AgentMessage;
+import com.ouisani.aios.operator.session.CompactionService;
+import com.ouisani.aios.operator.session.SessionContext;
+import com.ouisani.aios.operator.session.SessionManager;
+import com.ouisani.aios.operator.tools.ComputerUseTool;
+import com.ouisani.aios.operator.tools.GatewayControlTool;
+import com.ouisani.aios.operator.tools.MessageTool;
+import com.ouisani.aios.operator.tools.NodesTool;
+import com.ouisani.aios.operator.vision.VisionService;
+import com.ouisani.aios.user.bridge.rpa.HostRpaManager;
+import com.ouisani.aios.user.bridge.rpa.SecurityToken;
 import com.ouisani.aios.user.sdk.AbstractAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,19 +91,30 @@ public class OperatorAgent extends AbstractAgent {
     // ── OpenClaw 密钥快照 ──
     private SecretsSnapshot secretsSnapshot;
 
+    // ── RPA 物理操作令牌 ──
+    private SecurityToken rpaToken;
+
+    // ── 视觉服务 — 截图→多模态模型→屏幕描述 ──
+    private VisionService visionService;
+
     /** 操作员 System Prompt — 极度干练的物理交互认知 */
     private static final String OPERATOR_SYSTEM_PROMPT_TEMPLATE =
             "你是一个高级系统操作员 (System Operator)。你不写任何代码，你的任务是直接操作真实的计算机系统来完成用户的指令。\n"
-            + "你可以使用 'BashTool' 执行终端命令，使用 'FileReadTool' 读取文件，使用 'FileWriteTool' 写入文件，使用 'FileEditTool' 编辑文件。\n"
-            + "你可以使用 'nodes' 工具控制远程节点（查询状态、发送通知、执行命令），使用 'message' 工具发送消息，使用 'gateway' 工具管理配置。\n"
-            + "【执行铁律】：\n"
+            + "【核心能力】：\n"
+            + "- computer_use: 控制宿主机的鼠标、键盘和屏幕截图（物理操作）\n"
+            + "- BashTool: 执行终端命令\n"
+            + "- FileReadTool/FileWriteTool/FileEditTool: 文件操作\n"
+            + "- nodes/message/gateway: 远程节点控制与消息通信\n"
+            + "\n"
+            + "【Computer Use 操作铁律】：\n"
             + "1. 你处于一个 [观察 -> 思考 -> 行动] 的 ReAct 循环中。\n"
-            + "2. 当你不确定系统状态时，必须首先执行检查命令（如 ls, cat, pwd）获取反馈。\n"
-            + "3. 发现目标后，构造精确的命令进行操作。\n"
-            + "4. 一步一步来，绝对不要在一次回复中猜测连续操作的中间结果。\n"
-            + "5. 每次操作后，必须验证结果是否符合预期。\n"
-            + "6. 如果操作失败，分析错误信息并调整策略重试，不要盲目重复。\n"
-            + "7. 任务完成后，回复 TASK_COMPLETED 并附上操作摘要。\n"
+            + "2. 当你不确定屏幕状态时，必须首先调用 computer_use(action='screenshot') 获取视觉反馈。\n"
+            + "3. 发现目标后，计算其 X/Y 坐标，调用 computer_use(action='click_at', x=..., y=...) 进行点击。\n"
+            + "4. 需要输入文字时，调用 computer_use(action='type_text', text='...')。\n"
+            + "5. 需要快捷键时，调用 computer_use(action='key_combo', ctrl=true, keyCode=67) 等。\n"
+            + "6. 一步一步来，绝对不要在一次回复中猜测连续点击的坐标。每次操作后截图验证。\n"
+            + "7. 如果操作失败，截图确认状态后调整策略，不要盲目重试。\n"
+            + "8. 任务完成后，回复 TASK_COMPLETED 并附上操作摘要。\n"
             + "%s"; // 运行时注入渠道+密钥信息
 
     public OperatorAgent(WorkflowManifest manifest) {
@@ -323,6 +338,34 @@ public class OperatorAgent extends AbstractAgent {
         }
         System.out.println("[Operator Agent] OpenClaw secrets: " + secretsSnapshot.secretKeys().size() + " resolved");
 
+        // ── 1.8. RPA 物理操作令牌 — 签发 SYS_ADMIN 令牌 ──
+        try {
+            HostRpaManager rpaManager = HostRpaManager.getInstance();
+            if (rpaManager.isAvailable()) {
+                this.rpaToken = rpaManager.issueSysAdminToken("OperatorAgent:" + manifest.workflowName());
+                System.out.println("[Operator Agent] RPA: SYS_ADMIN token issued — physical control ENABLED");
+            } else {
+                System.out.println("[Operator Agent] RPA: HostRpaManager not available (headless mode?) — physical control DISABLED");
+            }
+        } catch (Exception e) {
+            System.out.println("[Operator Agent] RPA: Failed to issue token — " + e.getMessage());
+        }
+
+        // ── 1.9. VisionService — 从 LlmRouter 获取多模态 Provider ──
+        try {
+            com.ouisani.aios.core.llm.LlmProvider multimodalProvider =
+                    com.ouisani.aios.core.llm.LlmRouterHolder.getProvider("multimodal");
+            if (multimodalProvider != null && multimodalProvider.isAvailable()) {
+                this.visionService = new VisionService(multimodalProvider);
+                System.out.println("[Operator Agent] VisionService: ENABLED — multimodal provider '"
+                        + multimodalProvider.name() + "' connected");
+            } else {
+                System.out.println("[Operator Agent] VisionService: DISABLED — no multimodal provider registered");
+            }
+        } catch (Exception e) {
+            System.out.println("[Operator Agent] VisionService: Failed to initialize — " + e.getMessage());
+        }
+
         // ── 2. 工具装配 — 内核工具 + 插件工具 + 策略过滤 ──
         List<Tool<? extends ToolInput>> operatorTools = buildOperatorToolList();
         this.queryEngine = new QueryEngine(sdk, this.agentId, workingDir, operatorTools);
@@ -378,20 +421,39 @@ public class OperatorAgent extends AbstractAgent {
      * 4. 应用策略过滤（白名单/黑名单）
      */
     private List<Tool<? extends ToolInput>> buildOperatorToolList() {
-        ToolAssemblyContext context = ToolAssemblyContext.builder()
+        ToolAssemblyContext.Builder builder = ToolAssemblyContext.builder()
                 .agentId(this.agentId)
                 .workingDir(workingDir)
                 .operatorMode(true)
-                .pluginRegistry(pluginRegistry)
-                // OpenClaw 内置工具 — 通过 Gateway Bridge 与 OpenClaw 通信
-                .extraTool(new NodesTool(gatewayBridge))
-                .extraTool(new MessageTool(gatewayBridge))
-                .extraTool(new GatewayControlTool(gatewayBridge))
-                .build();
+                .pluginRegistry(pluginRegistry);
+
+        // ── Computer Use — 物理操作宿主机的核心工具 ──
+        if (rpaToken != null) {
+            ComputerUseTool computerUseTool = new ComputerUseTool(rpaToken);
+
+            // ── 注入 VisionService — 截图后自动调用多模态模型理解屏幕 ──
+            if (visionService != null) {
+                computerUseTool.setVisionService(visionService);
+                System.out.println("[Operator Agent] ComputerUseTool: MOUNTED with VisionService (mimo-v2.5)");
+            } else {
+                System.out.println("[Operator Agent] ComputerUseTool: MOUNTED but VisionService unavailable (no multimodal provider)");
+            }
+
+            builder.extraTool(computerUseTool);
+        } else {
+            System.out.println("[Operator Agent] ComputerUseTool: SKIPPED — no RPA token (headless or token issue)");
+        }
+
+        // OpenClaw 内置工具 — 通过 Gateway Bridge 与 OpenClaw 通信
+        builder.extraTool(new NodesTool(gatewayBridge))
+               .extraTool(new MessageTool(gatewayBridge))
+               .extraTool(new GatewayControlTool(gatewayBridge));
+
+        ToolAssemblyContext context = builder.build();
 
         List<Tool<? extends ToolInput>> tools = ToolAssembler.assemble(context);
         System.out.println("[Operator Agent] Tools assembled: " + tools.size()
-                + " (operator mode, cognitive tools excluded, OpenClaw tools included)");
+                + " (operator mode, cognitive tools excluded, ComputerUse + OpenClaw tools included)");
         return tools;
     }
 

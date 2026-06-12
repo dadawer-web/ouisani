@@ -191,7 +191,7 @@ public class LlmRouter implements LlmProvider {
     public String thinkWithHistory(List<ChatMessage> messages, String systemPrompt) {
         String lastUserMsg = messages.stream()
                 .filter(m -> "user".equals(m.role()))
-                .map(ChatMessage::content)
+                .map(ChatMessage::contentAsString)
                 .reduce((first, second) -> second)
                 .orElse("");
 

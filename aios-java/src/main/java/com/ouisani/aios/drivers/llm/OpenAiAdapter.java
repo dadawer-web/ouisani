@@ -220,8 +220,8 @@ public class OpenAiAdapter implements LlmProvider {
                     List<ChatMessage> modified = new java.util.ArrayList<>(messages);
                     for (int i = 0; i < modified.size(); i++) {
                         ChatMessage msg = modified.get(i);
-                        if ("user".equals(msg.role())) {
-                            modified.set(i, new ChatMessage("user", prefix + msg.content()));
+                        if ("user".equals(msg.role()) && !msg.isMultimodal()) {
+                            modified.set(i, new ChatMessage("user", prefix + msg.contentAsString()));
                             break;
                         }
                     }
@@ -251,7 +251,14 @@ public class OpenAiAdapter implements LlmProvider {
         for (ChatMessage msg : messages) {
             JsonObject m = new JsonObject();
             m.addProperty("role", msg.role());
-            m.addProperty("content", msg.content());
+
+            if (msg.isMultimodal() && msg.content() instanceof JsonArray contentArray) {
+                // 多模态消息：content 为 JsonArray（text + image_url 块）
+                m.add("content", contentArray);
+            } else {
+                // 纯文本消息：content 为 String
+                m.addProperty("content", msg.contentAsString());
+            }
             msgArray.add(m);
         }
 

@@ -276,6 +276,7 @@ public class AiosShell extends AbstractAgent {
 
         // 2. LLM Router
         LlmRouter llmRouter = new LlmRouter();
+        com.ouisani.aios.core.llm.LlmRouterHolder.set(llmRouter); // 全局持有，供 OperatorAgent 等组件访问
         String apiKey = env.getOrDefault("OPENAI_API_KEY", System.getenv().getOrDefault("OPENAI_API_KEY", ""));
         String baseUrl = env.getOrDefault("OPENAI_BASE_URL", System.getenv().getOrDefault("OPENAI_BASE_URL", "https://api.openai.com"));
         String model = env.getOrDefault("OPENAI_MODEL", System.getenv().getOrDefault("OPENAI_MODEL", "gpt-4o-mini"));
@@ -288,6 +289,19 @@ public class AiosShell extends AbstractAgent {
             System.out.printf("  ✓ LLM: %s @ %s%n", model, baseUrl);
         } else {
             System.out.println("  ⚠ No OPENAI_API_KEY — LLM unavailable");
+        }
+
+        // 2.1 Multimodal Provider — mimo-v2.5 等多模态模型（Computer Use 视觉理解）
+        String mmApiKey = env.getOrDefault("MULTIMODAL_API_KEY", System.getenv().getOrDefault("MULTIMODAL_API_KEY", ""));
+        String mmBaseUrl = env.getOrDefault("MULTIMODAL_BASE_URL", System.getenv().getOrDefault("MULTIMODAL_BASE_URL", ""));
+        String mmModel = env.getOrDefault("MULTIMODAL_MODEL", System.getenv().getOrDefault("MULTIMODAL_MODEL", ""));
+
+        if (!mmApiKey.isEmpty() && !mmBaseUrl.isEmpty() && !mmModel.isEmpty()) {
+            OpenAiAdapter multimodalAdapter = new OpenAiAdapter(mmApiKey, mmBaseUrl, mmModel);
+            llmRouter.registerProvider("multimodal", multimodalAdapter);
+            System.out.printf("  ✓ Multimodal: %s @ %s (for Computer Use vision)%n", mmModel, mmBaseUrl);
+        } else {
+            System.out.println("  ⚠ No MULTIMODAL_* config — Computer Use vision disabled (screenshot without understanding)");
         }
 
         // 2.5 WebSearchTool — 注入 Serper API Key
