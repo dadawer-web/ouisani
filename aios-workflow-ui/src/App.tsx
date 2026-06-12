@@ -157,7 +157,7 @@ export default function App() {
         <Sidebar />
 
       {/* 中间：React Flow 画布 */}
-      <div className="relative flex-1">
+      <div className="relative flex-1 w-full h-full">
         <ReactFlow
           nodes={nodes}
           edges={edges}

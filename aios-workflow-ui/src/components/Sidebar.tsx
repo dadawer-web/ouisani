@@ -1,14 +1,6 @@
-import { useState } from "react";
-import { Plus, Rocket, Workflow, Sparkles, Loader2, Cpu } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Plus, Rocket, Workflow, Sparkles, Loader2, Cpu, Users } from "lucide-react";
 import { useWorkflowStore } from "@/store/workflowStore";
-
-/** 可用技能字典 — 与后端 aios_skills/ 目录同步 */
-const AVAILABLE_SKILLS = [
-  { id: "skills.web_scraper", name: "网页深度爬取", icon: "🌐", desc: "抓取和清洗网页纯文本" },
-  { id: "skills.search_tool", name: "DuckDuckGo 搜索", icon: "🔍", desc: "实时搜索互联网信息" },
-  { id: "skills.file_ops", name: "原子文件读写", icon: "💾", desc: "安全读写文件（防路径穿越）" },
-  { id: "skills.code_executor", name: "代码安全执行", icon: "⚡", desc: "子进程隔离执行 Python 代码" },
-];
 
 /** 左侧边栏 — 工作流操作面板（专家 + 傻瓜双模式） */
 export default function Sidebar() {
@@ -22,6 +14,15 @@ export default function Sidebar() {
   const autoCompile = useWorkflowStore((s) => s.autoCompile);
   const enabledSkills = useWorkflowStore((s) => s.enabledSkills);
   const toggleSkill = useWorkflowStore((s) => s.toggleSkill);
+  const enabledRoles = useWorkflowStore((s) => s.enabledRoles);
+  const toggleRole = useWorkflowStore((s) => s.toggleRole);
+  const availableSkills = useWorkflowStore((s) => s.availableSkills);
+  const availableRoles = useWorkflowStore((s) => s.availableRoles);
+  const fetchCatalogs = useWorkflowStore((s) => s.fetchCatalogs);
+
+  useEffect(() => {
+    fetchCatalogs();
+  }, []);
 
   const [userIdea, setUserIdea] = useState("");
   const [autoCompiling, setAutoCompiling] = useState(false);
@@ -33,14 +34,14 @@ export default function Sidebar() {
     });
   };
 
-  const handleAutoCompile = () => {
+  const handleAutoCompile = async () => {
     if (!userIdea.trim()) return;
     setAutoCompiling(true);
-    // 模拟后端延迟
-    setTimeout(() => {
-      autoCompile(userIdea);
+    try {
+      await autoCompile(userIdea);
+    } finally {
       setAutoCompiling(false);
-    }, 800);
+    }
   };
 
   return (
@@ -116,48 +117,115 @@ export default function Sidebar() {
         <label className="mb-2 flex items-center gap-1.5 text-[10px] font-medium tracking-wider text-emerald-400/80 uppercase">
           <Cpu className="h-3 w-3" /> Skill Selector
         </label>
-        <div className="flex flex-col gap-1.5">
-          {AVAILABLE_SKILLS.map((skill) => {
-            const active = enabledSkills.includes(skill.id);
-            return (
-              <button
-                key={skill.id}
-                onClick={() => toggleSkill(skill.id)}
-                className={`group flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-all duration-200 ${
-                  active
-                    ? "border-emerald-400/60 bg-emerald-500/10 shadow-[0_0_12px_rgba(16,185,129,0.15)]"
-                    : "border-zinc-800/60 bg-zinc-900/30 hover:border-zinc-700/60 hover:bg-zinc-800/30"
-                }`}
-              >
-                <span className={`text-base ${active ? "" : "grayscale opacity-50"}`}>
-                  {skill.icon}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div
-                    className={`text-[11px] font-semibold ${
-                      active ? "text-emerald-300" : "text-zinc-500"
-                    }`}
-                  >
-                    {skill.name}
-                  </div>
-                  <div className="truncate text-[9px] text-zinc-600">{skill.desc}</div>
-                </div>
-                {/* Toggle indicator */}
-                <div
-                  className={`h-4 w-4 rounded-full border-2 transition-all duration-200 ${
+        {availableSkills.length === 0 ? (
+          <div className="flex items-center gap-2 rounded-lg border border-zinc-800/40 bg-zinc-900/20 px-3 py-3">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-500/50" />
+            <span className="text-[10px] text-zinc-600">正在从 AIOS 内核扫描物理资产...</span>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            {availableSkills.map((skill) => {
+              const active = enabledSkills.includes(skill.id);
+              return (
+                <button
+                  key={skill.id}
+                  onClick={() => toggleSkill(skill.id)}
+                  className={`group flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-all duration-200 ${
                     active
-                      ? "border-emerald-400 bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.5)]"
-                      : "border-zinc-700 bg-zinc-900"
+                      ? "border-emerald-400/60 bg-emerald-500/10 shadow-[0_0_12px_rgba(16,185,129,0.15)]"
+                      : "border-zinc-800/60 bg-zinc-900/30 hover:border-zinc-700/60 hover:bg-zinc-800/30"
                   }`}
-                />
-              </button>
-            );
-          })}
-        </div>
+                >
+                  <span className={`text-base ${active ? "" : "grayscale opacity-50"}`}>
+                    {skill.icon}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div
+                      className={`text-[11px] font-semibold ${
+                        active ? "text-emerald-300" : "text-zinc-500"
+                      }`}
+                    >
+                      {skill.name}
+                    </div>
+                    <div className="truncate text-[9px] text-zinc-600">{skill.desc}</div>
+                  </div>
+                  {/* Toggle indicator */}
+                  <div
+                    className={`h-4 w-4 rounded-full border-2 transition-all duration-200 ${
+                      active
+                        ? "border-emerald-400 bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.5)]"
+                        : "border-zinc-700 bg-zinc-900"
+                    }`}
+                  />
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="mt-2 text-[9px] text-zinc-600">
-          已选 {enabledSkills.length}/{AVAILABLE_SKILLS.length} 个技能
-          {enabledSkills.length === 0 && (
+          已选 {enabledSkills.length}/{availableSkills.length} 个技能
+          {enabledSkills.length === 0 && availableSkills.length > 0 && (
             <span className="ml-1 text-amber-500/80">（未挂载任何技能）</span>
+          )}
+        </div>
+      </div>
+
+      {/* ════════════════════════════════════════════════════════════════
+          角色插拔选择器 (Role Selector) — 按需装载认知角色
+         ════════════════════════════════════════════════════════════════ */}
+      <div className="border-b border-zinc-800/50 px-4 py-3">
+        <label className="mb-2 flex items-center gap-1.5 text-[10px] font-medium tracking-wider text-amber-400/80 uppercase">
+          <Users className="h-3 w-3" /> Role Selector
+        </label>
+        {availableRoles.length === 0 ? (
+          <div className="flex items-center gap-2 rounded-lg border border-zinc-800/40 bg-zinc-900/20 px-3 py-3">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500/50" />
+            <span className="text-[10px] text-zinc-600">正在从 AIOS 内核扫描物理资产...</span>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            {availableRoles.map((role) => {
+              const active = enabledRoles.includes(role.id);
+              return (
+                <button
+                  key={role.id}
+                  onClick={() => toggleRole(role.id)}
+                  className={`group flex items-center gap-2 rounded-lg border px-3 py-2 text-left transition-all duration-200 ${
+                    active
+                      ? "border-amber-400/60 bg-amber-500/10 shadow-[0_0_12px_rgba(245,158,11,0.15)]"
+                      : "border-zinc-800/60 bg-zinc-900/30 hover:border-zinc-700/60 hover:bg-zinc-800/30"
+                  }`}
+                >
+                  <span className={`text-base ${active ? "" : "grayscale opacity-50"}`}>
+                    {role.icon}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div
+                      className={`text-[11px] font-semibold ${
+                        active ? "text-amber-300" : "text-zinc-500"
+                      }`}
+                    >
+                      {role.name}
+                    </div>
+                    <div className="truncate text-[9px] text-zinc-600">{role.desc}</div>
+                  </div>
+                  {/* Toggle indicator */}
+                  <div
+                    className={`h-4 w-4 rounded-full border-2 transition-all duration-200 ${
+                      active
+                        ? "border-amber-400 bg-amber-400 shadow-[0_0_6px_rgba(245,158,11,0.5)]"
+                        : "border-zinc-700 bg-zinc-900"
+                    }`}
+                  />
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <div className="mt-2 text-[9px] text-zinc-600">
+          已选 {enabledRoles.length}/{availableRoles.length} 个角色
+          {enabledRoles.length === 0 && availableRoles.length > 0 && (
+            <span className="ml-1 text-amber-500/80">（未挂载任何角色）</span>
           )}
         </div>
       </div>

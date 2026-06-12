@@ -439,8 +439,21 @@ public class AiosAppManager {
          * @return 拼接后的角色规范文本
          */
         private String tailorRolesManifest(List<String> enabledRoles) {
+            // 兜底逻辑：如果 enabledRoles 为空，强制注入 System_Architect 角色卡
+            // 绝不允许给大模型喂空的角色说明书！
             if (enabledRoles == null || enabledRoles.isEmpty()) {
-                return "# 当前任务角色配置\n\n本次任务未挂载特殊工程角色，请使用默认 AGI 逻辑。\n";
+                String defaultRolePath = "/home/xmy/tryaios/aios-java/aios_roles/System_Architect.yaml";
+                try {
+                    String architectContent = java.nio.file.Files.readString(java.nio.file.Path.of(defaultRolePath));
+                    log.info("[AppManager] enabledRoles is empty, force-injecting System_Architect as default role");
+                    return "# 当前任务角色配置（默认兜底）\n\n" +
+                            "本次任务未指定按需装载角色，强制注入系统架构师角色：\n\n" +
+                            "---\n# Role: System_Architect (Default)\n" +
+                            architectContent.trim() + "\n---\n";
+                } catch (Exception e) {
+                    System.err.println("[AppManager] Failed to read default System_Architect.yaml: " + e.getMessage());
+                    return "# 当前任务角色配置\n\n[WARN] 默认架构师角色卡读取失败，请使用默认 AGI 逻辑。\n";
+                }
             }
 
             String rolesDir = "/home/xmy/tryaios/aios-java/aios_roles";
@@ -484,10 +497,6 @@ public class AiosAppManager {
          * @return 裁剪后的技能说明书文本
          */
         private String tailorSkillsManifest(List<String> enabledSkills) {
-            if (enabledSkills == null || enabledSkills.isEmpty()) {
-                return "# 当前任务技能配置\n\n本次任务未挂载任何外部技能，请使用标准库。\n";
-            }
-
             // 读取全局 MANIFEST.md
             String manifestPath = "/home/xmy/tryaios/aios-java/aios_skills/MANIFEST.md";
             String fullManifest;
@@ -495,7 +504,15 @@ public class AiosAppManager {
                 fullManifest = java.nio.file.Files.readString(java.nio.file.Path.of(manifestPath));
             } catch (Exception e) {
                 return "# 当前任务技能配置\n\n[WARN] 全局技能注册表读取失败: " + e.getMessage() +
-                        "\n已启用模块: " + enabledSkills + "\n请尝试 file_read /shared/skills/MANIFEST.md\n";
+                        "\n请尝试 file_read /shared/skills/MANIFEST.md\n";
+            }
+
+            // 如果 enabledSkills 为空，默认开放所有本地技能（写入全量 MANIFEST.md）
+            if (enabledSkills == null || enabledSkills.isEmpty()) {
+                log.info("[AppManager] enabledSkills is empty, writing full MANIFEST.md as ACTIVE_SKILLS.md (default open all)");
+                return "# 当前任务技能配置（全量开放）\n\n" +
+                        "本次任务未指定按需装载列表，默认开放所有本地技能：\n\n" +
+                        fullManifest;
             }
 
             StringBuilder tailored = new StringBuilder();

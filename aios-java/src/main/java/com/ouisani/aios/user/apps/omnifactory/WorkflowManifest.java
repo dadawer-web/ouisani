@@ -17,5 +17,18 @@ import java.util.List;
  */
 public record WorkflowManifest(
         String workflowName,
-        List<WorkflowNode> nodes
-) {}
+        List<WorkflowNode> nodes,
+        List<String> enabledSkills,
+        List<String> enabledRoles,
+        String agentType
+) {
+    /** 兼容旧调用：无 skills/roles/agentType 时使用默认值 */
+    public WorkflowManifest(String workflowName, List<WorkflowNode> nodes) {
+        this(workflowName, nodes, List.of(), List.of(), "omni");
+    }
+
+    public WorkflowManifest(String workflowName, List<WorkflowNode> nodes,
+                            List<String> enabledSkills, List<String> enabledRoles) {
+        this(workflowName, nodes, enabledSkills, enabledRoles, "omni");
+    }
+}

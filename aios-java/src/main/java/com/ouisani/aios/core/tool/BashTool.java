@@ -69,6 +69,16 @@ public class BashTool implements Tool<BashTool.Input> {
             pb.environment().put("APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE", "1");
             pb.environment().put("PIP_NO_INPUT", "1");
 
+            // ── PYTHONPATH 注入：使 Python 可解析 from skills.xxx import yyy ──
+            // 技能库物理路径：/home/xmy/tryaios/aios-java/aios_skills/
+            // Python import skills.web_scraper 需要父目录在 PYTHONPATH 中
+            String skillsPhysicalDir = "/home/xmy/tryaios/aios-java/aios_skills";
+            String existingPythonPath = pb.environment().getOrDefault("PYTHONPATH", "");
+            String newPythonPath = existingPythonPath.isEmpty()
+                    ? skillsPhysicalDir
+                    : skillsPhysicalDir + ":" + existingPythonPath;
+            pb.environment().put("PYTHONPATH", newPythonPath);
+
             Process process = pb.start();
 
             StringBuilder output = new StringBuilder();

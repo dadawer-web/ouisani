@@ -94,6 +94,14 @@ public class OmniMotherAgent extends AbstractAgent {
         StringBuilder agentfileBuilder = new StringBuilder("APP_NAME " + manifest.workflowName() + "\n");
         agentfileBuilder.append("MOUNT /factory:/factory\nMOUNT /shared:/shared\n");
 
+        // 注入前端传递的技能/角色列表到 Agentfile，供 AiosAppManager 按需裁剪
+        if (!manifest.enabledSkills().isEmpty()) {
+            agentfileBuilder.append("ENABLED_SKILLS ").append(String.join(",", manifest.enabledSkills())).append("\n");
+        }
+        if (!manifest.enabledRoles().isEmpty()) {
+            agentfileBuilder.append("ENABLED_ROLES ").append(String.join(",", manifest.enabledRoles())).append("\n");
+        }
+
         StringBuilder shellScriptBuilder = new StringBuilder();
 
         for (WorkflowNode node : manifest.nodes()) {
@@ -359,7 +367,9 @@ public class OmniMotherAgent extends AbstractAgent {
               .append("5. 如果需要安装 Python 依赖，必须使用 `pip3 install --user <package>` 规避权限问题，并加上 `-y` 或相关静默参数！违者将导致进程永久阻塞！\n")
               .append("6. 【必须有控制台打印】：你编写的所有 `.py` 脚本，在执行完毕或者执行过程中，必须使用 `print()` 语句在控制台打印出极其明显的标记！例如 `print('AGENT_1_SUCCESS: Data fetched!')`，绝不允许没有任何输出就结束进程！\n")
               .append("7. 【强制生成工序纪律】：你必须严格按照以下顺序执行任务，绝不允许跳步或敷衍！\n")
-              .append("    - 第一步：必须连续多次调用 `file_write` 工具，将所有节点的 Python 源码（如 `agent_1.py`, `agent_2.py` 等）依次完整生成到 `/factory` 目录下。\n")
+              .append("    - 第一步：调用 `file_write` 工具，为当前节点生成 Python 源码到 `/factory` 目录下。\n")
+              .append("      你现在的角色是高级底层开发工程师 (Python Coder)。系统架构师已经为你规划好了整个工作流的 DAG 拓扑，当前正在处理的节点是：[").append(node.instanceId()).append("]，它的职责是：[").append(node.role()).append("]。\n")
+              .append("      你只需要专心致志地为这单个节点编写 Python 代码，严禁在当前文件中实现其他节点的功能！\n")
               .append("    - 第二步：在确认所有 `.py` 文件都已经通过 `file_write` 真实写入后，**最后一步**才能调用 `file_write` 生成 `run_all.sh` 和 `orchestrator.py`。\n")
               .append("    - 严禁在未生成 Python 源码的情况下，凭空在 `run_all.sh` 或 `orchestrator.py` 中调用它们！你的这种偷懒行为会导致运行时严重错误！\n")
               .append("8. 【工具调用绝对格式】：你如果需要调用工具，必须且只能使用以下极其严格的 XML 格式！\n")

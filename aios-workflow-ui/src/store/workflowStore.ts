@@ -35,6 +35,15 @@ export interface CompiledWorkflowManifest {
   workflowName: string;
   nodes: CompiledWorkflowNode[];
   enabledSkills: string[];
+  enabledRoles: string[];
+}
+
+/** 武器库/角色库目录项 — 从后端 /api/registry/catalogs 动态获取 */
+export interface CatalogItem {
+  id: string;
+  name: string;
+  desc: string;
+  icon: string;
 }
 
 /** Toast 状态 */
@@ -64,6 +73,12 @@ interface WorkflowStore {
   enabledSkills: string[];
   setEnabledSkills: (skills: string[]) => void;
   toggleSkill: (skillId: string) => void;
+  enabledRoles: string[];
+  setEnabledRoles: (roles: string[]) => void;
+  toggleRole: (roleId: string) => void;
+  availableRoles: CatalogItem[];
+  availableSkills: CatalogItem[];
+  fetchCatalogs: () => Promise<void>;
   setNodes: (nodes: Node[]) => void;
   setEdges: (edges: Edge[]) => void;
   addNode: (position: XYPosition) => void;
@@ -77,7 +92,7 @@ interface WorkflowStore {
   dismissSystemAlert: () => void;
   setControlWs: (ws: WebSocket | null) => void;
   hotPatchParam: (targetNode: string, params: Record<string, number>) => void;
-  autoCompile: (userIdea: string) => void;
+  autoCompile: (userIdea: string) => Promise<void>;
   compileToWorkflow: () => CompiledWorkflowManifest;
   deploy: () => Promise<void>;
 }
@@ -102,6 +117,27 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         ? state.enabledSkills.filter((s) => s !== skillId)
         : [...state.enabledSkills, skillId],
     })),
+  enabledRoles: ["System_Architect", "Python_Coder", "Code_Reviewer"],
+  setEnabledRoles: (roles) => set({ enabledRoles: roles }),
+  toggleRole: (roleId) =>
+    set((state) => ({
+      enabledRoles: state.enabledRoles.includes(roleId)
+        ? state.enabledRoles.filter((r) => r !== roleId)
+        : [...state.enabledRoles, roleId],
+    })),
+  availableRoles: [],
+  availableSkills: [],
+  fetchCatalogs: async () => {
+    try {
+      const res = await axios.get(`${AIOS_API_URL}/api/registry/catalogs`);
+      set({
+        availableRoles: res.data.roles || [],
+        availableSkills: res.data.skills || [],
+      });
+    } catch (err) {
+      console.error("[AIOS] Failed to fetch catalogs from backend", err);
+    }
+  },
 
   setNodes: (nodes) => set({ nodes }),
   setEdges: (edges) => set({ edges }),
@@ -196,84 +232,124 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   },
 
   /**
-   * 一键生成拓扑 — 傻瓜模式。
-   * 模拟后端返回 2~3 个节点 + 连线，动态渲染到画布。
-   * 未来可替换为真实 LLM 后端调用。
+   * 一键生成拓扑 — 调用后端 LLM 动态编译 DAG。
+   * 发送用户需求 + enabledSkills + enabledRoles 到 /api/workflow/compile，
+   * 后端 TopologyCompiler 调用 LLM 返回 {nodes, edges} JSON，
+   * 前端映射为 React Flow 节点/边并自动布局。
+   * 失败时降级为本地演示拓扑，确保界面不白屏。
    */
-  autoCompile: (userIdea: string) => {
-    // 清空画布
-    idCounter = 1;
-    const idea = userIdea.trim() || "通用数据处理流水线";
+  autoCompile: async (userIdea: string) => {
+    const { showToast } = get();
+    const idea = userIdea.trim() || "通用任务";
+    set({ workflowName: idea.substring(0, 20).replace(/\s+/g, "_") });
 
-    // 模拟后端返回的节点拓扑
-    const nodes: Node[] = [
-      {
-        id: "agent_1",
+    try {
+      showToast("正在请示架构师，请稍候...", "info");
+
+      // 调用后端拓扑编译 API，设置较长的超时时间
+      const res = await axios.post(
+        `${AIOS_API_URL}/api/workflow/compile`,
+        {
+          prompt: idea,
+          enabledSkills: get().enabledSkills,
+          enabledRoles: get().enabledRoles,
+        },
+        { timeout: 120000 }
+      );
+
+      let rawData = res.data;
+      // 兼容后端返回字符串包裹 ```json 的情况
+      if (typeof rawData === "string") {
+        const cleaned = rawData
+          .replace(/```json/g, "")
+          .replace(/```/g, "")
+          .trim();
+        rawData = JSON.parse(cleaned);
+      }
+
+      const { nodes = [], edges = [] } = rawData;
+
+      if (nodes.length === 0) throw new Error("后端返回了空节点");
+
+      // 动态分配坐标
+      const flowNodes: Node[] = nodes.map((n: any, i: number) => ({
+        id: n.id || `agent_${i + 1}`,
         type: "agentNode",
-        position: { x: 80, y: 200 },
+        position: {
+          x: 100 + (i % 3) * 350,
+          y: 150 + Math.floor(i / 3) * 200 + (i % 2 === 0 ? 50 : 0),
+        },
         data: {
-          label: "Data Collector",
-          role: `采集数据：${idea}`,
-          blueprintId: "agent_1",
+          label: n.id || `Node ${i + 1}`,
+          role: n.role || "未分配职责",
+          blueprintId: n.blueprintId || "agentNode",
           subscribeTopic: "",
-          publishTopic: "topic_agent_1_agent_2",
-          userParams: { threshold: "0.05", keywords: "" },
-        },
-      },
-      {
-        id: "agent_2",
-        type: "agentNode",
-        position: { x: 420, y: 120 },
-        data: {
-          label: "Analyzer",
-          role: `分析与过滤：${idea}`,
-          blueprintId: "agent_2",
-          subscribeTopic: "topic_agent_1_agent_2",
-          publishTopic: "topic_agent_2_agent_3",
-          userParams: { threshold: "0.02", keywords: "AI,科技" },
-        },
-      },
-      {
-        id: "agent_3",
-        type: "agentNode",
-        position: { x: 760, y: 200 },
-        data: {
-          label: "Reporter",
-          role: `生成报告并输出：${idea}`,
-          blueprintId: "agent_3",
-          subscribeTopic: "topic_agent_2_agent_3",
           publishTopic: "",
-          userParams: { threshold: "0.01", keywords: "" },
+          userParams: n.userParams || {},
         },
-      },
-    ];
-    idCounter = 4;
+      }));
 
-    const edges: Edge[] = [
-      {
-        id: "e_agent_1_agent_2",
-        source: "agent_1",
-        target: "agent_2",
+      const flowEdges: Edge[] = edges.map((e: any, i: number) => ({
+        id: `e_${e.source}_${e.target}_${i}`,
+        source: e.source,
+        target: e.target,
         animated: true,
         style: { stroke: "#00f0ff", strokeWidth: 2 },
-      },
-      {
-        id: "e_agent_2_agent_3",
-        source: "agent_2",
-        target: "agent_3",
-        animated: true,
-        style: { stroke: "#00f0ff", strokeWidth: 2 },
-      },
-    ];
+      }));
 
-    set({
-      nodes,
-      edges,
-      nodeCounter: 3,
-      workflowName: idea.slice(0, 30).replace(/\s+/g, "_"),
-    });
+      set({ nodes: flowNodes, edges: flowEdges, nodeCounter: flowNodes.length });
+      showToast(
+        `架构师规划完毕！生成 ${flowNodes.length} 个并发节点`,
+        "success"
+      );
+    } catch (err) {
+      console.error("[AIOS] Auto-compile failed, using fallback mock:", err);
+      showToast("后端响应超时或失败，已降级为本地演示拓扑", "error");
 
-    get().showToast(`拓扑已生成：3 节点 DAG — ${idea.slice(0, 20)}`, "success");
+      // 兜底逻辑：即使失败也不让界面白屏
+      const fallbackNodes: Node[] = [
+        {
+          id: "agent_1",
+          type: "agentNode",
+          position: { x: 100, y: 200 },
+          data: {
+            label: "Fallback 1",
+            role: "采集",
+            blueprintId: "agentNode",
+            subscribeTopic: "",
+            publishTopic: "",
+            userParams: {},
+          },
+        },
+        {
+          id: "agent_2",
+          type: "agentNode",
+          position: { x: 450, y: 200 },
+          data: {
+            label: "Fallback 2",
+            role: "处理",
+            blueprintId: "agentNode",
+            subscribeTopic: "",
+            publishTopic: "",
+            userParams: {},
+          },
+        },
+      ];
+      const fallbackEdges: Edge[] = [
+        {
+          id: "e_1_2",
+          source: "agent_1",
+          target: "agent_2",
+          animated: true,
+          style: { stroke: "#00f0ff", strokeWidth: 2 },
+        },
+      ];
+      set({
+        nodes: fallbackNodes,
+        edges: fallbackEdges,
+        nodeCounter: 2,
+      });
+    }
   },
 
   /**
@@ -323,6 +399,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       workflowName,
       nodes: compiledNodes,
       enabledSkills: get().enabledSkills,
+      enabledRoles: get().enabledRoles,
     };
 
     return manifest;
