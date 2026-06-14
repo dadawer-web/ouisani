@@ -5,6 +5,7 @@ import com.ouisani.aios.core.hook.HookManager.HookEvent;
 import com.ouisani.aios.core.hook.HookManager.HookResult;
 import com.ouisani.aios.core.permission.PermissionChecker;
 import com.ouisani.aios.core.permission.PermissionDecision;
+import com.ouisani.aios.core.security.ToolCircuitBreaker;
 import com.ouisani.aios.core.telemetry.TelemetryService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -110,7 +111,15 @@ public class ToolExecutionPipeline {
             return ToolOutput.fail("Tool execution denied by hook: " + hookResult.message());
         }
 
-        // ── 阶段 2：权限检查 ──
+        // ── 阶段 2：工具熔断检查 ──
+        if (ToolCircuitBreaker.instance().isTripped(context.agentId(), toolName)) {
+            log.warn("[ToolPipeline] 工具熔断中，拒绝执行: {} / agent={}", toolName, context.agentId());
+            return ToolOutput.fail("Tool '" + toolName + "' is circuit-broken for agent '"
+                    + context.agentId() + "'. The tool has failed too many times consecutively. "
+                    + "Please try a different approach or wait for the cooldown period.");
+        }
+
+        // ── 阶段 3：权限检查 ──
         // 由于 ToolRegistry 返回 Tool<? extends ToolInput>，通配符捕获导致泛型不兼容，
         // 此处使用原始类型 + suppressWarnings 处理，因为流水线层无法预知具体工具的输入类型
         @SuppressWarnings("unchecked")
@@ -137,14 +146,24 @@ public class ToolExecutionPipeline {
             return ToolOutput.fail("Permission requires user confirmation: " + permDecision.message());
         }
 
-        // ── 阶段 3：执行工具 ──
+        // ── 阶段 4：执行工具 ──
         ToolOutput output;
         try {
             output = tool.call(input, context);
             log.debug("[ToolPipeline] 工具执行完成: {} — success={}", toolName, output.success());
+
+            // 记录工具执行结果到熔断器
+            if (output.success()) {
+                ToolCircuitBreaker.instance().recordSuccess(context.agentId(), toolName);
+            } else {
+                ToolCircuitBreaker.instance().recordFailure(context.agentId(), toolName, output.toText());
+            }
         } catch (Exception e) {
             log.error("[ToolPipeline] 工具执行异常: {} — {}", toolName, e.getMessage(), e);
             output = ToolOutput.fail("Tool execution error: " + e.getMessage());
+
+            // 记录异常到熔断器
+            ToolCircuitBreaker.instance().recordFailure(context.agentId(), toolName, e.getMessage());
 
             // 触发失败后置事件
             hookManager.trigger(HookEvent.POST_TOOL_USE_FAILURE, Map.of(

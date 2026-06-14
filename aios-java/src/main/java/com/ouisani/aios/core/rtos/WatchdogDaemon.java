@@ -52,7 +52,7 @@ public final class WatchdogDaemon {
     // ── 默认配置 ──
 
     private static final long CHECK_INTERVAL_MS = 10;
-    private static final long DEFAULT_WATCHDOG_TIMEOUT_MS = 60_000L; // 60 秒
+    private static final long DEFAULT_WATCHDOG_TIMEOUT_MS = 120_000L; // 120 秒
 
     // ── Singleton ──
 

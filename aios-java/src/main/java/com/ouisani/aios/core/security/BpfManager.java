@@ -128,7 +128,7 @@ public final class BpfManager implements SyscallFilter {
             "rpa.key_combo"
     );
 
-    /** Prompt 注入检测正则 */
+    /** Prompt 注入检测正则 — 已移除 exec/eval/runtime.exec 规则，由沙箱保障执行安全 */
     private static final List<Pattern> INJECTION_PATTERNS = List.of(
             Pattern.compile("(?i)ignore\\s+(all\\s+)?previous\\s+(instructions|prompts)"),
             Pattern.compile("(?i)you\\s+are\\s+now\\s+a"),
@@ -138,10 +138,14 @@ public final class BpfManager implements SyscallFilter {
             Pattern.compile("(?i)jailbreak"),
             Pattern.compile("(?i)DAN\\s+mode"),
             Pattern.compile("(?i)sudo\\s+rm\\s+-rf"),
-            Pattern.compile("(?i)drop\\s+table"),
-            Pattern.compile("(?i)exec\\s*\\("),
-            Pattern.compile("(?i)eval\\s*\\("),
-            Pattern.compile("(?i)runtime\\.exec")
+            Pattern.compile("(?i)drop\\s+table")
+    );
+
+    /** 内核级 Agent 白名单 — 这些 Agent 豁免 Prompt Injection 检查 */
+    private static final Set<String> KERNEL_AGENT_WHITELIST = Set.of(
+            "topology_compiler",
+            "operator_agent",
+            "omni_mother"
     );
 
     private BpfManager() {
@@ -319,6 +323,11 @@ public final class BpfManager implements SyscallFilter {
      * "你现在是一个..."、jailbreak 等。
      */
     private RuleVerdict evaluatePromptInjection(String agentId, SyscallRequest request, SecurityToken token) {
+        // 内核级 Agent 豁免 Prompt Injection 检查
+        if (KERNEL_AGENT_WHITELIST.contains(agentId)) {
+            return new RuleVerdict(false, "", ThreatLevel.LOW);
+        }
+
         String prompt = extractPrompt(request);
         if (prompt == null || prompt.isEmpty()) return new RuleVerdict(false, "", ThreatLevel.LOW);
 

@@ -26,11 +26,14 @@ import com.ouisani.aios.operator.session.AgentMessage;
 import com.ouisani.aios.operator.session.CompactionService;
 import com.ouisani.aios.operator.session.SessionContext;
 import com.ouisani.aios.operator.session.SessionManager;
+import com.ouisani.aios.operator.tools.BrowserTool;
 import com.ouisani.aios.operator.tools.ComputerUseTool;
+import com.ouisani.aios.operator.tools.DesktopGuiTool;
 import com.ouisani.aios.operator.tools.GatewayControlTool;
 import com.ouisani.aios.operator.tools.MessageTool;
 import com.ouisani.aios.operator.tools.NodesTool;
 import com.ouisani.aios.operator.vision.VisionService;
+import com.ouisani.aios.vfs.ChromeBridgeNode;
 import com.ouisani.aios.user.bridge.rpa.HostRpaManager;
 import com.ouisani.aios.user.bridge.rpa.SecurityToken;
 import com.ouisani.aios.user.sdk.AbstractAgent;
@@ -40,6 +43,7 @@ import org.slf4j.LoggerFactory;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -69,6 +73,9 @@ public class OperatorAgent extends AbstractAgent {
 
     private final WorkflowManifest manifest;
     private final String workingDir;
+
+    // ── Dify 内存上下文（可选，DAG 引擎注入） ──
+    private WorkflowContext context;
 
     // ── 能力模块 ──
     private QueryEngine queryEngine;
@@ -117,9 +124,20 @@ public class OperatorAgent extends AbstractAgent {
             + "8. 任务完成后，回复 TASK_COMPLETED 并附上操作摘要。\n"
             + "%s"; // 运行时注入渠道+密钥信息
 
+    /** 原有构造函数：兼容 AppGateway 等旧调用方 */
     public OperatorAgent(WorkflowManifest manifest) {
         super("Operator", ProcessPriority.REALTIME, 100000);
         this.manifest = manifest;
+        this.workingDir = System.getProperty("user.dir");
+    }
+
+    /** Dify 风格构造函数：DAG 引擎按节点级调度时使用 */
+    public OperatorAgent(WorkflowNode node, WorkflowContext context) {
+        super("Operator", ProcessPriority.REALTIME, 100000);
+        this.manifest = new WorkflowManifest(
+                context.getWorkflowId() + "_" + node.instanceId(),
+                List.of(node), List.of(), List.of(), node.executor());
+        this.context = context;
         this.workingDir = System.getProperty("user.dir");
     }
 
@@ -193,6 +211,14 @@ public class OperatorAgent extends AbstractAgent {
             System.out.printf("[Operator Agent]   ├─ Node '%s' executed. Completed: %s%n",
                     node.instanceId(), result.contains("TASK_COMPLETED"));
 
+            // ── Dify 内存总线：将节点输出提交到全局上下文，供下游节点收割 ──
+            if (this.context != null) {
+                Map<String, Object> outputs = new HashMap<>();
+                outputs.put("result_text", result);
+                this.context.commitNodeOutput(node.instanceId(), outputs);
+                log.info("[OperatorAgent] Node '{}' output committed to memory bus", node.instanceId());
+            }
+
             // ── SessionMemory: 记录操作到会话记忆 ──
             sessionMemory.setSection(SessionMemoryService.Section.FILES_AND_FUNCTIONS,
                     sessionMemory.getSection(SessionMemoryService.Section.FILES_AND_FUNCTIONS)
@@ -231,7 +257,7 @@ public class OperatorAgent extends AbstractAgent {
         ));
 
         // ── CostTracker: 成本报告 ──
-        CostTracker.instance().report();
+        CostTracker.instance().formatReport();
     }
 
     @Override
@@ -244,6 +270,45 @@ public class OperatorAgent extends AbstractAgent {
         // ── OpenClaw Session: 记录助手回复 ──
         openClawSession.appendMessage(AgentMessage.assistant(result));
         System.out.println("[Operator Agent] Message processed. Result length: " + result.length());
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Team Mailbox: Actor Mode 任务处理
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Actor 模式任务处理 — DAG 引擎通过 TeamRegistry 派发 TaskPayload 时调用。
+     * <p>
+     * 与 {@link #onStart()} 的区别：
+     * <pre>
+     *   onStart()     — 旧模式，由 run() → onStart() 调用，执行完自动退出
+     *   handleTask()  — Actor 模式，由 startEventLoop() → handleTask() 调用，
+     *                   执行完毕后填写回执单，唤醒 DAG 引擎
+     * </pre>
+     */
+    @Override
+    protected void handleTask(Object rawPayload) {
+        if (!(rawPayload instanceof com.ouisani.aios.core.team.TaskPayload payload)) {
+            log.error("[OperatorAgent] Received invalid payload type: {}", rawPayload.getClass().getSimpleName());
+            return;
+        }
+
+        try {
+            log.info("[OperatorAgent] Executing DAG task: node={}", payload.node().instanceId());
+
+            // 复用 onStart() 中的全部业务逻辑
+            // onStart() 内部会调用 initializeOperatorCapabilities() + 遍历节点 + 写入内存总线
+            onStart();
+
+            log.info("[OperatorAgent] Task complete. Signing receipt for node: {}", payload.node().instanceId());
+            // 业务办完，填写回执单，唤醒正在等待的 DAG 主引擎！
+            payload.completionReceipt().complete(null);
+
+        } catch (Exception e) {
+            log.error("[OperatorAgent] Task failed for node: {}", payload.node().instanceId(), e);
+            // 异常也要填写回执单（异常版），否则 DAG 引擎会死锁
+            payload.completionReceipt().completeExceptionally(e);
+        }
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -355,9 +420,22 @@ public class OperatorAgent extends AbstractAgent {
         try {
             com.ouisani.aios.core.llm.LlmProvider multimodalProvider =
                     com.ouisani.aios.core.llm.LlmRouterHolder.getProvider("multimodal");
+
+            // Fallback: 如果没有独立的 multimodal provider，使用主 LLM（mimo-v2.5-pro 本身就是多模态模型）
+            if (multimodalProvider == null || !multimodalProvider.isAvailable()) {
+                com.ouisani.aios.core.llm.LlmRouter router = com.ouisani.aios.core.llm.LlmRouterHolder.get();
+                if (router != null) {
+                    multimodalProvider = router.getProvider("smart_model");
+                    if (multimodalProvider != null) {
+                        System.out.println("[Operator Agent] VisionService: Using main LLM as multimodal fallback ("
+                                + multimodalProvider.name() + ")");
+                    }
+                }
+            }
+
             if (multimodalProvider != null && multimodalProvider.isAvailable()) {
                 this.visionService = new VisionService(multimodalProvider);
-                System.out.println("[Operator Agent] VisionService: ENABLED — multimodal provider '"
+                System.out.println("[Operator Agent] VisionService: ONLINE — multimodal provider '"
                         + multimodalProvider.name() + "' connected");
             } else {
                 System.out.println("[Operator Agent] VisionService: DISABLED — no multimodal provider registered");
@@ -444,6 +522,31 @@ public class OperatorAgent extends AbstractAgent {
             System.out.println("[Operator Agent] ComputerUseTool: SKIPPED — no RPA token (headless or token issue)");
         }
 
+        // ── Browser Control — DOM 级浏览器自动化（对标 OpenClaw Browser Control） ──
+        try {
+            var bridgeNode = com.ouisani.aios.core.VfsManager.instance().resolve("/dev/host/browser");
+            if (bridgeNode.isPresent() && bridgeNode.get() instanceof ChromeBridgeNode chromeBridge) {
+                BrowserTool browserTool = new BrowserTool(chromeBridge);
+                // 注册响应回调：浏览器扩展执行完命令后，通过此回调通知 BrowserTool
+                chromeBridge.setResponseCallback(browserTool::onBrowserResponse);
+                builder.extraTool(browserTool);
+                System.out.println("[Operator Agent] BrowserTool: MOUNTED (Chrome extension bridge at /dev/host/browser)");
+            } else {
+                System.out.println("[Operator Agent] BrowserTool: SKIPPED — ChromeBridgeNode not mounted");
+            }
+        } catch (Exception e) {
+            System.out.println("[Operator Agent] BrowserTool: SKIPPED — " + e.getMessage());
+        }
+
+        // ── Desktop GUI — 双引擎桌面控件定位（无障碍 API + VLM 视觉降级） ──
+        if (rpaToken != null && visionService != null) {
+            DesktopGuiTool desktopTool = new DesktopGuiTool(visionService, rpaToken);
+            builder.extraTool(desktopTool);
+            System.out.println("[Operator Agent] DesktopGuiTool: MOUNTED (Dual-Engine: Accessibility API + VLM Vision)");
+        } else {
+            System.out.println("[Operator Agent] DesktopGuiTool: SKIPPED — requires RPA token + VisionService");
+        }
+
         // OpenClaw 内置工具 — 通过 Gateway Bridge 与 OpenClaw 通信
         builder.extraTool(new NodesTool(gatewayBridge))
                .extraTool(new MessageTool(gatewayBridge))
@@ -470,8 +573,15 @@ public class OperatorAgent extends AbstractAgent {
         // 注入用户参数
         if (node.userParams() != null && !node.userParams().isEmpty()) {
             prompt.append("【用户参数】：\n");
-            node.userParams().forEach((k, v) ->
-                    prompt.append("  - ").append(k).append(": ").append(v).append("\n"));
+            node.userParams().forEach((k, v) -> {
+                // ── Dify 变量解析：从内存总线动态替换 {{nodeId.variable}} 引用 ──
+                String resolvedValue = v;
+                if (context != null) {
+                    Object resolved = context.resolveValue(v);
+                    resolvedValue = resolved != null ? resolved.toString() : v;
+                }
+                prompt.append("  - ").append(k).append(": ").append(resolvedValue).append("\n");
+            });
             prompt.append("\n");
         }
 

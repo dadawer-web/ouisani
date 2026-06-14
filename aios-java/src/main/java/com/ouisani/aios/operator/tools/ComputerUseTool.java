@@ -49,9 +49,12 @@ public class ComputerUseTool implements Tool<ComputerUseTool.Input> {
     @Override
     public String description() {
         return "Control the host computer physically. Actions: screenshot, mouse_move, mouse_click, mouse_right_click, "
-                + "click_at, scroll, type_text, key_press, key_combo. "
+                + "click_at, scroll, type_text, key_press, key_combo, "
+                + "get_mouse_position, get_pixel_color, "
+                + "list_windows, activate_window, close_window, minimize_window, maximize_window. "
                 + "Use 'screenshot' to see the screen, 'click_at' to click at coordinates, "
-                + "'type_text' to type text, 'key_combo' for keyboard shortcuts (Ctrl+C etc). "
+                + "'type_text' to type text, 'key_combo' for keyboard shortcuts (Ctrl+C etc), "
+                + "'list_windows' to see all open windows, 'activate_window' to bring a window to front. "
                 + "IMPORTANT: Always take a screenshot first before interacting with the screen to verify coordinates.";
     }
 
@@ -63,14 +66,15 @@ public class ComputerUseTool implements Tool<ComputerUseTool.Input> {
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["screenshot","mouse_move","mouse_click","mouse_right_click","click_at","scroll","type_text","key_press","key_combo"],
+              "enum": ["screenshot","mouse_move","mouse_click","mouse_right_click","click_at","scroll","type_text","key_press","key_combo",
+                       "get_mouse_position","get_pixel_color","list_windows","activate_window","close_window","minimize_window","maximize_window"],
               "description": "The computer use action to perform"
             },
-            "x": { "type": "integer", "description": "X coordinate (for mouse_move, click_at, screenshot region)" },
-            "y": { "type": "integer", "description": "Y coordinate (for mouse_move, click_at, screenshot region)" },
+            "x": { "type": "integer", "description": "X coordinate (for mouse_move, click_at, screenshot region, get_pixel_color)" },
+            "y": { "type": "integer", "description": "Y coordinate (for mouse_move, click_at, screenshot region, get_pixel_color)" },
             "width": { "type": "integer", "description": "Width for region screenshot" },
             "height": { "type": "integer", "description": "Height for region screenshot" },
-            "text": { "type": "string", "description": "Text to type (for type_text)" },
+            "text": { "type": "string", "description": "Text to type (for type_text) or window title (for window actions)" },
             "keyCode": { "type": "integer", "description": "Java KeyEvent VK code (for key_press, key_combo)" },
             "amount": { "type": "integer", "description": "Scroll amount (positive=down, negative=up)" },
             "ctrl": { "type": "boolean", "description": "Hold Ctrl (for key_combo)" },
@@ -101,6 +105,14 @@ public class ComputerUseTool implements Tool<ComputerUseTool.Input> {
                 case "type_text" -> handleTypeText(input);
                 case "key_press" -> handleKeyPress(input);
                 case "key_combo" -> handleKeyCombo(input);
+                // ── 窗口管理与辅助 ──
+                case "get_mouse_position" -> handleGetMousePosition();
+                case "get_pixel_color" -> handleGetPixelColor(input);
+                case "list_windows" -> handleListWindows();
+                case "activate_window" -> handleActivateWindow(input);
+                case "close_window" -> handleCloseWindow(input);
+                case "minimize_window" -> handleMinimizeWindow(input);
+                case "maximize_window" -> handleMaximizeWindow(input);
                 default -> ToolOutput.fail("Unknown action: " + input.action());
             };
         } catch (SecurityException e) {
@@ -229,6 +241,69 @@ public class ComputerUseTool implements Tool<ComputerUseTool.Input> {
         return ToolOutput.ok("Key combo pressed: " + combo);
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  WINDOW MANAGEMENT — 窗口管理 (对标 OpenClaw Desktop Control)
+    // ════════════════════════════════════════════════════════════════
+
+    private ToolOutput handleGetMousePosition() {
+        var pos = rpa.getMousePosition(token);
+        return ToolOutput.ok("Mouse position: (" + pos.x + ", " + pos.y
+                + ") in " + rpa.getSentWidth() + "x" + rpa.getSentHeight() + " image space");
+    }
+
+    private ToolOutput handleGetPixelColor(Input input) {
+        if (input.x() < 0 || input.y() < 0) {
+            return ToolOutput.fail("x and y coordinates are required for get_pixel_color");
+        }
+        String color = rpa.getPixelColor(token, input.x(), input.y());
+        return ToolOutput.ok("Pixel color at (" + input.x() + ", " + input.y() + "): " + color);
+    }
+
+    private ToolOutput handleListWindows() {
+        String windows = rpa.listWindows(token);
+        return ToolOutput.ok("Open windows:\n" + windows);
+    }
+
+    private ToolOutput handleActivateWindow(Input input) {
+        String title = input.text();
+        if (title == null || title.isBlank()) {
+            return ToolOutput.fail("Window title (text field) is required for activate_window");
+        }
+        boolean ok = rpa.activateWindow(token, title);
+        return ok ? ToolOutput.ok("Window activated: " + title)
+                  : ToolOutput.fail("Failed to activate window: " + title + " (not found or wmctrl not installed)");
+    }
+
+    private ToolOutput handleCloseWindow(Input input) {
+        String title = input.text();
+        if (title == null || title.isBlank()) {
+            return ToolOutput.fail("Window title (text field) is required for close_window");
+        }
+        boolean ok = rpa.closeWindow(token, title);
+        return ok ? ToolOutput.ok("Window closed: " + title)
+                  : ToolOutput.fail("Failed to close window: " + title);
+    }
+
+    private ToolOutput handleMinimizeWindow(Input input) {
+        String title = input.text();
+        if (title == null || title.isBlank()) {
+            return ToolOutput.fail("Window title (text field) is required for minimize_window");
+        }
+        boolean ok = rpa.minimizeWindow(token, title);
+        return ok ? ToolOutput.ok("Window minimized: " + title)
+                  : ToolOutput.fail("Failed to minimize window: " + title);
+    }
+
+    private ToolOutput handleMaximizeWindow(Input input) {
+        String title = input.text();
+        if (title == null || title.isBlank()) {
+            return ToolOutput.fail("Window title (text field) is required for maximize_window");
+        }
+        boolean ok = rpa.maximizeWindow(token, title);
+        return ok ? ToolOutput.ok("Window maximized: " + title)
+                  : ToolOutput.fail("Failed to maximize window: " + title);
+    }
+
     @Override
     public boolean readOnly() {
         return false; // 鼠标/键盘操作会修改宿主机状态
@@ -237,12 +312,12 @@ public class ComputerUseTool implements Tool<ComputerUseTool.Input> {
     @Override
     public String prompt() {
         return """
-        ## Computer Use Tool (computer_use) — Anthropic Computer Use Spec
-        
+        ## Computer Use Tool (computer_use) — Anthropic Computer Use Spec + OpenClaw Desktop Control
+
         You have direct physical control of the host computer via java.awt.Robot.
         Coordinates are in the screenshot image space (origin top-left).
         The screenshot is automatically scaled down to max 1280px wide to save tokens.
-        
+
         **Actions:**
         - `screenshot` — Capture screen. Returns image size (your coordinate space) + multimodal analysis.
         - `mouse_move` — Move cursor to (x, y) in image space.
@@ -253,7 +328,14 @@ public class ComputerUseTool implements Tool<ComputerUseTool.Input> {
         - `type_text` — Type text via **clipboard paste** (Ctrl+V). Supports Chinese, emoji, any characters!
         - `key_combo` — Press key combination by name (e.g. ctrl=true, keyCode=67 for Ctrl+C).
         - `key_press` — Press a single key by Java VK code.
-        
+        - `get_mouse_position` — Get current mouse cursor coordinates in image space.
+        - `get_pixel_color` — Get the hex color of a pixel at (x, y).
+        - `list_windows` — List all open windows on the desktop.
+        - `activate_window` — Bring a window to front by title (use `text` field for title).
+        - `close_window` — Close a window by title (use `text` field).
+        - `minimize_window` — Minimize a window by title (use `text` field).
+        - `maximize_window` — Maximize a window by title (use `text` field).
+
         **Critical Rules (Anthropic Computer Use Protocol):**
         1. **ALWAYS screenshot first** before any mouse/keyboard action.
         2. **Coordinates are in screenshot image space**, NOT physical screen pixels.
@@ -262,11 +344,14 @@ public class ComputerUseTool implements Tool<ComputerUseTool.Input> {
         4. **Use click_at(x, y)** for precise clicking — it moves and clicks in one step.
         5. **Use type_text for ALL text input** — it uses clipboard paste (Ctrl+V),
            which handles Chinese, special chars, and any input method perfectly.
-        6. **Common key codes**: Enter=10, Escape=27, Tab=9, Backspace=8, Delete=127,
+        6. **Use list_windows + activate_window** to switch between desktop applications.
+        7. **Common key codes**: Enter=10, Escape=27, Tab=9, Backspace=8, Delete=127,
            Up=38, Down=40, Left=37, Right=39, C=67, V=86, A=65, S=83.
-        
-        Example workflow:
-        - screenshot → see "Chrome browser at (500,45)" → click_at(500,45) → screenshot → verify → type_text("hello world") → screenshot → verify
+
+        Example workflows:
+        - **Desktop app**: screenshot → list_windows → activate_window("Firefox") → screenshot → click_at(500,300) → type_text("hello")
+        - **Web page**: screenshot → click_at(500,45) → screenshot → type_text("hello world")
+        - **Window switch**: list_windows → activate_window("Terminal") → screenshot → type_text("ls -la")
         """;
     }
 

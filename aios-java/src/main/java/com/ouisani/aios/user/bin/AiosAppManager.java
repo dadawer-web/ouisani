@@ -645,7 +645,11 @@ public class AiosAppManager {
             }
 
             // 2. 将 VFS 虚拟路径强制翻译为宿主机物理路径
-            scriptContent = scriptContent.replace("/factory", physicalWorkspace);
+            //    避免路径重复叠加：如果 LLM 已经输出了真实的物理路径，就不再替换
+            if (physicalWorkspace != null && !scriptContent.contains(physicalWorkspace)) {
+                // 使用正则，仅替换作为独立路径起点的 /factory
+                scriptContent = scriptContent.replaceAll("(?<![\\w\\-\\.])\\/factory", physicalWorkspace);
+            }
 
             // 3. 强制兼容现代 OS 的 Python3 环境（拦截大模型的 python 指令）
             //    注意：先替换 python3 避免被二次替换，所以用占位符保护

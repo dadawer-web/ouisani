@@ -89,8 +89,8 @@ public class AgentMessage {
      */
     public int estimateTokens() {
         String t = text != null ? text : contentBlocks.stream()
-                .filter(b -> b.type == ContentBlock.Type.TEXT)
-                .map(b -> b.text)
+                .filter(b -> b.type() == ContentBlock.Type.TEXT)
+                .map(b -> b.text())
                 .reduce("", (a, b) -> a + b);
         return (int) Math.ceil((double) t.length() / 4);
     }

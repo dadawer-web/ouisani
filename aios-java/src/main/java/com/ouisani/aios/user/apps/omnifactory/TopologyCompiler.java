@@ -1,5 +1,6 @@
 package com.ouisani.aios.user.apps.omnifactory;
 
+import com.ouisani.aios.core.network.AppGateway;
 import com.ouisani.aios.user.sdk.AiosSdk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -78,9 +79,34 @@ public class TopologyCompiler {
         // 2. 读取可用技能说明
         String skillsContext = readSkillsContext(enabledSkills);
 
-        // 3. 构建强约束 LLM 提示词（修复提示词过短导致的死锁）
+        // 3. 构建 Dify 风格的强约束 LLM 提示词
         StringBuilder fullPrompt = new StringBuilder();
-        fullPrompt.append("你是一个顶级分布式系统架构师。你的唯一任务是将用户的需求转化为无环有向图(DAG)拓扑。\n\n");
+        fullPrompt.append("""
+                你是一个顶级的 AGI 操作系统工作流编译器。你的任务是将用户的自然语言意图，拆解为带有严格依赖关系的有向无环图 (DAG)。
+
+                【核心架构规范】
+                1. 节点级动态分发 (Executor):
+                   - 对于每个节点，你必须指定最合适的 `executor`。
+                   - 填写 "omni"：当任务涉及逻辑推理、代码编写、搜索引擎、爬虫、文件读写、Bash 系统命令等无需物理视觉的任务。
+                   - 填写 "operator"：【仅当】任务必须移动真实的物理鼠标、敲击键盘、或调用宿主机 GUI 打开真实软件时使用。
+
+                2. 内存状态流转与变量引用 (Memory Context):
+                   - 节点之间通过内存总线传递数据，而不是写死在硬盘。
+                   - 如果下游节点需要使用上游节点的数据，请在下游节点的 `userParams` 中使用 Dify 风格的占位符：`{{上游节点ID.变量名}}`。
+                   - 例如：节点 `search_github` 的输出将被下游节点引用为 `{{search_github.trending_url}}`。
+
+                3. 严格的拓扑依赖 (Upstream Dependencies):
+                   - 并发原则：没有任何依赖的节点，将在底层被引擎高并发同时拉起。
+                   - 阻塞原则：必须等待前置任务完成的节点，必须在 `upstreamDependencies` 数组中明确声明前置节点的 ID。
+
+                4. 批处理与迭代节点 (Iteration / Child Engine) 【极度重要】:
+                   - 当任务需要对一个列表/数组中的多个元素进行重复操作时（例如："分别总结 5 篇文章"、"批量测试 3 个接口"），**绝对不要**在单节点的代码里写 for 循环！
+                   - 你必须生成一个特殊的迭代节点，设置 `"isIteration": true`。
+                   - 必须指定 `"iteratorDataVariable"`，即你要遍历的数组变量（通常引用上游，如 `"{{spider_node.article_list}}"`）。
+                   - 必须指定 `"iteratorItemAlias"`，即当前循环元素的局部别名（例如 `"item"`）。
+                   - 必须在 `"childNodes"` 数组中，定义这个循环内部要执行的子任务流。在子任务流中，你可以通过 `{{item}}` 来引用当前遍历到的元素！
+
+                """);
 
         fullPrompt.append("【用户需求】: ").append(prompt).append("\n\n");
 
@@ -97,8 +123,55 @@ public class TopologyCompiler {
 
         fullPrompt.append("【可用技能库 API 字典】:\n").append(skillsContext).append("\n\n");
 
-        fullPrompt.append("【JSON 格式严格范例 (注意节点数必须动态生成)】:\n");
-        fullPrompt.append("{ \"nodes\": [ { \"id\": \"agent_1_name\", \"role\": \"职责描述\", \"blueprintId\": \"agentNode\", \"userParams\": {} } ], \"edges\": [ { \"source\": \"agent_1_name\", \"target\": \"agent_2_name\" } ] }\n");
+        fullPrompt.append("""
+                【输出 JSON 格式要求 — 必须严格遵守】
+                你必须严格输出如下格式的 JSON（不要包含任何 Markdown 标记）：
+                {
+                  "workflowName": "批量分析工作流",
+                  "nodes": [
+                    {
+                      "instanceId": "fetch_list",
+                      "role": "获取数据列表",
+                      "executor": "omni",
+                      "upstreamDependencies": [],
+                      "isIteration": false
+                    },
+                    {
+                      "instanceId": "batch_process_loop",
+                      "role": "批量处理列表中的每一个元素",
+                      "executor": "omni",
+                      "upstreamDependencies": ["fetch_list"],
+                      "isIteration": true,
+                      "iteratorDataVariable": "{{fetch_list.data_array}}",
+                      "iteratorItemAlias": "current_item",
+                      "childNodes": [
+                        {
+                          "instanceId": "process_single_item",
+                          "role": "处理单个元素并生成报告",
+                          "executor": "omni",
+                          "upstreamDependencies": [],
+                          "userParams": {
+                            "target_data": "{{current_item}}"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+
+                规则：
+                1. 每个节点必须有 instanceId、role、executor（'omni' 或 'operator'）
+                2. executor='omni'：逻辑思考、写代码、文件读写、网页搜索、Bash 命令等纯数字任务（默认）
+                3. executor='operator'：仅当必须操作物理鼠标、键盘、查看屏幕截图时使用
+                4. upstreamDependencies 数组声明该节点必须等待哪些上游节点完成后才能启动
+                5. 无依赖的并行节点的 upstreamDependencies 为空数组 []
+                6. 下游节点通过 {{上游节点ID.变量名}} 引用上游输出
+                7. 非迭代节点必须设置 "isIteration": false（或省略）
+                8. 迭代节点必须设置 "isIteration": true，并包含 iteratorDataVariable、iteratorItemAlias、childNodes
+                9. childNodes 中的子节点可通过 {{iteratorItemAlias值}} 引用当前遍历到的元素
+                10. 节点数量必须与任务的真实并发需求匹配
+                11. 只输出 JSON，不要任何其他文字！
+                """);
 
         // 4. 调用 LLM
         AiosSdk sdk = AiosSdk.getInstance();
@@ -181,25 +254,83 @@ public class TopologyCompiler {
      * 构建拓扑编译专用的 System Prompt。
      */
     private static String buildTopologySystemPrompt(String architectRules, String skillsContext) {
-        return "你是一个系统架构师。请根据用户的需求，并严格使用提供的 skills，规划出一个高度并行的 DAG 工作流。\n\n"
-                + "【架构师法则】\n" + architectRules + "\n\n"
+        return """
+                你是一个顶级的 AGI 操作系统工作流编译器。你的任务是将用户的自然语言意图，拆解为带有严格依赖关系的有向无环图 (DAG)。
+
+                【核心架构规范】
+                1. 节点级动态分发 (Executor):
+                   - 对于每个节点，你必须指定最合适的 `executor`。
+                   - 填写 "omni"：当任务涉及逻辑推理、代码编写、搜索引擎、爬虫、文件读写、Bash 系统命令等无需物理视觉的任务。
+                   - 填写 "operator"：【仅当】任务必须移动真实的物理鼠标、敲击键盘、或调用宿主机 GUI 打开真实软件时使用。
+
+                2. 内存状态流转与变量引用 (Memory Context):
+                   - 节点之间通过内存总线传递数据，而不是写死在硬盘。
+                   - 如果下游节点需要使用上游节点的数据，请在下游节点的 `userParams` 中使用 Dify 风格的占位符：`{{上游节点ID.变量名}}`。
+                   - 例如：节点 `search_github` 的输出将被下游节点引用为 `{{search_github.trending_url}}`。
+
+                3. 严格的拓扑依赖 (Upstream Dependencies):
+                   - 并发原则：没有任何依赖的节点，将在底层被引擎高并发同时拉起。
+                   - 阻塞原则：必须等待前置任务完成的节点，必须在 `upstreamDependencies` 数组中明确声明前置节点的 ID。
+
+                4. 批处理与迭代节点 (Iteration / Child Engine) 【极度重要】:
+                   - 当任务需要对一个列表/数组中的多个元素进行重复操作时（例如："分别总结 5 篇文章"、"批量测试 3 个接口"），**绝对不要**在单节点的代码里写 for 循环！
+                   - 你必须生成一个特殊的迭代节点，设置 `"isIteration": true`。
+                   - 必须指定 `"iteratorDataVariable"`，即你要遍历的数组变量（通常引用上游，如 `"{{spider_node.article_list}}"`）。
+                   - 必须指定 `"iteratorItemAlias"`，即当前循环元素的局部别名（例如 `"item"`）。
+                   - 必须在 `"childNodes"` 数组中，定义这个循环内部要执行的子任务流。在子任务流中，你可以通过 `{{item}}` 来引用当前遍历到的元素！
+
+                """
+                + "\n【架构师法则】\n" + architectRules + "\n\n"
                 + "【可用技能库】\n" + skillsContext + "\n\n"
-                + "【强制 JSON Schema 契约】\n"
-                + "你必须且只能返回如下格式的纯 JSON 数据，严禁包含任何 Markdown 标记或多余的解释文字！\n"
-                + "{\n"
-                + "  \"nodes\": [\n"
-                + "    {\"id\": \"agent_1\", \"role\": \"节点具体职责描述\", \"blueprintId\": \"agentNode\"}\n"
-                + "  ],\n"
-                + "  \"edges\": [\n"
-                + "    {\"source\": \"agent_1\", \"target\": \"agent_2\"}\n"
-                + "  ]\n"
-                + "}\n\n"
-                + "规则：\n"
-                + "1. nodes 数组中每个节点必须有 id（如 agent_1_wiki）、role（职责描述）、blueprintId（固定为 agentNode）\n"
-                + "2. edges 数组中每条边表示数据流向，source 的输出是 target 的输入\n"
-                + "3. 无依赖的并行节点之间不要有 edge\n"
-                + "4. 节点数量必须与任务的真实并发需求匹配，简单任务 1-2 个节点，复杂任务按正交性拆分\n"
-                + "5. 只输出 JSON，不要任何其他文字！";
+                + """
+                【输出 JSON 格式要求 — 必须严格遵守】
+                你必须严格输出如下格式的 JSON（不要包含任何 Markdown 标记）：
+                {
+                  "workflowName": "批量分析工作流",
+                  "nodes": [
+                    {
+                      "instanceId": "fetch_list",
+                      "role": "获取数据列表",
+                      "executor": "omni",
+                      "upstreamDependencies": [],
+                      "isIteration": false
+                    },
+                    {
+                      "instanceId": "batch_process_loop",
+                      "role": "批量处理列表中的每一个元素",
+                      "executor": "omni",
+                      "upstreamDependencies": ["fetch_list"],
+                      "isIteration": true,
+                      "iteratorDataVariable": "{{fetch_list.data_array}}",
+                      "iteratorItemAlias": "current_item",
+                      "childNodes": [
+                        {
+                          "instanceId": "process_single_item",
+                          "role": "处理单个元素并生成报告",
+                          "executor": "omni",
+                          "upstreamDependencies": [],
+                          "userParams": {
+                            "target_data": "{{current_item}}"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+
+                规则：
+                1. 每个节点必须有 instanceId、role、executor（'omni' 或 'operator'）
+                2. executor='omni'：逻辑思考、写代码、文件读写、网页搜索、Bash 命令等纯数字任务（默认）
+                3. executor='operator'：仅当必须操作物理鼠标、键盘、查看屏幕截图时使用
+                4. upstreamDependencies 数组声明该节点必须等待哪些上游节点完成后才能启动
+                5. 无依赖的并行节点的 upstreamDependencies 为空数组 []
+                6. 下游节点通过 {{上游节点ID.变量名}} 引用上游输出
+                7. 非迭代节点必须设置 "isIteration": false（或省略）
+                8. 迭代节点必须设置 "isIteration": true，并包含 iteratorDataVariable、iteratorItemAlias、childNodes
+                9. childNodes 中的子节点可通过 {{iteratorItemAlias值}} 引用当前遍历到的元素
+                10. 节点数量必须与任务的真实并发需求匹配
+                11. 只输出 JSON，不要任何其他文字！
+                """;
     }
 
     /**
@@ -284,15 +415,35 @@ public class TopologyCompiler {
         AiosSdk sdk = AiosSdk.getInstance();
 
         // ── Step 1: LLM 编译 — 将用户意图解析为拓扑 JSON ──
-        String compilePrompt = "你是一个编排工程师。请分析用户需求 [" + userRequest
-                + "]，并将其解析为工作流拓扑结构 JSON。"
-                + "请严格输出一个 JSON 数组，格式为："
-                + "[{\"instanceId\":\"(英文小写实例ID，如 fetcher_1)\", "
-                + "\"blueprintId\":\"(蓝图类型ID，如 spider_agent)\", "
-                + "\"userParams\":{\"参数名\":\"参数值\"}, "
-                + "\"subscribeTopic\":\"(上游事件topic，源头为空)\", "
-                + "\"publishTopic\":\"(当前节点输出topic)\"}]"
-                + "。只输出 JSON，不要其他文字。";
+        String compilePrompt = """
+                你是一个顶级的 AGI 操作系统工作流编译器。请分析用户需求，将其拆解为带有严格依赖关系的 DAG。
+
+                【核心架构规范】
+                1. 每个节点必须指定 executor: "omni"（逻辑/代码/搜索/Bash）或 "operator"（物理鼠标/键盘/GUI）
+                2. 节点间通过内存总线传递数据，下游用 {{上游节点ID.变量名}} 引用上游输出
+                3. upstreamDependencies 数组声明该节点必须等待的上游节点 ID
+                4. 批处理与迭代节点 (Iteration) 【极度重要】:
+                   - 当任务需要对列表/数组中的多个元素进行重复操作时，**绝对不要**在单节点代码里写 for 循环！
+                   - 必须生成迭代节点，设置 "isIteration": true
+                   - 必须指定 "iteratorDataVariable"（遍历的数组变量，如 "{{fetch_node.data_list}}"）
+                   - 必须指定 "iteratorItemAlias"（当前循环元素的别名，如 "item"）
+                   - 必须在 "childNodes" 中定义循环内的子任务流，子节点通过 {{item}} 引用当前元素
+
+                用户需求: [""" + userRequest + "]\n\n"
+                + "请严格输出如下格式的 JSON（不要 Markdown 标记）：\n"
+                + "{\n"
+                + "  \"workflowName\": \"任务流名称\",\n"
+                + "  \"nodes\": [\n"
+                + "    { \"instanceId\": \"fetch_list\", \"role\": \"获取数据列表\", \"executor\": \"omni\", \"upstreamDependencies\": [], \"isIteration\": false },\n"
+                + "    { \"instanceId\": \"batch_loop\", \"role\": \"批量处理每个元素\", \"executor\": \"omni\", \"upstreamDependencies\": [\"fetch_list\"],\n"
+                + "      \"isIteration\": true, \"iteratorDataVariable\": \"{{fetch_list.data_array}}\", \"iteratorItemAlias\": \"item\",\n"
+                + "      \"childNodes\": [\n"
+                + "        { \"instanceId\": \"process_item\", \"role\": \"处理单个元素\", \"executor\": \"omni\", \"upstreamDependencies\": [], \"userParams\": { \"target\": \"{{item}}\" } }\n"
+                + "      ]\n"
+                + "    }\n"
+                + "  ]\n"
+                + "}\n"
+                + "只输出 JSON，不要其他文字。";
 
         String topologyJson = sdk.think("topology_compiler", compilePrompt);
         System.out.printf("[OmniFactory]   Topology JSON received (%d chars).%n", topologyJson.length());
@@ -428,43 +579,149 @@ public class TopologyCompiler {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * 从 LLM 返回的拓扑 JSON 数组中提取 WorkflowNode 列表。
+     * 从 LLM 返回的拓扑 JSON 中提取 WorkflowNode 列表。
+     * <p>
+     * 支持两种格式：
+     * - 新格式：{ "workflowName": "...", "nodes": [...] }（Dify 风格，含 upstreamDependencies）
+     * - 旧格式：直接返回节点数组或 edges 数组
+     * <p>
+     * 支持迭代节点（Iteration Node）的递归解析：
+     * - isIteration, iteratorDataVariable, iteratorItemAlias
+     * - childNodes 数组递归解析为子 WorkflowNode 列表
      */
     private List<WorkflowNode> parseTopologyJson(String json) {
         List<WorkflowNode> nodes = new ArrayList<>();
 
-        // 去除 Markdown 代码块包裹
+        // 去除 Markdown 代码块包裹和 <think/> 标签
         String cleaned = json.replaceAll("```json\\s*", "").replaceAll("```\\s*", "").trim();
+        cleaned = cleaned.replaceAll("(?s)<think.*?</think*>", "").trim();
 
-        // 匹配每个 JSON 对象 {...}（支持嵌套一层 userParams 对象）
-        Pattern objectPattern = Pattern.compile("\\{[^{}]*(?:\\{[^{}]*\\}[^{}]*)*\\}");
-        Matcher objectMatcher = objectPattern.matcher(cleaned);
+        // 提取 nodes 数组内容
+        String nodesArray = extractNodesArray(cleaned);
+        if (nodesArray == null || nodesArray.isBlank()) {
+            log.warn("[TopologyCompiler] No 'nodes' array found in LLM output");
+            return nodes;
+        }
 
-        while (objectMatcher.find()) {
-            String obj = objectMatcher.group();
+        // 使用安全的深度感知分割器提取每个 JSON 对象
+        List<String> rawNodes = AppGateway.splitJsonObjectsSafe(nodesArray);
 
-            String instanceId = extractJsonValue(obj, "instanceId");
-            String blueprintId = extractJsonValue(obj, "blueprintId");
-            String role = extractJsonValue(obj, "role");
-            String subscribeTopic = extractJsonValue(obj, "subscribeTopic");
-            String publishTopic = extractJsonValue(obj, "publishTopic");
-
-            // 解析 userParams 对象
-            Map<String, String> userParams = extractUserParams(obj);
-
-            if (instanceId != null && !instanceId.isBlank() && blueprintId != null && !blueprintId.isBlank()) {
-                nodes.add(new WorkflowNode(
-                        instanceId.trim(),
-                        role != null ? role.trim() : "",
-                        blueprintId.trim(),
-                        userParams,
-                        subscribeTopic != null ? subscribeTopic.trim() : "",
-                        publishTopic != null ? publishTopic.trim() : ""
-                ));
+        for (String obj : rawNodes) {
+            WorkflowNode node = parseSingleNode(obj);
+            if (node != null) {
+                nodes.add(node);
             }
         }
 
         return nodes;
+    }
+
+    /**
+     * 解析单个节点 JSON 对象为 WorkflowNode（含迭代节点递归解析）。
+     */
+    private WorkflowNode parseSingleNode(String obj) {
+        String instanceId = extractJsonValue(obj, "instanceId");
+        // 兼容旧格式：id → instanceId
+        if (instanceId == null) instanceId = extractJsonValue(obj, "id");
+        String blueprintId = extractJsonValue(obj, "blueprintId");
+        String role = extractJsonValue(obj, "role");
+        String executor = extractJsonValue(obj, "executor");
+        String subscribeTopic = extractJsonValue(obj, "subscribeTopic");
+        String publishTopic = extractJsonValue(obj, "publishTopic");
+
+        // 解析 userParams 对象
+        Map<String, String> userParams = extractUserParams(obj);
+
+        // 解析 upstreamDependencies 数组
+        List<String> upstreamDeps = extractUpstreamDependencies(obj);
+
+        if (instanceId == null || instanceId.isBlank()) {
+            return null;
+        }
+
+        WorkflowNode node = new WorkflowNode(
+                instanceId.trim(),
+                role != null ? role.trim() : "",
+                blueprintId != null ? blueprintId.trim() : instanceId.trim(),
+                userParams,
+                subscribeTopic != null ? subscribeTopic.trim() : "",
+                publishTopic != null ? publishTopic.trim() : "",
+                executor != null ? executor.trim() : "omni"
+        );
+
+        // 注入上游依赖
+        for (String dep : upstreamDeps) {
+            node.addDependency(dep.trim());
+        }
+
+        // ── 迭代节点专属字段解析 ──
+        String isIterationStr = extractJsonValue(obj, "isIteration");
+        if ("true".equalsIgnoreCase(isIterationStr)) {
+            node.setIteration(true);
+
+            String iteratorDataVariable = extractJsonValue(obj, "iteratorDataVariable");
+            if (iteratorDataVariable != null) {
+                node.setIteratorDataVariable(iteratorDataVariable.trim());
+            }
+
+            String iteratorItemAlias = extractJsonValue(obj, "iteratorItemAlias");
+            if (iteratorItemAlias != null) {
+                node.setIteratorItemAlias(iteratorItemAlias.trim());
+            }
+
+            // 递归解析 childNodes 数组
+            String childNodesArray = AppGateway.extractJsonArray(obj, "childNodes");
+            if (childNodesArray != null && !childNodesArray.isBlank()) {
+                List<String> rawChildNodes = AppGateway.splitJsonObjectsSafe(childNodesArray);
+                for (String childObj : rawChildNodes) {
+                    WorkflowNode childNode = parseSingleNode(childObj);
+                    if (childNode != null) {
+                        node.getChildNodes().add(childNode);
+                    }
+                }
+            }
+
+            log.info("[TopologyCompiler] Iteration node parsed: id={}, dataVar={}, itemAlias={}, childCount={}",
+                    instanceId, iteratorDataVariable, iteratorItemAlias, node.getChildNodes().size());
+        }
+
+        return node;
+    }
+
+    /**
+     * 从 JSON 中提取 "nodes" 数组的内部内容。
+     */
+    private String extractNodesArray(String json) {
+        // 先尝试 Dify 格式：{ "workflowName": "...", "nodes": [...] }
+        String nodesArray = AppGateway.extractJsonArray(json, "nodes");
+        if (nodesArray != null) return nodesArray;
+
+        // 如果整个 JSON 就是一个数组 [...]
+        String trimmed = json.trim();
+        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            return trimmed.substring(1, trimmed.length() - 1);
+        }
+
+        return null;
+    }
+
+    /**
+     * 从 JSON 对象中提取 upstreamDependencies 数组。
+     * <p>
+     * 匹配 "upstreamDependencies": ["id1", "id2"] 格式。
+     */
+    private List<String> extractUpstreamDependencies(String jsonObj) {
+        List<String> deps = new ArrayList<>();
+        String arrayContent = AppGateway.extractJsonArray(jsonObj, "upstreamDependencies");
+        if (arrayContent == null || arrayContent.isBlank()) return deps;
+
+        // 提取数组中的每个字符串值
+        Pattern strPattern = Pattern.compile("\"([^\"]+)\"");
+        Matcher m = strPattern.matcher(arrayContent);
+        while (m.find()) {
+            deps.add(m.group(1));
+        }
+        return deps;
     }
 
     /**

@@ -9,6 +9,7 @@ import com.ouisani.aios.core.syscall.SyscallDispatcher;
 import com.ouisani.aios.core.syscall.SyscallRequest;
 import com.ouisani.aios.core.syscall.SyscallResponse;
 import com.ouisani.aios.core.telemetry.SemanticEtw;
+import com.ouisani.aios.core.team.TeamManager;
 import com.ouisani.aios.user.apps.omnifactory.OmniMotherAgent;
 import com.ouisani.aios.user.apps.omnifactory.TopologyCompiler;
 import com.ouisani.aios.user.apps.omnifactory.WorkflowManifest;
@@ -149,7 +150,8 @@ public final class IntentRouter {
      * LLM 语义路由 — 核心方法，零硬编码匹配。
      * <p>
      * 调用 LLM 将用户输入分类为 IntentType 枚举，
-     * 再通过 switch-case 分发到对应的系统组件。
+     * 再通过 IntentGate 检测执行模式（SOLO/TEAM/ULTRAWORK/HYPERPLAN/QUICK），
+     * 最后通过 switch-case 分发到对应的系统组件。
      *
      * @param input 用户自然语言输入
      * @return 路由结果
@@ -157,12 +159,17 @@ public final class IntentRouter {
     public RouteResult route(String input) {
         if (llmProvider == null && llmRouter == null) {
             log.error("[IntentRouter] No LLM provider configured!");
-            return new RouteResult(IntentType.CHAT, "IntentRouter not configured — no LLM available");
+            return new RouteResult(IntentType.CHAT, "IntentRouter not configured — no LLM available", null);
         }
 
         log.info("[IntentRouter] Semantic routing: \"{}\"", truncate(input, 80));
         SemanticEtw.getInstance().logEvent("INTENT", "ROUTE_START",
                 "input=" + truncate(input, 100));
+
+        // ── Step 0: IntentGate 意图门控 — 检测执行模式 ──
+        IntentGate.GateResult gateResult = IntentGate.instance().detectMode(input);
+        log.info("[IntentRouter] IntentGate detected mode: {} (trigger: {})",
+                gateResult.mode(), gateResult.trigger());
 
         // Step 1: LLM 语义分类 — 输出纯枚举名
         IntentType intent;
@@ -189,52 +196,50 @@ public final class IntentRouter {
             intent = IntentType.CHAT;
         } catch (Exception e) {
             log.error("[IntentRouter] LLM routing call failed: {}", e.getMessage());
-            return new RouteResult(IntentType.CHAT, "LLM routing failed: " + e.getMessage());
+            return new RouteResult(IntentType.CHAT, "LLM routing failed: " + e.getMessage(), gateResult);
         }
 
-        log.info("[IntentRouter] Routed to: {} for input: \"{}\"", intent, truncate(input, 60));
+        log.info("[IntentRouter] Routed to: {} for input: \"{}\" (mode: {})", intent, truncate(input, 60), gateResult.mode());
         SemanticEtw.getInstance().logEvent("INTENT", "ROUTED",
-                "intent=" + intent + " input=" + truncate(input, 60));
+                "intent=" + intent + " mode=" + gateResult.mode() + " input=" + truncate(input, 60));
 
-        // Step 2: switch-case 分发到对应系统组件
+        // Step 2: switch-case 分发到对应系统组件（携带 IntentGate 模式信息）
         return switch (intent) {
-            case SYSTEM_COMMAND -> dispatchSystemCommand(input);
-            case WORKFLOW_DEPLOY -> dispatchWorkflowDeploy(input);
-            case SEMANTIC_SEARCH -> dispatchSemanticSearch(input);
-            case CHAT -> dispatchChat(input);
+            case SYSTEM_COMMAND -> dispatchSystemCommand(input, gateResult);
+            case WORKFLOW_DEPLOY -> dispatchWorkflowDeploy(input, gateResult);
+            case SEMANTIC_SEARCH -> dispatchSemanticSearch(input, gateResult);
+            case CHAT -> dispatchChat(input, gateResult);
         };
     }
 
     /**
      * SYSTEM_COMMAND 分发 — 路由到 SyscallDispatcher。
-     * <p>
-     * 使用 LLM 将自然语言翻译为结构化 SyscallRequest，然后执行。
      */
-    private RouteResult dispatchSystemCommand(String input) {
+    private RouteResult dispatchSystemCommand(String input, IntentGate.GateResult gateResult) {
         if (dispatcher == null) {
-            return new RouteResult(IntentType.SYSTEM_COMMAND, "SyscallDispatcher not configured");
+            return new RouteResult(IntentType.SYSTEM_COMMAND, "SyscallDispatcher not configured", gateResult);
         }
 
         try {
             SyscallResponse response = executeNaturalLanguage(input);
             String data = response.success() ? response.data() : "Error: " + response.errorMessage();
-            return new RouteResult(IntentType.SYSTEM_COMMAND, data);
+            return new RouteResult(IntentType.SYSTEM_COMMAND, data, gateResult);
         } catch (Exception e) {
-            return new RouteResult(IntentType.SYSTEM_COMMAND, "System command failed: " + e.getMessage());
+            return new RouteResult(IntentType.SYSTEM_COMMAND, "System command failed: " + e.getMessage(), gateResult);
         }
     }
 
     /**
      * WORKFLOW_DEPLOY 分发 — 路由到 TopologyCompiler + OmniMotherAgent。
      * <p>
-     * 将用户目标编译为 WorkflowManifest，然后拉起母体进程。
+     * IntentGate 集成：如果检测到 TEAM/ULTRAWORK 模式，自动创建团队。
      */
-    private RouteResult dispatchWorkflowDeploy(String input) {
+    private RouteResult dispatchWorkflowDeploy(String input, IntentGate.GateResult gateResult) {
         try {
             com.ouisani.aios.core.TaskScheduler scheduler =
                     com.ouisani.aios.core.VfsManager.instance().getTaskScheduler();
             if (scheduler == null) {
-                return new RouteResult(IntentType.WORKFLOW_DEPLOY, "TaskScheduler not available");
+                return new RouteResult(IntentType.WORKFLOW_DEPLOY, "TaskScheduler not available", gateResult);
             }
 
             com.ouisani.aios.user.bin.AiosAppManager.configure(scheduler);
@@ -246,45 +251,68 @@ public final class IntentRouter {
             OmniMotherAgent mother = new OmniMotherAgent(manifest);
             mother.spawn(scheduler);
 
+            // ── IntentGate: 如果是 TEAM/ULTRAWORK 模式，自动创建团队 ──
+            String teamInfo = "";
+            if (IntentGate.instance().shouldAutoCreateTeam(gateResult.mode())) {
+                try {
+                    TeamManager.TeamSpec spec = IntentGate.instance().generateTeamSpec(
+                            input, mother.getAgentId(), gateResult.mode());
+                    TeamManager.TeamState team = TeamManager.instance().createTeam(spec);
+                    teamInfo = " | Team '" + team.name() + "' auto-created with "
+                            + team.members().size() + " members (" + gateResult.mode() + " mode)";
+                    log.info("[IntentRouter] Auto-created team '{}' for {} mode", team.name(), gateResult.mode());
+                } catch (Exception e) {
+                    teamInfo = " | Team auto-creation failed: " + e.getMessage();
+                    log.warn("[IntentRouter] Team auto-creation failed: {}", e.getMessage());
+                }
+            }
+
             return new RouteResult(IntentType.WORKFLOW_DEPLOY,
                     "Mother Agent dispatched. Workflow: " + manifest.workflowName()
-                            + " | Nodes: " + manifest.nodes().size());
+                            + " | Nodes: " + manifest.nodes().size()
+                            + teamInfo,
+                    gateResult);
         } catch (Exception e) {
             return new RouteResult(IntentType.WORKFLOW_DEPLOY,
-                    "Workflow deployment failed: " + e.getMessage());
+                    "Workflow deployment failed: " + e.getMessage(), gateResult);
         }
     }
 
     /**
      * SEMANTIC_SEARCH 分发 — 路由到 AppGateway。
      */
-    private RouteResult dispatchSemanticSearch(String input) {
+    private RouteResult dispatchSemanticSearch(String input, IntentGate.GateResult gateResult) {
         try {
             AppGateway gateway = AppGateway.getInstance();
             String result = gateway.handleSemanticSearch(input);
-            return new RouteResult(IntentType.SEMANTIC_SEARCH, result);
+            return new RouteResult(IntentType.SEMANTIC_SEARCH, result, gateResult);
         } catch (Exception e) {
             // AppGateway 不可用时，回退到 LLM 直接回答
-            return dispatchChat(input);
+            return dispatchChat(input, gateResult);
         }
     }
 
     /**
      * CHAT 分发 — 路由到 LlmRouter 直接回复。
+     * <p>
+     * IntentGate 集成：将模式提示注入系统提示词。
      */
-    private RouteResult dispatchChat(String input) {
+    private RouteResult dispatchChat(String input, IntentGate.GateResult gateResult) {
         try {
             String response;
+            // 将 IntentGate 的模式提示注入系统提示
+            String systemPrompt = "你是 AIOS 操作系统的交互式终端助手。请简洁地回复。"
+                    + gateResult.prompt();
             if (llmRouter != null) {
-                response = llmRouter.think(input, "你是 AIOS 操作系统的交互式终端助手。请简洁地回复。");
+                response = llmRouter.think(input, systemPrompt);
             } else if (llmProvider != null) {
-                response = llmProvider.think(input, "你是 AIOS 操作系统的交互式终端助手。请简洁地回复。");
+                response = llmProvider.think(input, systemPrompt);
             } else {
-                return new RouteResult(IntentType.CHAT, "No LLM available for chat");
+                return new RouteResult(IntentType.CHAT, "No LLM available for chat", gateResult);
             }
-            return new RouteResult(IntentType.CHAT, response);
+            return new RouteResult(IntentType.CHAT, response, gateResult);
         } catch (Exception e) {
-            return new RouteResult(IntentType.CHAT, "LLM chat failed: " + e.getMessage());
+            return new RouteResult(IntentType.CHAT, "LLM chat failed: " + e.getMessage(), gateResult);
         }
     }
 
@@ -355,9 +383,13 @@ public final class IntentRouter {
     }
 
     /**
-     * 路由结果 — 包含意图类型和执行结果。
+     * 路由结果 — 包含意图类型、执行结果和 IntentGate 门控结果。
      */
-    public record RouteResult(IntentType intentType, String response) {}
+    public record RouteResult(
+            IntentType intentType,
+            String response,
+            IntentGate.GateResult gateResult
+    ) {}
 
     /**
      * LLM JSON 输出解析的中间 DTO。

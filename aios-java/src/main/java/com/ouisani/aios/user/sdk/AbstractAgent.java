@@ -5,12 +5,15 @@ import com.ouisani.aios.core.ProcessPriority;
 import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.network.EventBus;
+import com.ouisani.aios.core.team.AgentMailbox;
+import com.ouisani.aios.core.team.MailMessage;
 import com.ouisani.aios.vfs.GuiActionNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -65,6 +68,10 @@ public abstract class AbstractAgent implements Runnable {
     /** 消息循环的内部消息队列 */
     private final ConcurrentLinkedQueue<String> messageQueue = new ConcurrentLinkedQueue<>();
 
+    // ── Team Mailbox 机制 (Actor Mode) ──
+    /** Agent 的私人信箱 — 支持异步消息协作，Virtual Thread 安全阻塞 */
+    protected final AgentMailbox mailbox;
+
     private volatile boolean running = false;
     private int pid = -1;
 
@@ -74,6 +81,7 @@ public abstract class AbstractAgent implements Runnable {
         this.agentId = agentId;
         this.priority = priority != null ? priority : ProcessPriority.NORMAL;
         this.tokenBudget = tokenBudget;
+        this.mailbox = new AgentMailbox(agentId);
     }
 
     // ── Lifecycle (abstract) ──
@@ -95,6 +103,123 @@ public abstract class AbstractAgent implements Runnable {
         running = false;
         log.info("[Agent:{}] Exiting", agentId);
         System.out.printf("  ■ [Agent:%s] Exited%n", agentId);
+    }
+
+    /** 获取 Agent 的私人信箱 */
+    public AgentMailbox getMailbox() {
+        return this.mailbox;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Team Mailbox: Actor 事件循环 (oh-my-openagent Team Mode)
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 启动 Actor 事件循环 (Team Mode 核心)。
+     * <p>
+     * Agent 将在这个循环中常驻，处理任务、回复询问，直到收到死亡药丸。
+     * 结合 Java 21 Virtual Threads，阻塞等待时不消耗 OS 线程。
+     * <p>
+     * 与 {@link #run()} 的区别：
+     * <pre>
+     *   run()            — 一次性执行模式（DAG 节点调度用）
+     *   startEventLoop() — 常驻 Actor 模式（Team 协作用）
+     * </pre>
+     */
+    public void startEventLoop() {
+        log.info("[{}] Agent Event Loop started. Listening to mailbox...", this.agentId);
+        System.out.printf("  ▶ [Agent:%s] Event Loop started (Team Mode)%n", this.agentId);
+        boolean isAlive = true;
+
+        while (isAlive) {
+            try {
+                // 阻塞等待新邮件（利用 Virtual Threads，此处完全不浪费物理 CPU）
+                MailMessage mail = this.mailbox.readNext(1, TimeUnit.DAYS);
+
+                if (mail != null) {
+                    switch (mail.getType()) {
+                        case TASK_ASSIGN -> {
+                            log.info("[{}] Received TASK from {}. Processing...", this.agentId, mail.getSenderId());
+                            handleTask(mail.getPayload());
+                        }
+                        case STATUS_UPDATE -> {
+                            log.debug("[{}] Received STATUS_UPDATE from {}.", this.agentId, mail.getSenderId());
+                            handleStatusUpdate(mail);
+                        }
+                        case QUESTION -> {
+                            log.info("[{}] Received QUESTION from {}.", this.agentId, mail.getSenderId());
+                            handleQuestion(mail);
+                        }
+                        case REPLY -> {
+                            log.info("[{}] Received REPLY from {}.", this.agentId, mail.getSenderId());
+                            handleReply(mail);
+                        }
+                        case POISON_PILL -> {
+                            log.info("[{}] Received POISON_PILL. Terminating Agent.", this.agentId);
+                            System.out.printf("  ■ [Agent:%s] POISON_PILL received. Shutting down.%n", this.agentId);
+                            isAlive = false;
+                        }
+                    }
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.error("[{}] Event loop interrupted.", this.agentId);
+                isAlive = false;
+            } catch (Exception e) {
+                log.error("[{}] Exception in event loop.", this.agentId, e);
+            }
+        }
+
+        // 清理信箱
+        mailbox.clear();
+        log.info("[{}] Agent Event Loop shut down.", this.agentId);
+    }
+
+    /**
+     * 处理委派任务 — 子类重写实现具体业务逻辑。
+     * <p>
+     * 当 DAG 引擎通过 TeamRegistry 派发 TaskPayload 时，此方法被调用。
+     * 默认回退到原有的 run() 逻辑，执行完毕后自动 complete 回执单。
+     * <p>
+     * 关键：如果 payload 是 TaskPayload，必须在执行完毕后 complete 回执单，
+     * 否则 DAG 引擎会永远阻塞在 completionReceipt.join()。
+     */
+    protected void handleTask(Object payload) {
+        try {
+            if (payload instanceof com.ouisani.aios.core.team.TaskPayload taskPayload) {
+                log.info("[{}] Executing DAG task: node={}", this.agentId, taskPayload.node().instanceId());
+                this.run();
+            } else {
+                log.warn("[{}] handleTask with unknown payload type. Falling back to run().", this.agentId);
+                this.run();
+            }
+        } finally {
+            // 无论成功失败，都必须 complete 回执单，否则 DAG 引擎死锁
+            if (payload instanceof com.ouisani.aios.core.team.TaskPayload taskPayload) {
+                taskPayload.completionReceipt().complete(null);
+            }
+        }
+    }
+
+    /**
+     * 处理状态更新 — 子类可重写。
+     */
+    protected void handleStatusUpdate(MailMessage mail) {
+        log.debug("[{}] Status update from {}: {}", this.agentId, mail.getSenderId(), mail.getPayload());
+    }
+
+    /**
+     * 处理反向提问 — 子类可重写。
+     */
+    protected void handleQuestion(MailMessage mail) {
+        log.warn("[{}] Unhandled QUESTION from {}: {}", this.agentId, mail.getSenderId(), mail.getPayload());
+    }
+
+    /**
+     * 处理答复 — 子类可重写。
+     */
+    protected void handleReply(MailMessage mail) {
+        log.debug("[{}] Reply from {}: {}", this.agentId, mail.getSenderId(), mail.getPayload());
     }
 
     // ── Runnable implementation ──

@@ -73,6 +73,30 @@ public final class HostRpaManager {
     private volatile boolean initialized = false;
 
     private HostRpaManager() {
+        // Wayland/X11 兼容：确保 DISPLAY 环境变量已设置
+        if (System.getenv("DISPLAY") == null || System.getenv("DISPLAY").isBlank()) {
+            // 尝试自动检测 XWayland 显示号
+            java.io.File x11Dir = new java.io.File("/tmp/.X11-unix");
+            if (x11Dir.exists() && x11Dir.listFiles() != null) {
+                for (var f : x11Dir.listFiles()) {
+                    String name = f.getName();
+                    if (name.startsWith("X")) {
+                        String displayNum = name.substring(1);
+                        System.setProperty("DISPLAY", ":" + displayNum);
+                        log.info("[RPA Bridge] Auto-detected DISPLAY=:{}", displayNum);
+                        break;
+                    }
+                }
+            }
+            if (System.getProperty("DISPLAY") == null) {
+                System.setProperty("DISPLAY", ":0");
+                log.info("[RPA Bridge] Fallback DISPLAY=:0");
+            }
+        }
+
+        // 强制关闭无头模式
+        System.setProperty("java.awt.headless", "false");
+
         Robot r;
         try {
             r = new Robot();
@@ -512,6 +536,135 @@ public final class HostRpaManager {
         Clipboard systemClipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
         systemClipboard.setContents(new StringSelection(text), null);
         log.debug("[RPA Bridge] writeClipboard: textLen={}", text.length());
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  WINDOW MANAGEMENT — 窗口管理 (对标 OpenClaw Desktop Control)
+    //
+    //  通过 java.awt.Window / X11 wmctrl 实现窗口级操作
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 获取当前鼠标位置（模型空间坐标）。
+     */
+    public Point getMousePosition(SecurityToken token) {
+        requireSysAdmin(token);
+        PointerInfo info = MouseInfo.getPointerInfo();
+        if (info == null) return new Point(0, 0);
+        Point screenPoint = info.getLocation();
+        // 反向映射：真实屏幕坐标 → 模型空间坐标
+        int imageX = sentW > 0 ? Math.round((float) screenPoint.x * sentW / screenSize.width) : screenPoint.x;
+        int imageY = sentH > 0 ? Math.round((float) screenPoint.y * sentH / screenSize.height) : screenPoint.y;
+        return new Point(imageX, imageY);
+    }
+
+    /**
+     * 获取指定坐标的像素颜色。
+     */
+    public String getPixelColor(SecurityToken token, int imageX, int imageY) {
+        requireSysAdmin(token);
+        ensureAvailable();
+        int screenX = scaleToScreen(imageX, sentW, screenSize.width);
+        int screenY = scaleToScreen(imageY, sentH, screenSize.height);
+        Color color = robot.getPixelColor(screenX, screenY);
+        return String.format("#%02X%02X%02X", color.getRed(), color.getGreen(), color.getBlue());
+    }
+
+    /**
+     * 列出所有可见窗口 — 通过 X11 wmctrl 命令实现。
+     * <p>
+     * 返回格式：每行一个窗口 "窗口ID 标题 (x,y,w,h)"
+     */
+    public String listWindows(SecurityToken token) {
+        requireSysAdmin(token);
+        try {
+            ProcessBuilder pb = new ProcessBuilder("wmctrl", "-l", "-p");
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            String output = new String(p.getInputStream().readAllBytes());
+            p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+            return output.isBlank() ? "No windows found (wmctrl may not be installed)" : output;
+        } catch (Exception e) {
+            // 降级：尝试 xdotool
+            try {
+                ProcessBuilder pb = new ProcessBuilder("xdotool", "search", "--onlyvisible", "--name", ".*");
+                pb.redirectErrorStream(true);
+                Process p = pb.start();
+                String output = new String(p.getInputStream().readAllBytes());
+                p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+                return output.isBlank() ? "No windows found" : output;
+            } catch (Exception e2) {
+                return "Window listing unavailable: " + e.getMessage();
+            }
+        }
+    }
+
+    /**
+     * 激活窗口（将窗口置顶）— 通过 wmctrl 实现。
+     */
+    public boolean activateWindow(SecurityToken token, String windowTitle) {
+        requireSysAdmin(token);
+        try {
+            ProcessBuilder pb = new ProcessBuilder("wmctrl", "-a", windowTitle);
+            Process p = pb.start();
+            boolean ok = p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+            return ok && p.exitValue() == 0;
+        } catch (Exception e) {
+            // 降级：尝试 xdotool
+            try {
+                ProcessBuilder pb = new ProcessBuilder("xdotool", "search", "--name", windowTitle, "windowactivate");
+                Process p = pb.start();
+                boolean ok = p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+                return ok && p.exitValue() == 0;
+            } catch (Exception e2) {
+                return false;
+            }
+        }
+    }
+
+    /**
+     * 关闭窗口 — 通过 wmctrl 实现。
+     */
+    public boolean closeWindow(SecurityToken token, String windowTitle) {
+        requireSysAdmin(token);
+        try {
+            ProcessBuilder pb = new ProcessBuilder("wmctrl", "-c", windowTitle);
+            Process p = pb.start();
+            boolean ok = p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+            return ok && p.exitValue() == 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * 最小化窗口 — 通过 xdotool 实现。
+     */
+    public boolean minimizeWindow(SecurityToken token, String windowTitle) {
+        requireSysAdmin(token);
+        try {
+            ProcessBuilder pb = new ProcessBuilder("xdotool", "search", "--name", windowTitle, "windowminimize");
+            Process p = pb.start();
+            boolean ok = p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+            return ok && p.exitValue() == 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * 最大化窗口 — 通过 wmctrl 实现。
+     */
+    public boolean maximizeWindow(SecurityToken token, String windowTitle) {
+        requireSysAdmin(token);
+        try {
+            ProcessBuilder pb = new ProcessBuilder("wmctrl", "-r", windowTitle, "-b", "add,maximized_vert,maximized_horz");
+            Process p = pb.start();
+            boolean ok = p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+            return ok && p.exitValue() == 0;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     // ════════════════════════════════════════════════════════════════

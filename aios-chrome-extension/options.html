@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>AIOS Bridge Settings</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+      background: #0a0e14;
+      color: #b3b1ad;
+      padding: 40px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 20px;
+      color: #e0e0e0;
+      margin-bottom: 24px;
+    }
+    .field {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      color: #5c6370;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 10px 12px;
+      background: #1a1f29;
+      border: 1px solid #2a2f39;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-family: inherit;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input[type="text"]:focus {
+      border-color: #00E5FF;
+    }
+    .hint {
+      font-size: 11px;
+      color: #5c6370;
+      margin-top: 4px;
+    }
+    .btn {
+      padding: 10px 24px;
+      border: 1px solid #00E5FF;
+      background: transparent;
+      color: #00E5FF;
+      font-size: 13px;
+      font-family: inherit;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: all 0.2s;
+    }
+    .btn:hover {
+      background: rgba(0, 229, 255, 0.1);
+    }
+    .btn.primary {
+      background: #00E5FF;
+      color: #0a0e14;
+      font-weight: 600;
+    }
+    .btn.primary:hover {
+      background: #00B0FF;
+    }
+    .actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 24px;
+    }
+    .toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 12px 20px;
+      background: #00C853;
+      color: #0a0e14;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 600;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <h1>AIOS Bridge Settings</h1>
+
+  <div class="field">
+    <label for="wsUrl">WebSocket Server URL</label>
+    <input type="text" id="wsUrl" placeholder="ws://localhost:19999/ws/browser">
+    <div class="hint">AIOS ChromeBridgeNode WebSocket 地址（默认 ws://localhost:19999/ws/browser）</div>
+  </div>
+
+  <div class="actions">
+    <button class="btn primary" id="btnSave">Save &amp; Reconnect</button>
+    <button class="btn" id="btnReset">Reset to Default</button>
+  </div>
+
+  <div class="toast" id="toast">Saved!</div>
+
+  <script>
+    const DEFAULT_WS_URL = 'ws://localhost:19999/ws/browser';
+    const input = document.getElementById('wsUrl');
+    const btnSave = document.getElementById('btnSave');
+    const btnReset = document.getElementById('btnReset');
+    const toast = document.getElementById('toast');
+
+    // 加载当前配置
+    chrome.storage.local.get(['wsUrl'], (result) => {
+      input.value = result.wsUrl || DEFAULT_WS_URL;
+    });
+
+    // 保存
+    btnSave.addEventListener('click', () => {
+      const url = input.value.trim() || DEFAULT_WS_URL;
+      chrome.storage.local.set({ wsUrl: url }, () => {
+        // 通知 background 重连
+        chrome.runtime.sendMessage({ type: 'popup_reconnect' }).catch(() => {});
+        showToast('Saved & Reconnecting...');
+      });
+    });
+
+    // 重置
+    btnReset.addEventListener('click', () => {
+      input.value = DEFAULT_WS_URL;
+      chrome.storage.local.set({ wsUrl: DEFAULT_WS_URL }, () => {
+        chrome.runtime.sendMessage({ type: 'popup_reconnect' }).catch(() => {});
+        showToast('Reset to default');
+      });
+    });
+
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 2000);
+    }
+  </script>
+</body>
+</html>

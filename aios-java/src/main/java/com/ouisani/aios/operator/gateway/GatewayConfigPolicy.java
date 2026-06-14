@@ -61,14 +61,14 @@ public class GatewayConfigPolicy {
         }
 
         if (!disallowed.isEmpty()) {
-            return ValidationResult.denied("Configuration paths not allowed: " + disallowed, disallowed);
+            return ValidationResult.deny("Configuration paths not allowed: " + disallowed, disallowed);
         }
 
         if (!dangerousEnabled.isEmpty()) {
-            return ValidationResult.denied("Dangerous configuration flags cannot be enabled: " + dangerousEnabled, dangerousEnabled);
+            return ValidationResult.deny("Dangerous configuration flags cannot be enabled: " + dangerousEnabled, dangerousEnabled);
         }
 
-        return ValidationResult.allowed();
+        return ValidationResult.ok();
     }
 
     /** 检查路径是否匹配白名单 */
@@ -97,10 +97,10 @@ public class GatewayConfigPolicy {
 
     /** 验证结果 */
     public record ValidationResult(boolean allowed, String reason, List<String> disallowedPaths) {
-        static ValidationResult allowed() {
+        public static ValidationResult ok() {
             return new ValidationResult(true, null, List.of());
         }
-        static ValidationResult denied(String reason, List<String> disallowed) {
+        public static ValidationResult deny(String reason, List<String> disallowed) {
             return new ValidationResult(false, reason, disallowed);
         }
     }

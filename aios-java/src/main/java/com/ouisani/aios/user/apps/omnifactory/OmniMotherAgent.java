@@ -12,6 +12,9 @@ import com.ouisani.aios.core.memory.MemoryDir;
 import com.ouisani.aios.core.memory.SessionMemoryService;
 import com.ouisani.aios.core.permission.PermissionMode;
 import com.ouisani.aios.core.plugin.WebSearchTool;
+import com.ouisani.aios.core.recovery.RecoveryContext;
+import com.ouisani.aios.core.recovery.RecoveryOrchestrator;
+import com.ouisani.aios.core.recovery.RecoveryResult;
 import com.ouisani.aios.core.swarm.CoordinatorMode;
 import com.ouisani.aios.core.swarm.InProcessWorker;
 import com.ouisani.aios.core.task.DreamTask;
@@ -28,6 +31,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -58,15 +62,29 @@ public class OmniMotherAgent extends AbstractAgent {
     private final WorkflowManifest manifest;
     private final String workingDir;
 
+    // ── Dify 内存上下文（可选，DAG 引擎注入） ──
+    private WorkflowContext context;
+
     // ── Claude Code 能力模块 ──
     private QueryEngine queryEngine;
     private SessionMemoryService.SessionMemory sessionMemory;
     private CompactService.AutoCompactState compactState;
     private CoordinatorMode coordinator;
 
+    /** 原有构造函数：兼容 AppGateway 等旧调用方 */
     public OmniMotherAgent(WorkflowManifest manifest) {
         super("Omni-Mother", ProcessPriority.REALTIME, 100000);
         this.manifest = manifest;
+        this.workingDir = System.getProperty("user.dir");
+    }
+
+    /** Dify 风格构造函数：DAG 引擎按节点级调度时使用 */
+    public OmniMotherAgent(WorkflowNode node, WorkflowContext context) {
+        super("Omni-Mother", ProcessPriority.REALTIME, 100000);
+        this.manifest = new WorkflowManifest(
+                context.getWorkflowId() + "_" + node.instanceId(),
+                List.of(node), List.of(), List.of(), node.executor());
+        this.context = context;
         this.workingDir = System.getProperty("user.dir");
     }
 
@@ -111,6 +129,17 @@ public class OmniMotherAgent extends AbstractAgent {
             // ── RAG: 网络搜索已禁用 — 国内 Jina 被墙，直接进入盲写模式 ──
             // 母体拿到任务后直接进入 Claude Code REPL 写代码，不再等待网络搜索
             String context = "";
+
+            // ── Dify 变量解析：从内存总线动态替换 {{nodeId.variable}} 引用 ──
+            if (this.context != null) {
+                Map<String, String> resolvedParams = new HashMap<>();
+                for (Map.Entry<String, String> entry : node.userParams().entrySet()) {
+                    Object resolved = this.context.resolveValue(entry.getValue());
+                    resolvedParams.put(entry.getKey(), resolved != null ? resolved.toString() : "");
+                }
+                log.info("[OmniMother] Memory parameters resolved for node {}: {}", node.instanceId(), resolvedParams);
+            }
+
             System.out.println("[Mother Agent]   ├─ Web search skipped (offline mode), entering REPL directly");
 
             // ── Claude Code: QueryEngine 自治 SWE 闭环 ──
@@ -147,6 +176,14 @@ public class OmniMotherAgent extends AbstractAgent {
             if (!diagnostics.isEmpty()) {
                 System.out.println("[Mother Agent]   ├─ LSP diagnostics for " + node.instanceId()
                         + ": " + diagnostics.size() + " issues");
+            }
+
+            // ── Dify 内存总线：将节点输出提交到全局上下文，供下游节点收割 ──
+            if (this.context != null) {
+                Map<String, Object> outputs = new HashMap<>();
+                outputs.put("result_text", result);
+                this.context.commitNodeOutput(node.instanceId(), outputs);
+                log.info("[OmniMother] Node '{}' output committed to memory bus", node.instanceId());
             }
 
             // ── CoordinatorMode: 如果节点数 > 3，启用协作模式分配 Worker ──
@@ -235,6 +272,182 @@ public class OmniMotherAgent extends AbstractAgent {
     }
 
     // ════════════════════════════════════════════════════════════════
+    //  Team Mailbox: Actor Mode 任务处理 + 多层自愈编排
+    // ════════════════════════════════════════════════════════════════
+
+    /** 自愈最大重试次数 */
+    private static final int MAX_SELF_HEAL_RETRIES = 3;
+
+    /**
+     * Actor 模式任务处理 — 多层自愈编排器驱动。
+     * <p>
+     * 对标 oh-my-openagent 的 11 层恢复机制：
+     * 原有 2 层（反思注入 + AutoMedic）升级为 11 层恢复策略链。
+     * <p>
+     * 核心流程：
+     * <pre>
+     *   1. 执行任务 → 失败 → 捕获异常
+     *   2. RecoveryOrchestrator.classify() → 错误分类
+     *   3. RecoveryOrchestrator.orchestrate() → 按优先级尝试恢复策略
+     *      - 空内容恢复 → JSON 解析恢复 → 编辑错误恢复 → ...
+     *      - 反思注入（原有机制保留为第 7 层）
+     *   4. 恢复成功 → 重新执行任务
+     *   5. 恢复失败 → 递增失败计数 → 检查熔断阈值
+     *   6. 熔断触发 → 升级为 Human-in-the-Loop
+     * </pre>
+     */
+    @Override
+    protected void handleTask(Object rawPayload) {
+        if (!(rawPayload instanceof com.ouisani.aios.core.team.TaskPayload payload)) {
+            log.error("[OmniMother] Received invalid payload type: {}", rawPayload.getClass().getSimpleName());
+            return;
+        }
+
+        int currentAttempt = 0;
+        boolean success = false;
+        String lastErrorTrace = "";
+        RecoveryOrchestrator recovery = RecoveryOrchestrator.instance();
+
+        while (currentAttempt < MAX_SELF_HEAL_RETRIES && !success) {
+            currentAttempt++;
+            try {
+                log.info("[OmniMother] Task Attempt {}/{} starting for node: {}",
+                        currentAttempt, MAX_SELF_HEAL_RETRIES, payload.node().instanceId());
+
+                // ── 初始化能力模块（仅首次） ──
+                if (currentAttempt == 1) {
+                    initializeClaudeCodeCapabilities();
+                }
+
+                // ── 构建节点执行 Prompt ──
+                WorkflowNode node = payload.node();
+                String basePrompt = buildCodePrompt(node, "");
+
+                // ── 【核心机制：反思注入 (Reflection Injection)】 ──
+                // 如果这不是第一次尝试，说明上次失败了。把错误日志怼到大模型脸上！
+                if (!lastErrorTrace.isEmpty()) {
+                    String reflectionBlock = "\n\n[SYSTEM CRITICAL - PREVIOUS ATTEMPT FAILED]:\n"
+                            + "The previous execution failed with the following error/logs:\n"
+                            + "```text\n" + lastErrorTrace + "\n```\n"
+                            + "Please thoroughly analyze this error, figure out what went wrong, "
+                            + "and provide a CORRECTED solution or code. "
+                            + "Do NOT repeat the same mistake!\n";
+                    basePrompt += reflectionBlock;
+                    log.warn("[OmniMother] Injecting error trace into LLM context for Self-Correction (attempt {}).",
+                            currentAttempt);
+                }
+
+                // ── Dify 变量解析：从内存总线动态替换 {{nodeId.variable}} 引用 ──
+                if (this.context != null) {
+                    Map<String, String> resolvedParams = new HashMap<>();
+                    for (Map.Entry<String, String> entry : node.userParams().entrySet()) {
+                        Object resolved = this.context.resolveValue(entry.getValue());
+                        resolvedParams.put(entry.getKey(), resolved != null ? resolved.toString() : "");
+                    }
+                    log.info("[OmniMother] Memory parameters resolved for node {}: {}", node.instanceId(), resolvedParams);
+                }
+
+                // ── 执行 LLM 自治 SWE 闭环 ──
+                long nodeStartTokens = CostTracker.instance().getTotalTokens();
+                String result = queryEngine.query(basePrompt);
+
+                // ── 验证节点是否真正成功 ──
+                if (!result.contains("NODE_VERIFIED_AND_READY")) {
+                    // 节点未验证通过 — 视为执行失败，触发多层自愈
+                    String errorMsg = "Node " + node.instanceId()
+                            + " not verified. LLM response: " + result;
+                    log.warn("[OmniMother] Attempt {}/{} verification failed: {}",
+                            currentAttempt, MAX_SELF_HEAL_RETRIES, errorMsg);
+                    throw new RuntimeException(errorMsg);
+                }
+
+                // ── 成功！重置恢复计数器 ──
+                recovery.resetFailures(this.agentId);
+                long nodeTokens = CostTracker.instance().getTotalTokens() - nodeStartTokens;
+                log.info("[OmniMother] Node '{}' VERIFIED on attempt {} ({} tokens consumed)",
+                        node.instanceId(), currentAttempt, nodeTokens);
+
+                MemoryDir.instance().save(new MemoryDir.MemoryEntry(
+                        node.instanceId(), MemoryDir.MemoryType.PROJECT,
+                        "Role: " + node.role() + " | Verified: true | Attempts: " + currentAttempt,
+                        System.currentTimeMillis(), new String[]{"omnifactory", node.instanceId()}
+                ));
+
+                // ── Dify 内存总线：提交节点输出 ──
+                if (this.context != null) {
+                    Map<String, Object> outputs = new HashMap<>();
+                    outputs.put("result_text", result);
+                    outputs.put("attempts_required", currentAttempt);
+                    this.context.commitNodeOutput(node.instanceId(), outputs);
+                    log.info("[OmniMother] Node '{}' output committed to memory bus", node.instanceId());
+                }
+
+                TelemetryService.instance().logEvent("node_forged", Map.of(
+                        "node_id", node.instanceId(),
+                        "role", node.role(),
+                        "verified", true,
+                        "attempts", currentAttempt
+                ));
+
+                // ── 业务顺利办完，跳出循环 ──
+                success = true;
+                log.info("[OmniMother] Task complete on attempt {}. Signing receipt for node: {}",
+                        currentAttempt, node.instanceId());
+                payload.completionReceipt().complete(null);
+
+            } catch (Exception e) {
+                log.warn("[OmniMother] Attempt {}/{} failed: {}", currentAttempt, MAX_SELF_HEAL_RETRIES, e.getMessage());
+                lastErrorTrace = e.getMessage() != null ? e.getMessage() : e.toString();
+
+                // ══════════════════════════════════════════════════════════
+                //  【多层自愈编排】— 替代原有简单的反思注入
+                //  RecoveryOrchestrator 会自动分类错误并选择最佳恢复策略
+                // ══════════════════════════════════════════════════════════
+                RecoveryContext recoveryContext = new RecoveryContext(
+                        this.agentId, e, currentAttempt, lastErrorTrace);
+                RecoveryResult recoveryResult = recovery.orchestrate(recoveryContext);
+
+                if (recoveryResult.success() && recoveryResult.modifiedPrompt() != null) {
+                    // 恢复策略提供了 Prompt 修改 — 注入到下一次尝试
+                    lastErrorTrace += "\n[RECOVERY STRATEGY APPLIED: " + recoveryResult.message() + "]";
+                    log.info("[OmniMother] Recovery strategy applied: {}", recoveryResult.message());
+                }
+
+                // 【广播自愈警告事件 — 触发前端大屏红光闪烁动效】
+                try {
+                    String telemetryPayload = String.format(
+                        "{\"eventType\":\"SELF_HEALING_TRIGGERED\", \"agentId\":\"%s\", \"attempt\":%d, \"error\":\"%s\", \"recoveryStrategy\":\"%s\", \"timestamp\":%d}",
+                        this.agentId, currentAttempt,
+                        lastErrorTrace.replace("\"", "'").replace("\n", " "),
+                        recoveryResult.message().replace("\"", "'"),
+                        System.currentTimeMillis()
+                    );
+                    com.ouisani.aios.core.network.EventBus.instance().broadcast("sys.telemetry.events", telemetryPayload);
+                } catch (Exception ignore) {}
+
+                // 指数退避 (Exponential Backoff) 防止 API 限流
+                try {
+                    long backoffMs = 2000L * currentAttempt;
+                    log.info("[OmniMother] Backing off {}ms before retry...", backoffMs);
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+
+        // ── 如果三次都没救回来，宣告失败 ──
+        if (!success) {
+            log.error("[OmniMother] Max retries ({}) exhausted for node: {}. Agent failed to heal itself.",
+                    MAX_SELF_HEAL_RETRIES, payload.node().instanceId());
+            payload.completionReceipt().completeExceptionally(
+                    new RuntimeException("Agent failed after " + MAX_SELF_HEAL_RETRIES
+                            + " self-heal attempts. Last error: " + lastErrorTrace));
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
     //  Claude Code 能力初始化
     // ════════════════════════════════════════════════════════════════
 
@@ -319,8 +532,13 @@ public class OmniMotherAgent extends AbstractAgent {
         tools.add(new com.ouisani.aios.user.apps.omnifactory.tools.PlanModeTool());
         tools.add(new com.ouisani.aios.user.apps.omnifactory.tools.TaskTool());
         tools.add(new com.ouisani.aios.user.apps.omnifactory.tools.SkillTool());
-        System.out.println("[Mother Agent] 5 exclusive cognitive tools mounted (TodoWrite, NotebookEdit, PlanMode, Task, Skill)");
-        log.info("[Mother Agent] Exclusive cognitive tools mounted: TodoWrite, NotebookEdit, PlanMode, Task, Skill");
+        tools.add(new com.ouisani.aios.operator.tools.HashlineReadTool());
+        tools.add(new com.ouisani.aios.operator.tools.HashlineEditTool());
+        tools.add(new com.ouisani.aios.operator.tools.AstSearchTool());
+        tools.add(new com.ouisani.aios.operator.tools.AstRewriteTool());
+        tools.add(new com.ouisani.aios.operator.tools.TeamTool());
+        System.out.println("[Mother Agent] 10 exclusive cognitive tools mounted (TodoWrite, NotebookEdit, PlanMode, Task, Skill, HashlineRead, HashlineEdit, AstSearch, AstRewrite, Team)");
+        log.info("[Mother Agent] Exclusive cognitive tools mounted: TodoWrite, NotebookEdit, PlanMode, Task, Skill, HashlineRead, HashlineEdit, AstSearch, AstRewrite, Team");
         return tools;
     }
 

@@ -29,6 +29,7 @@ public class AppManifest {
     private final String entrypoint;
     private final List<String> enabledSkills;
     private final List<String> enabledRoles;
+    private final String agentType;
 
     private AppManifest(Builder builder) {
         this.appName = builder.appName;
@@ -38,6 +39,7 @@ public class AppManifest {
         this.entrypoint = builder.entrypoint;
         this.enabledSkills = Collections.unmodifiableList(new ArrayList<>(builder.enabledSkills));
         this.enabledRoles = Collections.unmodifiableList(new ArrayList<>(builder.enabledRoles));
+        this.agentType = builder.agentType;
     }
 
     public String appName() {
@@ -84,6 +86,18 @@ public class AppManifest {
         return enabledRoles;
     }
 
+    /**
+     * 获取内核下发的母体路由标签。
+     * <p>
+     * "operator" 表示路由到 OperatorAgent（物理操作），
+     * "omni" 表示路由到 OmniMotherAgent（代码生成）。
+     *
+     * @return 母体路由标签，默认 "omni"
+     */
+    public String agentType() {
+        return agentType;
+    }
+
     @Override
     public String toString() {
         return "AppManifest{" +
@@ -94,6 +108,7 @@ public class AppManifest {
                 ", entrypoint='" + entrypoint + '\'' +
                 ", enabledSkills=" + enabledSkills +
                 ", enabledRoles=" + enabledRoles +
+                ", agentType='" + agentType + '\'' +
                 '}';
     }
 
@@ -109,6 +124,7 @@ public class AppManifest {
         private String entrypoint = "";
         private final List<String> enabledSkills = new ArrayList<>();
         private final List<String> enabledRoles = new ArrayList<>();
+        private String agentType = "omni";
 
         public Builder appName(String appName) {
             this.appName = appName;
@@ -152,6 +168,11 @@ public class AppManifest {
 
         public Builder enabledRoles(List<String> roles) {
             this.enabledRoles.addAll(roles);
+            return this;
+        }
+
+        public Builder agentType(String agentType) {
+            this.agentType = agentType;
             return this;
         }
 

@@ -70,40 +70,65 @@ export const useSystemStore = create<SystemState>((set, get) => ({
 
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
+        const raw = JSON.parse(event.data);
 
         // 忽略 PONG 心跳响应
-        if (data.type === "PONG") return;
+        if (raw.type === "PONG") return;
 
-        // 接收大盘数据 — 后端直接推送展平的 JSON
-        if (data.type === "SYS_METRICS") {
+        // 智能解包：兼容 EventBus 的 { channel, message } 包装格式
+        let data = raw;
+        let msgType = raw.type;
+
+        if (raw.channel && !raw.type) {
+          // EventBus 包装格式：{ channel: "sys.telemetry.metrics", message: "..." }
+          try {
+            data =
+              typeof raw.message === "string"
+                ? JSON.parse(raw.message)
+                : raw.message || raw;
+          } catch {
+            data = { payload: raw.message };
+          }
+          // 映射通道名到消息类型
+          if (raw.channel === "sys.telemetry.metrics") msgType = "SYS_METRICS";
+          else if (raw.channel === "sys.eventbus.logs") msgType = "EVENT_BUS_LOG";
+          else if (raw.channel === "sys.app.stdout") msgType = "APP_OUTPUT";
+        }
+
+        // 如果解包后的 data 自带 type，优先使用
+        msgType = data.type || msgType;
+
+        // 接收大盘数据
+        if (msgType === "SYS_METRICS") {
           set({
-            cpuUsage: data.cpuUsage ?? 0,
-            ramUsage: data.ramUsage ?? 0,
-            activeProcesses: data.activeProcesses ?? data.active_processes ?? 0,
+            cpuUsage: data.cpuUsage ?? data.cpu_usage ?? 0,
+            ramUsage: data.ramUsage ?? data.ram_usage ?? 0,
+            activeProcesses:
+              data.activeProcesses ?? data.active_processes ?? 0,
             processes: data.processes ?? [],
           });
         }
-        // 接收总线日志 — 后端推送 {"type":"EVENT_BUS_LOG","topic":"...","payload":...}
-        else if (data.type === "EVENT_BUS_LOG") {
+        // 接收总线日志
+        else if (msgType === "EVENT_BUS_LOG") {
           set((state) => {
             const newLog: EventBusLog = {
               timestamp: data.timestamp ?? Date.now(),
-              topic: data.topic ?? "",
+              topic: data.topic || raw.channel || "sys",
               payload:
                 typeof data.payload === "string"
                   ? data.payload
                   : JSON.stringify(data.payload ?? ""),
             };
-            const logs = [newLog, ...state.eventBusLogs].slice(
-              0,
-              MAX_LOG_ENTRIES
-            );
-            return { eventBusLogs: logs };
+            return {
+              eventBusLogs: [newLog, ...state.eventBusLogs].slice(
+                0,
+                MAX_LOG_ENTRIES
+              ),
+            };
           });
         }
-        // 接收应用 stdout — 后端推送 {"type":"APP_OUTPUT","agentId":"xxx","payload":"..."}
-        else if (data.type === "APP_OUTPUT") {
+        // 接收应用 stdout — 后端通过 sys.eventbus.logs 频道推送 APP_OUTPUT 类型消息
+        else if (msgType === "APP_OUTPUT") {
           const logLine = data.payload ?? "";
           const agentId = data.agentId ?? "unknown";
           set((state) => ({
@@ -124,6 +149,21 @@ export const useSystemStore = create<SystemState>((set, get) => ({
               set({ activeWorkflowNode: null });
             }
           }
+
+          // APP_OUTPUT 同时写入事件总线日志，方便大屏滚动显示
+          set((state) => {
+            const newLog: EventBusLog = {
+              timestamp: data.timestamp ?? Date.now(),
+              topic: `app.${agentId}`,
+              payload: logLine,
+            };
+            return {
+              eventBusLogs: [newLog, ...state.eventBusLogs].slice(
+                0,
+                MAX_LOG_ENTRIES
+              ),
+            };
+          });
         }
       } catch {
         console.warn("[SystemStore] Failed to parse kernel message:", event.data);

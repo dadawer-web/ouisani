@@ -36,7 +36,17 @@ public class HookManager {
         STOP("Stop"),
         STOP_FAILURE("StopFailure"),
         SUBAGENT_START("SubagentStart"),
-        SUBAGENT_STOP("SubagentStop");
+        SUBAGENT_STOP("SubagentStop"),
+        // ── 多层自愈系统新增 Hook ──
+        RECOVERY_STARTED("RecoveryStarted"),
+        RECOVERY_COMPLETED("RecoveryCompleted"),
+        RECOVERY_FAILED("RecoveryFailed"),
+        CIRCUIT_BREAKER_TRIGGERED("CircuitBreakerTriggered"),
+        // ── Team Mode 新增 Hook ──
+        TEAM_CREATED("TeamCreated"),
+        TEAM_DELETED("TeamDeleted"),
+        TEAM_TASK_CREATED("TeamTaskCreated"),
+        TEAM_TASK_UPDATED("TeamTaskUpdated");
 
         private final String name;
 

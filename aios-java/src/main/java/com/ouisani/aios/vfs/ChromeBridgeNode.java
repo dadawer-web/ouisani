@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * Chrome 浏览器桥接节点 — AIOS 的"打破第四面墙"浏览器感知能力。
@@ -53,6 +54,9 @@ public non-sealed class ChromeBridgeNode implements VfsNode {
 
     /** 连接的浏览器扩展 */
     private final Map<String, BrowserSession> sessions = new ConcurrentHashMap<>();
+
+    /** 浏览器响应回调 — 供 BrowserTool 接收执行结果 */
+    private volatile Consumer<String> responseCallback;
 
     /** 浏览器状态缓存 */
     private volatile BrowserState cachedState = new BrowserState(false, null, List.of());
@@ -180,15 +184,20 @@ public non-sealed class ChromeBridgeNode implements VfsNode {
 
         totalCommands.incrementAndGet();
 
-        // 向所有连接的浏览器会话广播指令
+        // 向所有连接的浏览器会话通过 WebSocket 发送指令
         boolean sent = false;
         for (BrowserSession session : sessions.values()) {
             try {
-                session.lastCommand = payload;
-                session.lastCommandTime = System.currentTimeMillis();
-                sent = true;
+                if (session.wsContext != null) {
+                    // 通过 Javalin WebSocket 发送命令到浏览器扩展
+                    session.wsContext.send(payload);
+                    session.lastCommand = payload;
+                    session.lastCommandTime = System.currentTimeMillis();
+                    sent = true;
+                    log.debug("[ChromeBridge] Command sent to session {}: action={}", session.id, action);
+                }
             } catch (Exception e) {
-                log.debug("[ChromeBridge] Failed to send to session {}: {}", session.id, e.getMessage());
+                log.warn("[ChromeBridge] Failed to send to session {}: {}", session.id, e.getMessage());
             }
         }
 
@@ -199,6 +208,13 @@ public non-sealed class ChromeBridgeNode implements VfsNode {
         }
 
         return sent;
+    }
+
+    /**
+     * 注册浏览器响应回调 — 供 BrowserTool 接收执行结果。
+     */
+    public void setResponseCallback(Consumer<String> callback) {
+        this.responseCallback = callback;
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -238,7 +254,7 @@ public non-sealed class ChromeBridgeNode implements VfsNode {
             ws.onClose(ctx -> {
                 // 移除断开连接的会话
                 sessions.entrySet().removeIf(e -> {
-                    if (e.getValue().context == ctx) {
+                    if (e.getValue().wsContext == ctx) {
                         log.info("[ChromeBridge] Browser extension disconnected: {}", e.getKey());
                         return true;
                     }
@@ -311,6 +327,17 @@ public non-sealed class ChromeBridgeNode implements VfsNode {
 
             log.debug("[ChromeBridge] State updated: title='{}', url='{}'", title, url);
         }
+
+        // 处理浏览器扩展的命令执行响应
+        if ("command_result".equals(type) || "action_result".equals(type)) {
+            if (responseCallback != null) {
+                try {
+                    responseCallback.accept(message);
+                } catch (Exception e) {
+                    log.warn("[ChromeBridge] Response callback error: {}", e.getMessage());
+                }
+            }
+        }
     }
 
     // ── 内部辅助 ──
@@ -363,13 +390,13 @@ public non-sealed class ChromeBridgeNode implements VfsNode {
     /** 浏览器会话 */
     public static class BrowserSession {
         final String id;
-        final Object context;
+        final io.javalin.websocket.WsContext wsContext;
         volatile String lastCommand;
         volatile long lastCommandTime;
 
-        BrowserSession(String id, Object context) {
+        BrowserSession(String id, io.javalin.websocket.WsContext wsContext) {
             this.id = id;
-            this.context = context;
+            this.wsContext = wsContext;
         }
     }
 }

@@ -289,8 +289,8 @@ public final class SomWindowController {
         }
 
         // 提取第一条和最后一条消息的关键内容
-        String firstContent = messages.get(0).contentAsString();
-        String lastContent = messages.get(messages.size() - 1).contentAsString();
+        String firstContent = messages.get(0).content();
+        String lastContent = messages.get(messages.size() - 1).content();
 
         String firstBrief = firstContent.length() > 30 ? firstContent.substring(0, 30) + "..." : firstContent;
         String lastBrief = lastContent.length() > 30 ? lastContent.substring(0, 30) + "..." : lastContent;

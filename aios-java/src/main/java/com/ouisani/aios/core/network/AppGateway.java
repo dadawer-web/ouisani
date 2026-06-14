@@ -3,6 +3,7 @@ package com.ouisani.aios.core.network;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.syscall.SyscallDispatcher;
 import com.ouisani.aios.core.syscall.SyscallRequest;
+import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.user.apps.omnifactory.OmniMotherAgent;
 import com.ouisani.aios.user.apps.omnifactory.OperatorAgent;
 import com.ouisani.aios.user.apps.omnifactory.TopologyCompiler;
@@ -161,6 +162,13 @@ public class AppGateway {
         // 订阅内核自愈告警频道 → 广播给所有大屏观察者
         EventBus.instance().subscribe("sys.human_intervention_required", AppGateway::broadcastToDashboards);
 
+        // 将系统心跳和底层日志桥接到前端可视化大屏
+        EventBus.instance().subscribe("sys.telemetry.metrics", AppGateway::broadcastToDashboards);
+        EventBus.instance().subscribe("sys.eventbus.logs", AppGateway::broadcastToDashboards);
+
+        // 订阅可观测性事件通道 — 邮件飞梭、自愈重试等动效数据源
+        EventBus.instance().subscribe("sys.telemetry.events", AppGateway::broadcastToDashboards);
+
         log.info("[Gateway] System Alert Channel opened. Ready to push high-priority rescue signals to dashboard.");
         System.out.println("[Gateway] System Alert Channel opened. Ready to push high-priority rescue signals to dashboard.");
 
@@ -300,6 +308,20 @@ public class AppGateway {
 
                 // 解析 enabledSkills 数组
                 List<String> enabledSkills = extractJsonStringArray(payload, "enabledSkills");
+                if (enabledSkills.isEmpty()) {
+                    // 自动扫描物理硬盘中的技能
+                    java.nio.file.Path skillsDir = java.nio.file.Paths.get("aios_skills");
+                    if (java.nio.file.Files.exists(skillsDir)) {
+                        try (var stream = java.nio.file.Files.list(skillsDir)) {
+                            stream.filter(p -> p.toString().endsWith(".py") && !p.getFileName().toString().startsWith("__"))
+                                  .forEach(p -> enabledSkills.add("skills." + p.getFileName().toString().replace(".py", "")));
+                        }
+                    }
+                    // 强制挂载原生特权技能
+                    enabledSkills.add("ComputerUseTool");
+                    enabledSkills.add("BashTool");
+                    log.info("[App Gateway] Auto-discovered {} skills for compilation", enabledSkills.size());
+                }
 
                 // 解析 enabledRoles 数组
                 List<String> enabledRoles = extractJsonStringArray(payload, "enabledRoles");
@@ -310,6 +332,14 @@ public class AppGateway {
 
                 // 调用 TopologyCompiler 编译拓扑
                 String topologyJson = TopologyCompiler.compileTopology(prompt, enabledSkills, enabledRoles);
+
+                // 如果编译结果中没有 agentType，从前端 payload 中提取，默认 "omni"
+                if (!topologyJson.contains("\"agentType\"")) {
+                    String agentType = extractJsonField(payload, "agentType");
+                    if (agentType == null || agentType.isBlank()) agentType = "omni";
+                    topologyJson = topologyJson.substring(0, topologyJson.lastIndexOf('}'))
+                                   + ", \"agentType\": \"" + agentType + "\"}";
+                }
 
                 ctx.contentType("application/json");
                 ctx.result(topologyJson);
@@ -353,16 +383,41 @@ public class AppGateway {
                 log.info("[App Gateway] Parsed workflow '{}' with {} nodes.",
                         manifest.workflowName(), manifest.nodes().size());
 
-                // 通过内核调度器拉起母体智能体（根据 agentType 动态路由）
-                AbstractAgent mother;
-                if ("operator".equalsIgnoreCase(manifest.agentType())) {
-                    mother = new OperatorAgent(manifest);
-                    System.out.println("[App Gateway] Igniting OperatorAgent for Physical Task...");
-                } else {
-                    mother = new OmniMotherAgent(manifest);
-                    System.out.println("[App Gateway] Igniting OmniMotherAgent for Code Generation...");
+                // 通过内核调度器拉起母体智能体（按节点 executor 动态路由）
+                // 将节点按 executor 分组，每组拉起对应的母体
+                List<WorkflowNode> omniNodes = new ArrayList<>();
+                List<WorkflowNode> operatorNodes = new ArrayList<>();
+                for (WorkflowNode node : manifest.nodes()) {
+                    if ("operator".equalsIgnoreCase(node.executor())) {
+                        operatorNodes.add(node);
+                    } else {
+                        omniNodes.add(node);
+                    }
                 }
-                mother.spawn(VfsManager.instance().getTaskScheduler());
+
+                TaskScheduler scheduler = VfsManager.instance().getTaskScheduler();
+
+                // 拉起 OmniMotherAgent 处理逻辑/代码节点
+                if (!omniNodes.isEmpty()) {
+                    WorkflowManifest omniManifest = new WorkflowManifest(
+                            manifest.workflowName() + "_omni", omniNodes,
+                            manifest.enabledSkills(), manifest.enabledRoles(), "omni");
+                    AbstractAgent omni = new OmniMotherAgent(omniManifest);
+                    omni.spawn(scheduler);
+                    System.out.printf("[App Gateway] Igniting OmniMotherAgent for %d logic nodes...%n", omniNodes.size());
+                    log.info("[App Gateway] Igniting OmniMotherAgent for {} logic nodes", omniNodes.size());
+                }
+
+                // 拉起 OperatorAgent 处理物理操作节点
+                if (!operatorNodes.isEmpty()) {
+                    WorkflowManifest operatorManifest = new WorkflowManifest(
+                            manifest.workflowName() + "_operator", operatorNodes,
+                            manifest.enabledSkills(), manifest.enabledRoles(), "operator");
+                    AbstractAgent operator = new OperatorAgent(operatorManifest);
+                    operator.spawn(scheduler);
+                    System.out.printf("[App Gateway] Igniting OperatorAgent for %d physical nodes...%n", operatorNodes.size());
+                    log.info("[App Gateway] Igniting OperatorAgent for {} physical nodes", operatorNodes.size());
+                }
 
                 ctx.contentType("application/json");
                 ctx.result("{\"status\":\"success\",\"message\":\"Genesis Process Initiated\"}");
@@ -388,8 +443,41 @@ public class AppGateway {
         //  GET /api/registry/catalogs — 动态读取本地武器库和角色库
         // ════════════════════════════════════════════════════════════════
         app.get("/api/registry/catalogs", ctx -> {
-            ctx.contentType("application/json");
-            ctx.result(buildRegistryCatalogs());
+            Map<String, List<Map<String, String>>> result = new HashMap<>();
+            List<Map<String, String>> roles = new ArrayList<>();
+            List<Map<String, String>> skills = new ArrayList<>();
+            try {
+                // 使用相对路径，兼容 Docker 和本地运行
+                java.nio.file.Path rolesDir = java.nio.file.Paths.get("aios_roles");
+                if (java.nio.file.Files.exists(rolesDir)) {
+                    java.nio.file.Files.list(rolesDir).filter(p -> p.toString().endsWith(".yaml")).forEach(p -> {
+                        Map<String, String> role = new HashMap<>();
+                        String name = p.getFileName().toString().replace(".yaml", "");
+                        role.put("id", name);
+                        role.put("name", name);
+                        role.put("desc", "系统认知角色");
+                        role.put("icon", "🧠");
+                        roles.add(role);
+                    });
+                }
+                java.nio.file.Path skillsDir = java.nio.file.Paths.get("aios_skills");
+                if (java.nio.file.Files.exists(skillsDir)) {
+                    java.nio.file.Files.list(skillsDir).filter(p -> p.toString().endsWith(".py") && !p.getFileName().toString().startsWith("__")).forEach(p -> {
+                        Map<String, String> skill = new HashMap<>();
+                        String name = p.getFileName().toString().replace(".py", "");
+                        skill.put("id", name);
+                        skill.put("name", name);
+                        skill.put("desc", "本地可用工具");
+                        skill.put("icon", "⚙️");
+                        skills.add(skill);
+                    });
+                }
+            } catch (Exception e) {
+                log.error("[Gateway] Catalog scan failed", e);
+            }
+            result.put("roles", roles);
+            result.put("skills", skills);
+            ctx.json(result);
         });
 
         // CORS 预检支持
@@ -446,20 +534,16 @@ public class AppGateway {
             throw new IllegalArgumentException("Missing or empty 'nodes' array in payload");
         }
 
-        // 逐个解析节点对象
+        // 逐个解析节点对象 — 使用安全的深度感知分割器
         List<WorkflowNode> nodes = new ArrayList<>();
-        Pattern objectPattern = Pattern.compile("\\{[^{}]*(?:\\{[^{}]*\\}[^{}]*)*\\}");
-        Matcher objectMatcher = objectPattern.matcher(nodesArray);
-
-        while (objectMatcher.find()) {
-            String obj = objectMatcher.group();
+        List<String> rawNodes = splitJsonObjectsSafe(nodesArray);
+        for (String obj : rawNodes) {
             String instanceId = extractJsonField(obj, "instanceId");
             String blueprintId = extractJsonField(obj, "blueprintId");
             String role = extractJsonField(obj, "role");
+            String executor = extractJsonField(obj, "executor");
             String subscribeTopic = extractJsonField(obj, "subscribeTopic");
             String publishTopic = extractJsonField(obj, "publishTopic");
-
-            // 解析 userParams
             Map<String, String> userParams = extractUserParams(obj);
 
             if (instanceId != null && !instanceId.isBlank()) {
@@ -469,7 +553,8 @@ public class AppGateway {
                         blueprintId != null ? blueprintId.trim() : instanceId.trim(),
                         userParams,
                         subscribeTopic != null ? subscribeTopic.trim() : "",
-                        publishTopic != null ? publishTopic.trim() : ""
+                        publishTopic != null ? publishTopic.trim() : "",
+                        executor != null ? executor.trim() : "omni"
                 ));
             }
         }
@@ -530,15 +615,17 @@ public class AppGateway {
         Pattern p = Pattern.compile("\"" + key + "\"\\s*:\\s*\\{");
         Matcher m = p.matcher(json);
         if (!m.find()) return null;
-        int start = m.start() + m.group().length() - 1; // 从 { 开始
-        int depth = 0;
-        int pos = start;
+        int start = m.start() + m.group().length() - 1, depth = 0, pos = start;
+        boolean inStr = false, esc = false;
         while (pos < json.length()) {
             char c = json.charAt(pos);
-            if (c == '{') depth++;
-            else if (c == '}') {
-                depth--;
-                if (depth == 0) return json.substring(start, pos + 1);
+            if (esc) esc = false;
+            else if (c == '\\') esc = true;
+            else if (c == '"') inStr = !inStr;
+            else if (!inStr) {
+                if (c == '{') depth++; else if (c == '}') {
+                    depth--; if (depth == 0) return json.substring(start, pos + 1);
+                }
             }
             pos++;
         }
@@ -548,21 +635,23 @@ public class AppGateway {
     /**
      * 从 JSON 中提取指定 key 对应的数组内容（不含方括号）。
      */
-    private static String extractJsonArray(String json, String key) {
+    public static String extractJsonArray(String json, String key) {
         Pattern p = Pattern.compile("\"" + key + "\"\\s*:\\s*\\[");
         Matcher m = p.matcher(json);
         if (!m.find()) return null;
-        int start = m.end();
-        // 找到匹配的闭合方括号
-        int depth = 1;
-        int pos = start;
+        int start = m.end(), depth = 1, pos = start;
+        boolean inStr = false, esc = false;
         while (pos < json.length() && depth > 0) {
             char c = json.charAt(pos);
-            if (c == '[') depth++;
-            else if (c == ']') depth--;
+            if (esc) esc = false;
+            else if (c == '\\') esc = true;
+            else if (c == '"') inStr = !inStr;
+            else if (!inStr) {
+                if (c == '[') depth++; else if (c == ']') depth--;
+            }
             pos++;
         }
-        return json.substring(start, pos - 1);
+        return depth == 0 ? json.substring(start, pos - 1) : null;
     }
 
     /**
@@ -570,17 +659,47 @@ public class AppGateway {
      */
     private static Map<String, String> extractUserParams(String jsonObj) {
         Map<String, String> params = new LinkedHashMap<>();
-        Pattern paramsPattern = Pattern.compile("\"userParams\"\\s*:\\s*\\{([^}]*)\\}");
-        Matcher paramsMatcher = paramsPattern.matcher(jsonObj);
-        if (!paramsMatcher.find()) return params;
-
-        String content = paramsMatcher.group(1);
+        String content = extractJsonObject(jsonObj, "userParams");
+        if (content == null || content.length() < 2) return params;
+        content = content.substring(1, content.length() - 1);
         Pattern kvPattern = Pattern.compile("\"([^\"]+)\"\\s*:\\s*\"([^\"]*)\"");
         Matcher kvMatcher = kvPattern.matcher(content);
         while (kvMatcher.find()) {
             params.put(kvMatcher.group(1), kvMatcher.group(2));
         }
         return params;
+    }
+
+    /**
+     * 安全分割 JSON 数组中的对象 — 无视字符串内的花括号干扰。
+     * <p>
+     * 使用深度感知的状态机遍历，正确处理转义字符和字符串内的花括号，
+     * 避免正则表达式在嵌套 JSON 或字符串含花括号时误匹配。
+     */
+    public static List<String> splitJsonObjectsSafe(String jsonArrayInner) {
+        List<String> objects = new ArrayList<>();
+        if (jsonArrayInner == null) return objects;
+        int depth = 0, objStart = -1;
+        boolean inString = false, escape = false;
+        for (int pos = 0; pos < jsonArrayInner.length(); pos++) {
+            char c = jsonArrayInner.charAt(pos);
+            if (escape) { escape = false; }
+            else if (c == '\\') { escape = true; }
+            else if (c == '"') { inString = !inString; }
+            else if (!inString) {
+                if (c == '{') {
+                    if (depth == 0) objStart = pos;
+                    depth++;
+                } else if (c == '}') {
+                    depth--;
+                    if (depth == 0 && objStart != -1) {
+                        objects.add(jsonArrayInner.substring(objStart, pos + 1));
+                        objStart = -1;
+                    }
+                }
+            }
+        }
+        return objects;
     }
 
     /**
@@ -627,124 +746,9 @@ public class AppGateway {
                 it.remove();
             }
         }
-        if (sent > 0) {
-            log.info("[Gateway] Alert broadcasted to {} dashboard observer(s)", sent);
-        }
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Registry Catalogs — 动态扫描本地武器库和角色库
+    //  Registry Catalogs — 已迁移到路由内联，使用相对路径
     // ════════════════════════════════════════════════════════════════
-
-    private static final String ROLES_DIR = "/home/xmy/tryaios/aios-java/aios_roles";
-    private static final String SKILLS_DIR = "/home/xmy/tryaios/aios-java/aios_skills";
-
-    /**
-     * 扫描本地角色库和技能库，组装为 JSON 目录返回给前端。
-     * <p>
-     * Roles：遍历 aios_roles/ 下 .yaml 文件，提取 name/description 字段。
-     * Skills：遍历 aios_skills/ 下 .py 文件（排除 __ 开头），提取 docstring 首行作为描述。
-     * 目录不存在时返回空数组，不崩溃。
-     */
-    private static String buildRegistryCatalogs() {
-        StringBuilder sb = new StringBuilder("{");
-
-        // ── 扫描 Roles ──
-        sb.append("\"roles\":[");
-        Path rolesPath = Paths.get(ROLES_DIR);
-        if (Files.isDirectory(rolesPath)) {
-            try (var stream = Files.list(rolesPath)) {
-                List<Path> yamlFiles = stream
-                        .filter(p -> p.toString().endsWith(".yaml"))
-                        .sorted()
-                        .toList();
-                boolean first = true;
-                for (Path yaml : yamlFiles) {
-                    String id = yaml.getFileName().toString().replace(".yaml", "");
-                    String content = Files.readString(yaml);
-                    String name = extractYamlField(content, "name");
-                    if (name == null || name.isBlank()) name = id;
-                    String desc = extractYamlField(content, "description");
-                    if (desc == null || desc.isBlank()) desc = "自定义角色";
-
-                    if (!first) sb.append(",");
-                    sb.append("{\"id\":\"").append(escapeJson(id))
-                      .append("\",\"name\":\"").append(escapeJson(name))
-                      .append("\",\"desc\":\"").append(escapeJson(desc))
-                      .append("\",\"icon\":\"🧠\"}");
-                    first = false;
-                }
-            } catch (IOException e) {
-                log.warn("[Gateway] Failed to scan roles directory: {}", e.getMessage());
-            }
-        }
-        sb.append("],");
-
-        // ── 扫描 Skills ──
-        sb.append("\"skills\":[");
-        Path skillsPath = Paths.get(SKILLS_DIR);
-        if (Files.isDirectory(skillsPath)) {
-            try (var stream = Files.list(skillsPath)) {
-                List<Path> pyFiles = stream
-                        .filter(p -> p.toString().endsWith(".py"))
-                        .filter(p -> !p.getFileName().toString().startsWith("__"))
-                        .sorted()
-                        .toList();
-                boolean first = true;
-                for (Path py : pyFiles) {
-                    String id = py.getFileName().toString().replace(".py", "");
-                    String content = Files.readString(py);
-                    String desc = extractPythonDocstring(content);
-                    if (desc == null || desc.isBlank()) desc = "原子技能模块";
-
-                    if (!first) sb.append(",");
-                    sb.append("{\"id\":\"skills.").append(escapeJson(id))
-                      .append("\",\"name\":\"").append(escapeJson(id))
-                      .append("\",\"desc\":\"").append(escapeJson(desc))
-                      .append("\",\"icon\":\"⚙️\"}");
-                    first = false;
-                }
-            } catch (IOException e) {
-                log.warn("[Gateway] Failed to scan skills directory: {}", e.getMessage());
-            }
-        }
-        sb.append("]}");
-
-        return sb.toString();
-    }
-
-    /** 从 YAML 内容中提取指定字段值（如 name: "xxx" 或 name: xxx） */
-    private static String extractYamlField(String content, String field) {
-        // 匹配 name: "value" 或 name: value
-        Pattern quoted = Pattern.compile(field + "\\s*:\\s*\"([^\"]+)\"");
-        Matcher m1 = quoted.matcher(content);
-        if (m1.find()) return m1.group(1);
-        Pattern unquoted = Pattern.compile(field + "\\s*:\\s*(\\S+)");
-        Matcher m2 = unquoted.matcher(content);
-        if (m2.find()) return m2.group(1);
-        return null;
-    }
-
-    /** 从 Python 文件内容中提取 docstring 首行作为描述 */
-    private static String extractPythonDocstring(String content) {
-        // 匹配三引号 docstring 的第一行有意义的文字
-        Pattern p = Pattern.compile("\"\"\"\\s*(.+?)(?:\\n|\"\"\")");
-        Matcher m = p.matcher(content);
-        if (m.find()) {
-            String line = m.group(1).trim();
-            // 截断过长描述
-            if (line.length() > 80) line = line.substring(0, 77) + "...";
-            return line;
-        }
-        return null;
-    }
-
-    /** JSON 字符串转义 */
-    private static String escapeJson(String s) {
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "")
-                .replace("\t", "\\t");
-    }
 }

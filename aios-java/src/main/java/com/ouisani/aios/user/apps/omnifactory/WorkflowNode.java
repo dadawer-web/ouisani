@@ -1,28 +1,126 @@
 package com.ouisani.aios.user.apps.omnifactory;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 工作流节点实例 — 用户编排的蓝图的运行时实例。
+ * 工作流节点实例 — DAG 状态机中的可执行顶点。
  * <p>
- * OS 类比：相当于 Docker Container — 从蓝图 (Image) 实例化而来，
- * 填入了用户自定义参数，并挂载到 EventBus 的 Pub-Sub 总线上。
- * <p>
- * 每个节点实例是工作流 DAG 中的一个顶点，通过 subscribeTopic 和 publishTopic
- * 与上下游节点形成数据流边。
+ * 实现了 Dify 风格的内存隔离与状态管控。
+ * 保留 record 风格的访问器方法名（instanceId()、role() 等），
+ * 确保所有现有调用代码无需修改。
  *
- * @param instanceId     节点实例唯一标识（如 "spider_agent_1"）
- * @param role           节点角色描述（如 "数据采集"、"情感分析"）
- * @param blueprintId    引用的蓝图 ID
- * @param userParams     用户填写的自定义参数（key=参数名, value=用户值）
- * @param subscribeTopic 上游 EventBus topic（源头节点为空字符串）
- * @param publishTopic   下游 EventBus topic
+ * @see WorkflowContext
+ * @see WorkflowEngine
  */
-public record WorkflowNode(
-        String instanceId,
-        String role,
-        String blueprintId,
-        Map<String, String> userParams,
-        String subscribeTopic,
-        String publishTopic
-) {}
+public class WorkflowNode {
+
+    // ── 静态定义字段（编译时确定，运行时不变） ──
+    private final String instanceId;
+    private final String role;
+    private final String blueprintId;
+    private final Map<String, String> userParams;
+    private final String subscribeTopic;
+    private final String publishTopic;
+    private final String executor;
+
+    // ── 运行时状态字段（DAG 状态机） ──
+    private List<String> upstreamDependencies = new ArrayList<>();
+
+    public enum Status { PENDING, RUNNING, SUCCESS, FAILED, SKIPPED }
+    private volatile Status status = Status.PENDING;
+
+    // 节点的内存输出：执行完毕后，结果存入此 Map 供下游节点读取
+    private Map<String, Object> outputData = new ConcurrentHashMap<>();
+
+    // ================= 迭代节点 (Iteration) 专属属性 =================
+    // 标识这是一个特殊的控制流节点（默认为 false）
+    private boolean isIteration = false;
+
+    // 迭代节点的输入数据源（必须是一个数组，通常通过占位符如 {{fetch_node.url_list}} 引用）
+    private String iteratorDataVariable;
+
+    // 在每次循环中，当前正在处理的单条数据的局部变量别名（例如："item"）
+    private String iteratorItemAlias;
+
+    // 迭代节点内部包裹的子节点集合（子 DAG 图纸）
+    private List<WorkflowNode> childNodes = new ArrayList<>();
+    // =================================================================
+
+    // ════════════════════════════════════════════════════════════════
+    //  构造函数
+    // ════════════════════════════════════════════════════════════════
+
+    /** 完整构造函数（兼容原有 7 参数 record 调用） */
+    public WorkflowNode(String instanceId, String role, String blueprintId,
+                        Map<String, String> userParams, String subscribeTopic,
+                        String publishTopic, String executor) {
+        this.instanceId = instanceId;
+        this.role = role;
+        this.blueprintId = blueprintId;
+        this.userParams = userParams != null ? userParams : new HashMap<>();
+        this.subscribeTopic = subscribeTopic != null ? subscribeTopic : "";
+        this.publishTopic = publishTopic != null ? publishTopic : "";
+        this.executor = executor != null ? executor : "omni";
+    }
+
+    /** 兼容旧调用：无 executor 时默认 "omni" */
+    public WorkflowNode(String instanceId, String role, String blueprintId,
+                        Map<String, String> userParams, String subscribeTopic, String publishTopic) {
+        this(instanceId, role, blueprintId, userParams, subscribeTopic, publishTopic, "omni");
+    }
+
+    /** 精简构造函数（Dify 风格，仅指定核心字段） */
+    public WorkflowNode(String instanceId, String role, String executor) {
+        this(instanceId, role, instanceId, new HashMap<>(), "", "", executor);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Record 风格访问器（保持与原有 record 完全兼容的方法签名）
+    // ════════════════════════════════════════════════════════════════
+
+    public String instanceId() { return instanceId; }
+    public String role() { return role; }
+    public String blueprintId() { return blueprintId; }
+    public Map<String, String> userParams() { return userParams; }
+    public String subscribeTopic() { return subscribeTopic; }
+    public String publishTopic() { return publishTopic; }
+    public String executor() { return executor; }
+
+    // ════════════════════════════════════════════════════════════════
+    //  运行时状态访问器（DAG 状态机专用）
+    // ════════════════════════════════════════════════════════════════
+
+    public List<String> getUpstreamDependencies() { return upstreamDependencies; }
+    public void addDependency(String upstreamId) { this.upstreamDependencies.add(upstreamId); }
+
+    public Status getStatus() { return status; }
+    public void setStatus(Status status) { this.status = status; }
+
+    public Map<String, Object> getOutputData() { return outputData; }
+    public void putOutput(String key, Object value) { this.outputData.put(key, value); }
+
+    // ════════════════════════════════════════════════════════════════
+    //  迭代节点访问器
+    // ════════════════════════════════════════════════════════════════
+
+    public boolean isIteration() { return isIteration; }
+    public void setIteration(boolean iteration) { isIteration = iteration; }
+
+    public String getIteratorDataVariable() { return iteratorDataVariable; }
+    public void setIteratorDataVariable(String iteratorDataVariable) { this.iteratorDataVariable = iteratorDataVariable; }
+
+    public String getIteratorItemAlias() { return iteratorItemAlias; }
+    public void setIteratorItemAlias(String iteratorItemAlias) { this.iteratorItemAlias = iteratorItemAlias; }
+
+    public List<WorkflowNode> getChildNodes() { return childNodes; }
+    public void setChildNodes(List<WorkflowNode> childNodes) { this.childNodes = childNodes; }
+
+    @Override
+    public String toString() {
+        return "WorkflowNode{" + instanceId + ", role=" + role + ", executor=" + executor + ", status=" + status + "}";
+    }
+}

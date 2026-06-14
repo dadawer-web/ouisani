@@ -11,13 +11,14 @@ import {
   type OnNodesChange,
   type OnEdgesChange,
 } from "@xyflow/react";
-import { CheckCircle2, AlertCircle, X, AlertTriangle, Code, Monitor, Eye, EyeOff } from "lucide-react";
+import { CheckCircle2, AlertCircle, X, AlertTriangle, Code, Monitor, Eye, EyeOff, Radar } from "lucide-react";
 import "@xyflow/react/dist/style.css";
 
 import AgentNode from "@/components/AgentNode";
 import Sidebar from "@/components/Sidebar";
 import KernelStatusBar from "@/components/KernelStatusBar";
 import KernelMonitor from "@/components/KernelMonitor";
+import TelemetryRadar from "@/components/TelemetryRadar";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { useSystemStore } from "@/store/systemStore";
 
@@ -40,6 +41,8 @@ export default function App() {
 
   // ── 上帝视角：内核监控抽屉开关 ──
   const [isMonitorOpen, setIsMonitorOpen] = useState(false);
+  // ── 底部抽屉 Tab 切换：kernel | telemetry ──
+  const [monitorTab, setMonitorTab] = useState<"kernel" | "telemetry">("kernel");
 
   // ── 全息视界：UI Sandbox 渲染状态 ──
   const [htmlPayload, setHtmlPayload] = useState<string>(
@@ -243,7 +246,7 @@ export default function App() {
       </button>
 
       {/* ════════════════════════════════════════════════════════════════
-          底部抽屉：内核监控大屏 — 从底部滑出，占 40% 高度
+          底部抽屉：内核监控大屏 / 可观测性雷达 — 从底部滑出
          ════════════════════════════════════════════════════════════════ */}
       <div
         className={`fixed inset-x-0 bottom-0 z-30 transition-transform duration-500 ease-out ${
@@ -251,14 +254,38 @@ export default function App() {
         }`}
         style={{ height: "40vh" }}
       >
-        {/* 顶部拖拽条 + 关闭按钮 */}
+        {/* 顶部拖拽条 + Tab 切换 + 关闭按钮 */}
         <div className="flex items-center justify-between border-t border-emerald-500/30 bg-emerald-950/40 px-4 py-1.5 backdrop-blur-md">
           <div className="flex items-center gap-2">
             <div className="h-1 w-8 rounded-full bg-emerald-500/30" />
           </div>
-          <span className="text-[9px] font-bold uppercase tracking-[0.3em] text-emerald-400/60">
-            Kernel Monitor — God's Eye
-          </span>
+
+          {/* Tab 切换按钮 */}
+          <div className="flex items-center gap-1 rounded-md border border-zinc-800/50 bg-black/40 p-0.5">
+            <button
+              onClick={() => setMonitorTab("kernel")}
+              className={`flex items-center gap-1.5 rounded px-3 py-1 text-[9px] font-bold uppercase tracking-wider transition-all ${
+                monitorTab === "kernel"
+                  ? "bg-emerald-900/50 text-emerald-300 shadow-[0_0_8px_rgba(52,211,153,0.2)]"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              <Monitor className="h-3 w-3" />
+              God's Eye
+            </button>
+            <button
+              onClick={() => setMonitorTab("telemetry")}
+              className={`flex items-center gap-1.5 rounded px-3 py-1 text-[9px] font-bold uppercase tracking-wider transition-all ${
+                monitorTab === "telemetry"
+                  ? "bg-cyan-900/50 text-cyan-300 shadow-[0_0_8px_rgba(0,255,255,0.2)]"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              <Radar className="h-3 w-3" />
+              Telemetry Radar
+            </button>
+          </div>
+
           <button
             onClick={() => setIsMonitorOpen(false)}
             className="rounded p-1 text-emerald-500/40 transition-colors hover:bg-emerald-900/30 hover:text-emerald-300"
@@ -267,10 +294,10 @@ export default function App() {
           </button>
         </div>
 
-        {/* 监控面板主体 */}
-        <div className="h-[calc(100%-2rem)] border-t border-emerald-500/20 bg-[#050510]/95 backdrop-blur-xl"
+        {/* 面板主体 */}
+        <div className="h-[calc(100%-2.5rem)] border-t border-emerald-500/20 bg-[#050510]/95 backdrop-blur-xl"
              style={{ boxShadow: "0 -10px 40px rgba(0,255,0,0.05)" }}>
-          <KernelMonitor />
+          {monitorTab === "kernel" ? <KernelMonitor /> : <TelemetryRadar />}
         </div>
       </div>
 
