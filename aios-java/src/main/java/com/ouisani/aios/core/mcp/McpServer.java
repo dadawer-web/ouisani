@@ -1,5 +1,6 @@
 package com.ouisani.aios.core.mcp;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.VfsNode;
@@ -92,13 +93,13 @@ public class McpServer {
     }
 
     public McpResponse handleRequest(McpRequest req) {
-        if (req == null || req.method() == null) {
+        if (req == null || req.getMethod() == null) {
             return McpResponse.error(null, McpError.INVALID_REQUEST, "Invalid request");
         }
 
-        log.debug("[McpServer] Handling request: method={}, id={}", req.method(), req.id());
+        log.debug("[McpServer] Handling request: method={}, id={}", req.getMethod(), req.getId());
 
-        return switch (req.method()) {
+        return switch (req.getMethod()) {
             case "initialize" -> handleInitialize(req);
             case "notifications/initialized" -> handleNotificationInitialized(req);
             case "resources/list" -> handleResourcesList(req);
@@ -106,8 +107,8 @@ public class McpServer {
             case "tools/list" -> handleToolsList(req);
             case "tools/call" -> handleToolsCall(req);
             case "ping" -> handlePing(req);
-            default -> McpResponse.error(req.id(), McpError.METHOD_NOT_FOUND,
-                    "Method not found: " + req.method());
+            default -> McpResponse.error(req.getId(), McpError.METHOD_NOT_FOUND,
+                    "Method not found: " + req.getMethod());
         };
     }
 
@@ -129,12 +130,12 @@ public class McpServer {
         result.put("serverInfo", serverInfo);
 
         log.info("[McpServer] Initialized: protocol={}, server={}/{}", PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION);
-        return McpResponse.success(req.id(), result);
+        return McpResponse.success(req.getId(), objectMapper.valueToTree(result));
     }
 
     private McpResponse handleNotificationInitialized(McpRequest req) {
         log.info("[McpServer] Client confirmed initialization");
-        return McpResponse.success(req.id(), Map.of());
+        return McpResponse.success(req.getId(), objectMapper.valueToTree(Map.of()));
     }
 
     private McpResponse handleResourcesList(McpRequest req) {
@@ -159,25 +160,26 @@ public class McpServer {
 
         Map<String, Object> result = Map.of("resources", resources);
         log.debug("[McpServer] Listed {} resources", resources.size());
-        return McpResponse.success(req.id(), result);
+        return McpResponse.success(req.getId(), objectMapper.valueToTree(result));
     }
 
+    @SuppressWarnings("unchecked")
     private McpResponse handleResourcesRead(McpRequest req) {
-        Map<String, Object> params = req.params();
-        if (params == null || !params.containsKey("uri")) {
-            return McpResponse.error(req.id(), McpError.INVALID_PARAMS, "Missing 'uri' parameter");
+        JsonNode paramsNode = req.getParams();
+        if (paramsNode == null || !paramsNode.has("uri")) {
+            return McpResponse.error(req.getId(), McpError.INVALID_PARAMS, "Missing 'uri' parameter");
         }
 
-        String uri = (String) params.get("uri");
+        String uri = paramsNode.get("uri").asText();
         if (!uri.startsWith("vfs://")) {
-            return McpResponse.error(req.id(), McpError.INVALID_PARAMS, "Invalid URI scheme: " + uri);
+            return McpResponse.error(req.getId(), McpError.INVALID_PARAMS, "Invalid URI scheme: " + uri);
         }
 
         String path = uri.substring("vfs://".length());
         Optional<VfsNode> nodeOpt = VfsManager.instance().resolve(path);
 
         if (nodeOpt.isEmpty()) {
-            return McpResponse.error(req.id(), McpError.INVALID_PARAMS, "Resource not found: " + uri);
+            return McpResponse.error(req.getId(), McpError.INVALID_PARAMS, "Resource not found: " + uri);
         }
 
         VfsNode node = nodeOpt.get();
@@ -189,24 +191,27 @@ public class McpServer {
         textContent.put("text", content != null ? content : "");
 
         Map<String, Object> result = Map.of("contents", List.of(textContent));
-        return McpResponse.success(req.id(), result);
+        return McpResponse.success(req.getId(), objectMapper.valueToTree(result));
     }
 
     private McpResponse handleToolsList(McpRequest req) {
         Map<String, Object> result = Map.of("tools", List.copyOf(registeredTools));
         log.debug("[McpServer] Listed {} tools", registeredTools.size());
-        return McpResponse.success(req.id(), result);
+        return McpResponse.success(req.getId(), objectMapper.valueToTree(result));
     }
 
     @SuppressWarnings("unchecked")
     private McpResponse handleToolsCall(McpRequest req) {
-        Map<String, Object> params = req.params();
-        if (params == null || !params.containsKey("name")) {
-            return McpResponse.error(req.id(), McpError.INVALID_PARAMS, "Missing 'name' parameter");
+        JsonNode paramsNode = req.getParams();
+        if (paramsNode == null || !paramsNode.has("name")) {
+            return McpResponse.error(req.getId(), McpError.INVALID_PARAMS, "Missing 'name' parameter");
         }
 
-        String toolName = (String) params.get("name");
-        Map<String, Object> arguments = (Map<String, Object>) params.getOrDefault("arguments", Map.of());
+        String toolName = paramsNode.get("name").asText();
+        Map<String, Object> arguments = new HashMap<>();
+        if (paramsNode.has("arguments")) {
+            arguments = objectMapper.convertValue(paramsNode.get("arguments"), Map.class);
+        }
 
         log.info("[McpServer] Tool call: name={}, args={}", toolName, arguments.keySet());
 
@@ -214,14 +219,14 @@ public class McpServer {
             case "execute_wasm_sandbox" -> handleWasmExecution(req, arguments);
             case "vfs_read" -> handleVfsRead(req, arguments);
             case "vfs_write" -> handleVfsWrite(req, arguments);
-            default -> McpResponse.error(req.id(), McpError.METHOD_NOT_FOUND,
+            default -> McpResponse.error(req.getId(), McpError.METHOD_NOT_FOUND,
                     "Unknown tool: " + toolName);
         };
     }
 
     private McpResponse handleWasmExecution(McpRequest req, Map<String, Object> arguments) {
         if (wasmSandbox == null) {
-            return McpResponse.error(req.id(), McpError.INTERNAL_ERROR,
+            return McpResponse.error(req.getId(), McpError.INTERNAL_ERROR,
                     "WASM sandbox not initialized");
         }
 
@@ -229,7 +234,7 @@ public class McpServer {
         String functionName = (String) arguments.getOrDefault("function_name", "main");
 
         if (wasmBase64 == null || wasmBase64.isEmpty()) {
-            return McpResponse.error(req.id(), McpError.INVALID_PARAMS,
+            return McpResponse.error(req.getId(), McpError.INVALID_PARAMS,
                     "Missing 'wasm_base64' parameter");
         }
 
@@ -252,13 +257,13 @@ public class McpServer {
             );
 
             log.info("[McpServer] WASM executed: function={}, result={}", functionName, resultStr);
-            return McpResponse.success(req.id(), Map.of(
+            return McpResponse.success(req.getId(), objectMapper.valueToTree(Map.of(
                     "content", List.of(textContent),
                     "isError", false
-            ));
+            )));
 
         } catch (IllegalArgumentException e) {
-            return McpResponse.error(req.id(), McpError.INVALID_PARAMS,
+            return McpResponse.error(req.getId(), McpError.INVALID_PARAMS,
                     "Invalid base64 WASM data: " + e.getMessage());
         } catch (Exception e) {
             log.error("[McpServer] WASM execution failed: {}", e.getMessage());
@@ -266,17 +271,17 @@ public class McpServer {
                     "type", "text",
                     "text", "WASM execution error: " + e.getMessage()
             );
-            return McpResponse.success(req.id(), Map.of(
+            return McpResponse.success(req.getId(), objectMapper.valueToTree(Map.of(
                     "content", List.of(errorContent),
                     "isError", true
-            ));
+            )));
         }
     }
 
     private McpResponse handleVfsRead(McpRequest req, Map<String, Object> arguments) {
         String path = (String) arguments.get("path");
         if (path == null) {
-            return McpResponse.error(req.id(), McpError.INVALID_PARAMS, "Missing 'path' parameter");
+            return McpResponse.error(req.getId(), McpError.INVALID_PARAMS, "Missing 'path' parameter");
         }
 
         Optional<VfsNode> nodeOpt = VfsManager.instance().resolve(path);
@@ -285,10 +290,10 @@ public class McpServer {
                     "type", "text",
                     "text", "VFS node not found: " + path
             );
-            return McpResponse.success(req.id(), Map.of(
+            return McpResponse.success(req.getId(), objectMapper.valueToTree(Map.of(
                     "content", List.of(errorContent),
                     "isError", true
-            ));
+            )));
         }
 
         String content = nodeOpt.get().read();
@@ -296,17 +301,17 @@ public class McpServer {
                 "type", "text",
                 "text", content != null ? content : ""
         );
-        return McpResponse.success(req.id(), Map.of(
+        return McpResponse.success(req.getId(), objectMapper.valueToTree(Map.of(
                 "content", List.of(textContent),
                 "isError", false
-        ));
+        )));
     }
 
     private McpResponse handleVfsWrite(McpRequest req, Map<String, Object> arguments) {
         String path = (String) arguments.get("path");
         String data = (String) arguments.get("data");
         if (path == null || data == null) {
-            return McpResponse.error(req.id(), McpError.INVALID_PARAMS, "Missing 'path' or 'data' parameter");
+            return McpResponse.error(req.getId(), McpError.INVALID_PARAMS, "Missing 'path' or 'data' parameter");
         }
 
         Optional<VfsNode> nodeOpt = VfsManager.instance().resolve(path);
@@ -315,10 +320,10 @@ public class McpServer {
                     "type", "text",
                     "text", "VFS node not found: " + path
             );
-            return McpResponse.success(req.id(), Map.of(
+            return McpResponse.success(req.getId(), objectMapper.valueToTree(Map.of(
                     "content", List.of(errorContent),
                     "isError", true
-            ));
+            )));
         }
 
         boolean success = nodeOpt.get().write(data);
@@ -326,14 +331,14 @@ public class McpServer {
                 "type", "text",
                 "text", "VFS write to " + path + ": " + (success ? "SUCCESS" : "FAILED")
         );
-        return McpResponse.success(req.id(), Map.of(
+        return McpResponse.success(req.getId(), objectMapper.valueToTree(Map.of(
                 "content", List.of(textContent),
                 "isError", !success
-        ));
+        )));
     }
 
     private McpResponse handlePing(McpRequest req) {
-        return McpResponse.success(req.id(), Map.of());
+        return McpResponse.success(req.getId(), objectMapper.valueToTree(Map.of()));
     }
 
     public String handleRawJson(String json) {

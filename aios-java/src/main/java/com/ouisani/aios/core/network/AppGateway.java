@@ -35,7 +35,7 @@ import java.io.IOException;
  *
  * <h3>前端示例：</h3>
  * <pre>
- * const ws = new WebSocket("ws://localhost:8080/api/app/data_pipeline/stream?token=AIOS-SUPER-SECRET-KEY");
+ * const ws = new WebSocket("ws://localhost:8080/api/app/data_pipeline/stream?token=${AIOS_GATEWAY_SECRET}");
  * ws.onmessage = (e) => console.log("App output:", e.data);
  * ws.send(JSON.stringify({command: "run", args: ["--verbose"]}));
  * </pre>

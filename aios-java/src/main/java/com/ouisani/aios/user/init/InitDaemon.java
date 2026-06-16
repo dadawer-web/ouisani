@@ -5,6 +5,8 @@ import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.llm.LlmProvider;
 import com.ouisani.aios.core.llm.LlmRouter;
+import com.ouisani.aios.core.llm.auth.AuthProfile;
+import com.ouisani.aios.core.llm.auth.AuthProfileManager;
 import com.ouisani.aios.core.memory.CognitiveDreamDaemon;
 import com.ouisani.aios.core.plugin.PluginManager;
 import com.ouisani.aios.core.rtos.WatchdogDaemon;
@@ -166,7 +168,31 @@ public class InitDaemon extends AbstractAgent {
         }
         bootResults.put("LlmProvider", llmOk);
 
-        // 1c. VfsJournal — WAL 日志就绪
+        // 1c. AuthProfileManager — 注册 API Key 到熔断轮换池
+        boolean authOk = false;
+        try {
+            AuthProfileManager authMgr = AuthProfileManager.getInstance();
+            String envApiKey = System.getenv().getOrDefault("OPENAI_API_KEY", "");
+            String envBaseUrl = System.getenv().getOrDefault("OPENAI_BASE_URL", "https://api.openai.com");
+
+            if (!envApiKey.isBlank()) {
+                // 主 Key（高权重）
+                authMgr.addProfile(new AuthProfile("primary-key", "openai",
+                        envApiKey, envBaseUrl, 100));
+                // 备用 Key（同一把 Key，低权重，用于主 Key 冷却时兜底）
+                authMgr.addProfile(new AuthProfile("backup-key", "openai",
+                        envApiKey, envBaseUrl, 50));
+                authOk = true;
+                System.out.println("  │  [HW] AuthProfileManager: 2 PROFILES LOADED ✓              │");
+            } else {
+                System.out.println("  │  [HW] AuthProfileManager: NO API KEY IN ENV ⚠              │");
+            }
+        } catch (Exception e) {
+            System.out.println("  │  [HW] AuthProfileManager: INIT FAILED ✗                    │");
+        }
+        bootResults.put("AuthProfileManager", authOk);
+
+        // 1d. VfsJournal — WAL 日志就绪
         boolean journalOk = false;
         try {
             VfsJournal.getInstance().open();

@@ -265,7 +265,7 @@ public class AiosShell extends AbstractAgent {
         System.out.println();
 
         // ── 最小化内核初始化 ──
-        Map<String, String> env = loadDotEnv(Path.of("/home/xmy/tryaios/.env"));
+        Map<String, String> env = loadDotEnv(Path.of(com.ouisani.aios.core.config.AiosPaths.envFile()));
 
         // 1. TaskScheduler
         TaskScheduler scheduler = new TaskScheduler();
@@ -282,11 +282,14 @@ public class AiosShell extends AbstractAgent {
         String model = env.getOrDefault("OPENAI_MODEL", System.getenv().getOrDefault("OPENAI_MODEL", "gpt-4o-mini"));
 
         if (!apiKey.isEmpty()) {
+            // 【安全修复】API Key 注册到 SecretVault，Agent 只拿句柄
+            com.ouisani.aios.core.security.SecretVault.instance().registerSecret("llm", "openai", apiKey);
             OpenAiAdapter adapter = new OpenAiAdapter(apiKey, baseUrl, model);
             llmRouter.registerProvider("fast_model", adapter);
             llmRouter.registerProvider("smart_model", adapter);
             VfsManager.instance().configureLlmProvider(adapter);
-            System.out.printf("  ✓ LLM: %s @ %s%n", model, baseUrl);
+            System.out.printf("  ✓ LLM: %s @ %s (key → vault handle: %s)%n", model, baseUrl,
+                    com.ouisani.aios.core.security.SecretVault.instance().getHandle("llm", "openai"));
         } else {
             System.out.println("  ⚠ No OPENAI_API_KEY — LLM unavailable");
         }
@@ -297,9 +300,12 @@ public class AiosShell extends AbstractAgent {
         String mmModel = env.getOrDefault("MULTIMODAL_MODEL", System.getenv().getOrDefault("MULTIMODAL_MODEL", ""));
 
         if (!mmApiKey.isEmpty() && !mmBaseUrl.isEmpty() && !mmModel.isEmpty()) {
+            // 【安全修复】多模态 Key 注册到 SecretVault
+            com.ouisani.aios.core.security.SecretVault.instance().registerSecret("llm", "multimodal", mmApiKey);
             OpenAiAdapter multimodalAdapter = new OpenAiAdapter(mmApiKey, mmBaseUrl, mmModel);
             llmRouter.registerProvider("multimodal", multimodalAdapter);
-            System.out.printf("  ✓ Multimodal: %s @ %s (for Computer Use vision)%n", mmModel, mmBaseUrl);
+            System.out.printf("  ✓ Multimodal: %s @ %s (key → vault handle: %s)%n", mmModel, mmBaseUrl,
+                    com.ouisani.aios.core.security.SecretVault.instance().getHandle("llm", "multimodal"));
         } else {
             System.out.println("  ⚠ No MULTIMODAL_* config — Computer Use vision disabled (screenshot without understanding)");
         }
@@ -307,8 +313,11 @@ public class AiosShell extends AbstractAgent {
         // 2.5 WebSearchTool — 注入 Serper API Key
         String serperKey = env.getOrDefault("SERPER_API_KEY", System.getenv().getOrDefault("SERPER_API_KEY", ""));
         if (!serperKey.isBlank()) {
+            // 【安全修复】Serper Key 注册到 SecretVault
+            com.ouisani.aios.core.security.SecretVault.instance().registerSecret("search", "serper", serperKey);
             com.ouisani.aios.core.plugin.WebSearchTool.configureSerperApiKey(serperKey);
-            System.out.println("  ✓ WebSearch: Serper API configured");
+            System.out.println("  ✓ WebSearch: Serper API configured (key → vault handle: "
+                    + com.ouisani.aios.core.security.SecretVault.instance().getHandle("search", "serper") + ")");
         } else {
             System.out.println("  ⚠ No SERPER_API_KEY — web search will try Jina (may timeout in China)");
         }

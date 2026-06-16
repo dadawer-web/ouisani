@@ -316,9 +316,9 @@ public class OperatorAgent extends AbstractAgent {
     // ════════════════════════════════════════════════════════════════
 
     /** OpenClaw 插件目录 — 与 aios_skills 同级 */
-    private static final String OPENCLAW_PLUGINS_DIR = "/home/xmy/tryaios/aios-java/openclaw_plugins";
+    private static final String OPENCLAW_PLUGINS_DIR = com.ouisani.aios.core.config.AiosPaths.openclawPluginsDir();
     /** OpenClaw 会话目录 */
-    private static final String OPENCLAW_SESSIONS_DIR = "/home/xmy/tryaios/aios-java/openclaw_sessions";
+    private static final String OPENCLAW_SESSIONS_DIR = com.ouisani.aios.core.config.AiosPaths.openclawSessionsDir();
 
     /** 构建运行时 System Prompt — 注入渠道信息和密钥状态 */
     private String buildRuntimeSystemPrompt() {

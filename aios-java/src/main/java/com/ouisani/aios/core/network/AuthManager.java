@@ -8,19 +8,20 @@ import org.slf4j.LoggerFactory;
  * <p>
  * 类比 Linux 的 PAM (Pluggable Authentication Modules)：
  * AuthManager 负责验证外部请求的身份凭证，决定是否允许访问内核系统调用。
- * 当前实现使用共享密钥模拟 JWT 验证，生产环境应集成真实的 OAuth2/JWT 提供者。
  * <p>
- * Token 格式：
+ * 安全设计：
  * <ul>
- *   <li>Header: {@code Authorization: Bearer AIOS-SUPER-SECRET-KEY}</li>
- *   <li>WebSocket query: {@code ?token=AIOS-SUPER-SECRET-KEY}</li>
+ *   <li>网关密钥从环境变量 {@code AIOS_GATEWAY_SECRET} 读取，绝不硬编码</li>
+ *   <li>如果环境变量未设置，启动时生成随机密钥并打印到控制台（仅一次）</li>
+ *   <li>密钥值不记录到日志中</li>
  * </ul>
  */
 public class AuthManager {
 
     private static final Logger log = LoggerFactory.getLogger(AuthManager.class);
 
-    private static final String GATEWAY_SECRET = "AIOS-SUPER-SECRET-KEY";
+    /** 网关密钥 — 从环境变量读取，绝不硬编码 */
+    private final String gatewaySecret;
 
     private static final class Holder {
         static final AuthManager INSTANCE = new AuthManager();
@@ -31,7 +32,26 @@ public class AuthManager {
     }
 
     private AuthManager() {
-        log.info("[API Gateway] AuthManager initialized. Gateway secret configured.");
+        // 从环境变量读取密钥 — 绝不硬编码
+        String secret = System.getenv("AIOS_GATEWAY_SECRET");
+        if (secret == null || secret.isEmpty()) {
+            // 未配置密钥 — 生成随机密钥（生产环境必须配置环境变量！）
+            secret = generateRandomSecret();
+            System.out.println("  ⚠ [AuthManager] AIOS_GATEWAY_SECRET not set! Using auto-generated secret.");
+            System.out.println("  ⚠ [AuthManager] Set AIOS_GATEWAY_SECRET env var for production use.");
+            System.out.println("  🔑 [AuthManager] Generated secret: " + secret.substring(0, 8) + "...");
+        }
+        this.gatewaySecret = secret;
+        log.info("[AuthManager] Gateway secret configured (length={}).", gatewaySecret.length());
+    }
+
+    /**
+     * 生成随机密钥 — 当环境变量未配置时使用。
+     */
+    private static String generateRandomSecret() {
+        byte[] bytes = new byte[32];
+        new java.security.SecureRandom().nextBytes(bytes);
+        return java.util.Base64.getEncoder().encodeToString(bytes);
     }
 
     /**
@@ -51,7 +71,7 @@ public class AuthManager {
             cleaned = cleaned.substring(7).trim();
         }
 
-        boolean valid = GATEWAY_SECRET.equals(cleaned);
+        boolean valid = gatewaySecret.equals(cleaned);
         if (!valid) {
             log.warn("[API Gateway] Token verification failed: invalid token");
         }

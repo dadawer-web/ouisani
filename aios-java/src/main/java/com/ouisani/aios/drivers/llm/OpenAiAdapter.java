@@ -10,6 +10,8 @@ import com.ouisani.aios.core.ipc.SignalInterceptor;
 import com.ouisani.aios.core.llm.ComputeCore;
 import com.ouisani.aios.core.llm.LlmProvider;
 import com.ouisani.aios.core.llm.LlmProvider.ChatMessage;
+import com.ouisani.aios.core.llm.auth.AuthProfile;
+import com.ouisani.aios.core.llm.auth.AuthProfileManager;
 import com.ouisani.aios.core.telemetry.SemanticEtw;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -206,9 +208,10 @@ public class OpenAiAdapter implements LlmProvider {
      */
     @Override
     public String thinkWithHistory(List<ChatMessage> messages, String systemPrompt) {
-        if (apiKey == null || apiKey.isBlank()) {
-            throw new RuntimeException("[LLM FATAL] No API key configured — cannot perform inference");
-        }
+        // ── Auth Profile 轮换：优先从 AuthProfileManager 获取健康 Key ──
+        // 如果 AuthProfileManager 中有注册的 Profile，使用轮换机制；
+        // 否则回退到构造器传入的硬编码 apiKey（向后兼容）
+        boolean useProfileRotation = !AuthProfileManager.getInstance().getAllProfiles().isEmpty();
 
         // 信号拦截：在发出真实 LLM 请求前检查挂起的信号
         AgentTask currentTask = TaskScheduler.CURRENT_TASK.get();
@@ -216,7 +219,6 @@ public class OpenAiAdapter implements LlmProvider {
             try {
                 String prefix = SignalInterceptor.checkAndDrain(currentTask);
                 if (prefix != null) {
-                    // 收到 SIGUSR1：将中断前缀注入到第一条用户消息中
                     List<ChatMessage> modified = new java.util.ArrayList<>(messages);
                     for (int i = 0; i < modified.size(); i++) {
                         ChatMessage msg = modified.get(i);
@@ -253,26 +255,77 @@ public class OpenAiAdapter implements LlmProvider {
             m.addProperty("role", msg.role());
 
             if (msg.isMultimodal() && msg.content() instanceof JsonArray contentArray) {
-                // 多模态消息：content 为 JsonArray（text + image_url 块）
                 m.add("content", contentArray);
             } else {
-                // 纯文本消息：content 为 String
                 m.addProperty("content", msg.contentAsString());
             }
             msgArray.add(m);
         }
 
         body.add("messages", msgArray);
-
         String bodyStr = gson.toJson(body);
 
-        log.debug("Sending request to {}/v1/chat/completions (model={}, messages={})",
-                baseUrl, model, msgArray.size());
+        // ── 带熔断轮换的请求循环 ──
+        int localRetries = useProfileRotation ? 3 : 1;
 
+        for (int attempt = 0; attempt < localRetries; attempt++) {
+            // 确定本次请求使用的 Key 和 URL
+            String requestApiKey;
+            String requestBaseUrl;
+
+            if (useProfileRotation) {
+                AuthProfile profile = AuthProfileManager.getInstance().acquireHealthyProfile("openai");
+                requestApiKey = profile.getApiKey();
+                requestBaseUrl = normalizeBaseUrl(profile.getBaseUrl());
+
+                log.debug("Sending request to {}/v1/chat/completions (model={}, messages={}, profile={})",
+                        requestBaseUrl, model, msgArray.size(), profile.getProfileId());
+
+                try {
+                    String result = executeHttpRequest(requestBaseUrl, requestApiKey, bodyStr, msgArray.size());
+                    profile.reportSuccess();
+                    return result;
+                } catch (RuntimeException e) {
+                    if (e.getMessage() != null && (e.getMessage().contains("429")
+                            || e.getMessage().contains("Too Many Requests")
+                            || e.getMessage().contains("503")
+                            || e.getMessage().contains("Overloaded"))) {
+                        log.warn("[OpenAiAdapter] Profile {} hit rate limit (429/503). Triggering cooldown.",
+                                profile.getProfileId());
+                        profile.reportFailure();
+                        // 循环继续，下一次 acquireHealthyProfile 会自动避开这把坏掉的 Key
+                        continue;
+                    } else {
+                        // 非限流错误，直接抛给上层的 11 层自愈系统
+                        throw e;
+                    }
+                }
+            } else {
+                // 回退模式：使用构造器传入的硬编码 apiKey
+                if (apiKey == null || apiKey.isBlank()) {
+                    throw new RuntimeException("[LLM FATAL] No API key configured — cannot perform inference");
+                }
+                requestApiKey = apiKey;
+                requestBaseUrl = baseUrl;
+
+                log.debug("Sending request to {}/v1/chat/completions (model={}, messages={})",
+                        requestBaseUrl, model, msgArray.size());
+
+                return executeHttpRequest(requestBaseUrl, requestApiKey, bodyStr, msgArray.size());
+            }
+        }
+
+        throw new RuntimeException("[OpenAiAdapter] Auth profile rotation exhausted after " + localRetries + " attempts.");
+    }
+
+    /**
+     * 执行实际的 HTTP 请求并解析响应。
+     */
+    private String executeHttpRequest(String requestBaseUrl, String requestApiKey, String bodyStr, int msgCount) {
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/v1/chat/completions"))
+                .uri(URI.create(requestBaseUrl + "/v1/chat/completions"))
                 .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + apiKey)
+                .header("Authorization", "Bearer " + requestApiKey)
                 .timeout(Duration.ofSeconds(timeoutSeconds))
                 .POST(HttpRequest.BodyPublishers.ofString(bodyStr))
                 .build();
@@ -284,7 +337,7 @@ public class OpenAiAdapter implements LlmProvider {
 
             SemanticEtw.getInstance().logEvent("LLM", "CALL",
                     "model=" + model + " status=" + response.statusCode()
-                    + " latencyMs=" + elapsedMs + " msgCount=" + msgArray.size());
+                    + " latencyMs=" + elapsedMs + " msgCount=" + msgCount);
 
             if (response.statusCode() != 200) {
                 String errorBody = response.body().length() > 300
@@ -300,7 +353,7 @@ public class OpenAiAdapter implements LlmProvider {
             log.warn("Request interrupted");
             throw new RuntimeException("LLM request interrupted", e);
         } catch (RuntimeException e) {
-            throw e; // 重新抛出我们自己的 RuntimeException
+            throw e;
         } catch (Exception e) {
             log.error("Request failed: {}", e.getMessage(), e);
             throw new RuntimeException("LLM request failed: " + e.getMessage(), e);

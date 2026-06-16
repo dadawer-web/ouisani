@@ -64,7 +64,7 @@ public class AiosAppManager {
         //    workspaces/{appName}/outputs   — 出货区（对应 VFS /shared/outputs）
         String safeAppName = appName.replaceAll("[\\\\/:*?\"<>|]", "_");
         java.nio.file.Path containerDir = java.nio.file.Paths.get(
-                "/home/xmy/tryaios/aios-java/workspaces", safeAppName);
+                com.ouisani.aios.core.config.AiosPaths.workspaces(), safeAppName);
         java.nio.file.Path physicalRoot = containerDir.resolve("root");
         java.nio.file.Path physicalFactory = containerDir.resolve("factory");
         java.nio.file.Path physicalShared = containerDir.resolve("shared");
@@ -104,7 +104,7 @@ public class AiosAppManager {
 
         // ── 技能舱 (Skills Registry) VFS 挂载 ──
         // 将全局技能库目录注册为 /shared/skills，使 VFS 层面可访问 MANIFEST.md 等资源
-        String globalSkillsDir = "/home/xmy/tryaios/aios-java/aios_skills";
+        String globalSkillsDir = com.ouisani.aios.core.config.AiosPaths.skillsDir();
         java.io.File skillsDir = new java.io.File(globalSkillsDir);
         if (!skillsDir.exists()) {
             skillsDir.mkdirs();
@@ -183,7 +183,7 @@ public class AiosAppManager {
                 // ── 全局技能舱 (Global Skills Registry) VFS 挂载 ──
                 // 将宿主机公共技能库映射到沙箱 /shared/skills，使大模型 file_read 可访问 MANIFEST.md
                 // 注意：/shared/skills 是全局共享资源，多个 app 共用同一挂载点，幂等检查防重复挂载
-                String physicalSkillsPath = "/home/xmy/tryaios/aios-java/aios_skills";
+                String physicalSkillsPath = com.ouisani.aios.core.config.AiosPaths.skillsDir();
                 try {
                     java.nio.file.Path skillsPath = java.nio.file.Path.of(physicalSkillsPath);
                     if (!java.nio.file.Files.exists(skillsPath)) {
@@ -203,7 +203,7 @@ public class AiosAppManager {
                 // ── 全局角色舱 (Global Roles Registry) VFS 挂载 ──
                 // 将宿主机角色卡目录映射到沙箱 /shared/roles，使大模型 file_read 可读取 .yaml 角色卡
                 // 注意：/shared/roles 是全局共享资源，多个 app 共用同一挂载点，幂等检查防重复挂载
-                String physicalRolesPath = "/home/xmy/tryaios/aios-java/aios_roles";
+                String physicalRolesPath = com.ouisani.aios.core.config.AiosPaths.rolesDir();
                 try {
                     java.nio.file.Path rolesPath = java.nio.file.Path.of(physicalRolesPath);
                     if (!java.nio.file.Files.exists(rolesPath)) {
@@ -442,7 +442,7 @@ public class AiosAppManager {
             // 兜底逻辑：如果 enabledRoles 为空，强制注入 System_Architect 角色卡
             // 绝不允许给大模型喂空的角色说明书！
             if (enabledRoles == null || enabledRoles.isEmpty()) {
-                String defaultRolePath = "/home/xmy/tryaios/aios-java/aios_roles/System_Architect.yaml";
+                String defaultRolePath = com.ouisani.aios.core.config.AiosPaths.rolesDir() + "/System_Architect.yaml";
                 try {
                     String architectContent = java.nio.file.Files.readString(java.nio.file.Path.of(defaultRolePath));
                     log.info("[AppManager] enabledRoles is empty, force-injecting System_Architect as default role");
@@ -456,7 +456,7 @@ public class AiosAppManager {
                 }
             }
 
-            String rolesDir = "/home/xmy/tryaios/aios-java/aios_roles";
+            String rolesDir = com.ouisani.aios.core.config.AiosPaths.rolesDir();
             StringBuilder content = new StringBuilder();
             content.append("# 当前任务角色配置（按需装载）\n\n");
             content.append("以下工程角色已为本任务激活：\n\n");
@@ -498,7 +498,7 @@ public class AiosAppManager {
          */
         private String tailorSkillsManifest(List<String> enabledSkills) {
             // 读取全局 MANIFEST.md
-            String manifestPath = "/home/xmy/tryaios/aios-java/aios_skills/MANIFEST.md";
+            String manifestPath = com.ouisani.aios.core.config.AiosPaths.skillsDir() + "/MANIFEST.md";
             String fullManifest;
             try {
                 fullManifest = java.nio.file.Files.readString(java.nio.file.Path.of(manifestPath));
@@ -592,7 +592,7 @@ public class AiosAppManager {
             try {
                 // 全局公共技能目录（宿主机绝对路径）
                 java.nio.file.Path globalSkillsDir = java.nio.file.Path.of(
-                        "/home/xmy/tryaios/aios-java/aios_skills");
+                        com.ouisani.aios.core.config.AiosPaths.skillsDir());
 
                 // 自动创建全局技能目录（如不存在）
                 if (!java.nio.file.Files.exists(globalSkillsDir)) {

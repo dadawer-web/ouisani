@@ -349,6 +349,27 @@ public class OmniMotherAgent extends AbstractAgent {
 
                 // ── 执行 LLM 自治 SWE 闭环 ──
                 long nodeStartTokens = CostTracker.instance().getTotalTokens();
+
+                // ── OOM Killer: 在 LLM 调用前强制经过内存清洗防线 ──
+                // 检查 SessionMemory 的 Token 用量，超出高水位线则逐级压缩
+                try {
+                    long memTokens = estimateTokensFromHistory();
+                    if (memTokens > 100000) {
+                        log.warn("[OmniMother] Memory high watermark breached ({} tokens), OOM Killer engaged!", memTokens);
+                        // 将 SessionMemory 各 Section 的内容压缩
+                        for (com.ouisani.aios.core.memory.SessionMemoryService.Section section
+                                : com.ouisani.aios.core.memory.SessionMemoryService.Section.values()) {
+                            String content = sessionMemory.getSection(section);
+                            if (content != null && content.length() > 5000) {
+                                sessionMemory.setSection(section,
+                                        content.substring(0, 2000) + "\n...[Truncated by OOM Killer]");
+                            }
+                        }
+                    }
+                } catch (Exception oomEx) {
+                    log.warn("[OmniMother] OOM Killer pre-check failed (non-fatal): {}", oomEx.getMessage());
+                }
+
                 String result = queryEngine.query(basePrompt);
 
                 // ── 验证节点是否真正成功 ──
@@ -382,6 +403,40 @@ public class OmniMotherAgent extends AbstractAgent {
                     log.info("[OmniMother] Node '{}' output committed to memory bus", node.instanceId());
                 }
 
+                // ── ABI Firewall: 强类型输出安检 ──
+                // 将 LLM 输出经过 JSON 提取与校验，写入 VariablePool 供下游节点安全读取
+                log.info("[OmniMother] Task reasoning completed. Proceeding to ABI Firewall check...");
+                try {
+                    com.fasterxml.jackson.databind.JsonNode purifiedData =
+                            com.ouisani.aios.core.ipc.OutputSchemaValidator.enforceJsonStructure(result);
+
+                    // 将安检合格的干净数据写入共享内存池，供下游节点调用
+                    com.ouisani.aios.core.ipc.VariablePool.getInstance().set(
+                            com.ouisani.aios.core.ipc.VariablePool.Scope.TASK,
+                            payload.node().instanceId(),
+                            "result",
+                            purifiedData
+                    );
+                    log.info("[OmniMother] ABI Firewall passed. Output committed to VariablePool for node: {}",
+                            node.instanceId());
+                } catch (IllegalArgumentException abiEx) {
+                    // ABI 校验失败 — LLM 输出了非 JSON 格式
+                    // 这个异常会被 catch 块捕获，经 JsonParseErrorRecovery 处理后重新注入 Prompt
+                    log.warn("[OmniMother] ABI Firewall rejected output for node {}: {}",
+                            node.instanceId(), abiEx.getMessage());
+                    throw abiEx;
+                } catch (Exception abiEx) {
+                    // JSON 提取失败但非 ABI 违规 — 宽松处理，将原始文本写入 VariablePool
+                    log.debug("[OmniMother] ABI Firewall lenient fallback for node {}: storing raw text",
+                            node.instanceId());
+                    com.ouisani.aios.core.ipc.VariablePool.getInstance().set(
+                            com.ouisani.aios.core.ipc.VariablePool.Scope.TASK,
+                            payload.node().instanceId(),
+                            "result",
+                            result
+                    );
+                }
+
                 TelemetryService.instance().logEvent("node_forged", Map.of(
                         "node_id", node.instanceId(),
                         "role", node.role(),
@@ -391,7 +446,7 @@ public class OmniMotherAgent extends AbstractAgent {
 
                 // ── 业务顺利办完，跳出循环 ──
                 success = true;
-                log.info("[OmniMother] Task complete on attempt {}. Signing receipt for node: {}",
+                log.info("[OmniMother] Task complete on attempt {}. Output safely committed to VariablePool. Signing receipt for node: {}",
                         currentAttempt, node.instanceId());
                 payload.completionReceipt().complete(null);
 

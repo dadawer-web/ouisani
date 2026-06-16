@@ -98,6 +98,14 @@ public final class SyscallDispatcher {
         addFilter(BpfManager.instance());
         log.info("[Kernel Dispatcher] Semantic eBPF probe registered. Intent interception active.");
         System.out.println("[Kernel Dispatcher] Semantic eBPF probe registered. Intent interception active.");
+
+        // ── Semantic Firewall: 注册 AI 语义审核过滤器 ──
+        // SemanticSyscallFilter 拦截高危操作（bash, fs_write, fs_delete 等），
+        // 并移交 AiSecurityAuditor 进行 LLM 语义判定。
+        // 这是 Seccomp-BPF 的语义升级版：不仅检查 syscall 号，还理解意图。
+        addFilter(new com.ouisani.aios.core.security.SemanticSyscallFilter());
+        log.info("[Kernel Dispatcher] Semantic Firewall (AI Auditor) registered. High-risk syscalls will be audited.");
+        System.out.println("[Kernel Dispatcher] Semantic Firewall (AI Auditor) registered. High-risk syscalls will be audited.");
     }
 
     /**

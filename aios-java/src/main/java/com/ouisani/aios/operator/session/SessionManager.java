@@ -411,6 +411,27 @@ public class SessionManager {
             }
         }
 
+        // ══════════════════════════════════════════════════════════
+        //  OOM Killer: 7 层递进式上下文压缩防线
+        //  在构建完消息列表后，检测 Token 用量是否逼近模型极限。
+        //  如果超出高水位线，自动逐级压缩，确保 Agent 永不因上下文溢出而崩溃。
+        // ══════════════════════════════════════════════════════════
+        try {
+            com.ouisani.aios.core.llm.LlmProvider oomHelperModel =
+                    com.ouisani.aios.core.llm.LlmRouterHolder.getProvider("openai");
+            if (oomHelperModel != null) {
+                List<AgentMessage> safeMessages = com.ouisani.aios.core.memory.TokenOomKiller.ensureMemoryHealth(
+                        messages, oomHelperModel);
+                if (safeMessages != messages) {
+                    log.info("[SessionManager] OOM Killer applied compression: {} -> {} messages",
+                            messages.size(), safeMessages.size());
+                    messages = safeMessages;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[SessionManager] OOM Killer check failed (non-fatal): {}", e.getMessage());
+        }
+
         return new SessionContext(messages, thinkingLevel, provider, modelId);
     }
 

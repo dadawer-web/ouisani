@@ -41,9 +41,9 @@ public class TopologyCompiler {
     private static final Logger log = LoggerFactory.getLogger(TopologyCompiler.class);
 
     /** 角色卡物理目录 */
-    private static final String ROLES_DIR = "/home/xmy/tryaios/aios-java/aios_roles";
+    private static final String ROLES_DIR = com.ouisani.aios.core.config.AiosPaths.rolesDir();
     /** 技能库物理目录 */
-    private static final String SKILLS_DIR = "/home/xmy/tryaios/aios-java/aios_skills";
+    private static final String SKILLS_DIR = com.ouisani.aios.core.config.AiosPaths.skillsDir();
 
     private static final class Holder {
         static final TopologyCompiler INSTANCE = new TopologyCompiler();

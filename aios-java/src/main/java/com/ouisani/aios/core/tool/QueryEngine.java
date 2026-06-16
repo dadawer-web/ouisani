@@ -3,6 +3,8 @@ package com.ouisani.aios.core.tool;
 import com.ouisani.aios.core.hook.HookManager;
 import com.ouisani.aios.core.permission.PermissionChecker;
 import com.ouisani.aios.core.permission.PermissionDecision;
+import com.ouisani.aios.core.plugin.DynamicToolBridge;
+import com.ouisani.aios.core.plugin.ToolDefinition;
 import com.ouisani.aios.core.telemetry.TelemetryService;
 import com.ouisani.aios.user.sdk.AiosSdk;
 import org.slf4j.Logger;
@@ -91,6 +93,15 @@ public class QueryEngine {
     public String query(String userMessage, String systemContext) {
         log.info("[QueryEngine] Starting query loop for agent={}, message length={}", agentId, userMessage.length());
 
+        // ── DynamicToolBridge: 根据用户消息自动挂载相关工具 ──
+        List<ToolDefinition> autoMounted = DynamicToolBridge.getInstance()
+                .autoMountByQuery(agentId, userMessage);
+        if (!autoMounted.isEmpty()) {
+            log.info("[QueryEngine] DynamicToolBridge auto-mounted {} tool(s) for agent '{}': {}",
+                    autoMounted.size(), agentId,
+                    autoMounted.stream().map(ToolDefinition::name).toList());
+        }
+
         // 构建系统提示词
         String systemPrompt = buildSystemPrompt(systemContext);
 
@@ -145,6 +156,8 @@ public class QueryEngine {
                 try {
                     result = executeTool(tc);
                     consecutiveErrors = 0; // 成功则重置错误计数
+                    // ── DynamicToolBridge: 标记工具被使用（用于 LRU 驱逐） ──
+                    DynamicToolBridge.getInstance().markToolUsed(tc.toolName);
                 } catch (Exception e) {
                     consecutiveErrors++;
                     result = "System Error during tool '" + tc.toolName + "' execution: " + e.getMessage();
@@ -183,6 +196,9 @@ public class QueryEngine {
 
     /**
      * 构建系统提示词 — 包含工具描述和使用指南。
+     * <p>
+     * 集成 DynamicToolBridge：在静态工具列表之后，
+     * 追加动态挂载的工具 Schema，实现按需工具注入。
      */
     private String buildSystemPrompt(String extraContext) {
         StringBuilder sb = new StringBuilder();
@@ -199,6 +215,12 @@ public class QueryEngine {
                 sb.append("Notes: ").append(p).append("\n");
             }
             sb.append("\n");
+        }
+
+        // ── DynamicToolBridge: 注入动态挂载的工具 Schema ──
+        String dynamicToolsDesc = DynamicToolBridge.getInstance().getMountedToolsDescription(agentId);
+        if (dynamicToolsDesc != null && !dynamicToolsDesc.isBlank()) {
+            sb.append(dynamicToolsDesc).append("\n");
         }
 
         // 工具调用格式说明
