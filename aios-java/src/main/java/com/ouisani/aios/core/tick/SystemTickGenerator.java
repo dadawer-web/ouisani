@@ -116,7 +116,7 @@ public final class SystemTickGenerator {
      */
     public void start(long intervalMs) {
         if (!running.compareAndSet(false, true)) {
-            log.warn("[SysTick] Already running, ignoring start()");
+            log.warn("[SysTick] 已在运行中，忽略 start() 调用");
             return;
         }
 
@@ -140,13 +140,13 @@ public final class SystemTickGenerator {
         );
 
         log.info("[SysTick] ╔══════════════════════════════════════════════════╗");
-        log.info("[SysTick] ║  System Tick Generator STARTED                   ║");
-        log.info("[SysTick] ║  Interval: {}ms ({}s)                          ║",
+        log.info("[SysTick] ║  系统节拍发生器已启动                             ║");
+        log.info("[SysTick] ║  间隔：{}ms（{}s）                              ║",
                 tickIntervalMs, tickIntervalMs / 1000);
-        log.info("[SysTick] ║  The system now has a heartbeat.               ║");
+        log.info("[SysTick] ║  系统现在有了心跳。                               ║");
         log.info("[SysTick] ╚══════════════════════════════════════════════════╝");
 
-        System.out.printf("  \u001B[36m[SysTick] Heartbeat started: interval=%dms — the system can now feel time.%n\u001B[0m",
+        System.out.printf("  \u001B[36m[SysTick] 心跳已启动：间隔=%dms — 系统现在可以感知时间。%n\u001B[0m",
                 tickIntervalMs);
 
         SemanticEtw.getInstance().logEvent("SYSTICK", "START",
@@ -175,7 +175,7 @@ public final class SystemTickGenerator {
             }
         }
 
-        log.info("[SysTick] Stopped. Total ticks: {}, uptime: {}ms",
+        log.info("[SysTick] 已停止。总节拍数：{}，运行时间：{}ms",
                 totalTicks.get(), System.currentTimeMillis() - bootTimeMs);
 
         SemanticEtw.getInstance().logEvent("SYSTICK", "STOP",
@@ -234,7 +234,7 @@ public final class SystemTickGenerator {
 
         // ── 日志（每 10 个 tick 输出一次详细日志，避免刷屏） ──
         if (tick % 10 == 0 || tick <= 3) {
-            log.info("[SysTick] Tick #{}: uptime={}ms, drift={}ms, signals={}, woken={}",
+            log.info("[SysTick] 节拍 #{}：运行时间={}ms，漂移={}ms，信号数={}，唤醒数={}",
                     tick, now - bootTimeMs, drift, signalCount, wokenCount);
         }
 
@@ -287,7 +287,7 @@ public final class SystemTickGenerator {
         long wakeAtTick = currentTick.get() + tickCount;
         sleepRegistry.registerSleep(pid, wakeAtTick);
 
-        log.info("[SysTick] sys_nanosleep: pid={}, tickCount={}, wakeAtTick={}",
+        log.info("[SysTick] sys_nanosleep：pid={}，节拍数={}，唤醒节拍={}",
                 pid, tickCount, wakeAtTick);
 
         SemanticEtw.getInstance().logEvent("SYSTICK", "NANOSLEEP",
@@ -301,7 +301,7 @@ public final class SystemTickGenerator {
      */
     public void cancelNanosleep(int pid) {
         sleepRegistry.cancelSleep(pid);
-        log.info("[SysTick] nanosleep cancelled: pid={}", pid);
+        log.info("[SysTick] nanosleep 已取消：pid={}", pid);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -344,15 +344,15 @@ public final class SystemTickGenerator {
                 : 0;
 
         return """
-                ┌─ SysTick Stats ──────────────────────────────────────
-                │  Current Tick (jiffies) : %d
-                │  Uptime                 : %dms (%.1fmin)
-                │  Tick Interval          : %dms
-                │  Actual Frequency       : %.3f Hz
-                │  Max Drift              : %dms
-                │  Total Signals Sent     : %d
-                │  Total Agents Woken     : %d
-                │  Pending Sleepers       : %d
+                ┌─ SysTick 统计 ─────────────────────────────────────
+                │  当前节拍 (jiffies)     : %d
+                │  运行时间               : %dms (%.1f分钟)
+                │  节拍间隔               : %dms
+                │  实际频率               : %.3f Hz
+                │  最大漂移               : %dms
+                │  已发送信号总数          : %d
+                │  已唤醒 Agent 总数       : %d
+                │  待唤醒睡眠者            : %d
                 └─────────────────────────────────────────────────"""
                 .formatted(
                         currentTick.get(),

@@ -51,10 +51,10 @@ public class ContextWindowRecovery implements RecoveryStrategy {
                     null, context.agentId(), new CompactService.AutoCompactState());
             if (compactResult != null) {
                 modifier += "6. [AUTO-COMPACT APPLIED]: Your conversation has been automatically compressed.\n";
-                log.info("[ContextWindowRecovery] Auto-compact applied for agent {}", context.agentId());
+                log.info("[ContextWindowRecovery] 自动压缩已应用，Agent {}", context.agentId());
             }
         } catch (Exception e) {
-            log.warn("[ContextWindowRecovery] Auto-compact failed: {}", e.getMessage());
+            log.warn("[ContextWindowRecovery] 自动压缩失败: {}", e.getMessage());
         }
 
         context.appendPromptModifier(modifier);

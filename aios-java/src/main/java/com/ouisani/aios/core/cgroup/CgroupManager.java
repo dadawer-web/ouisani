@@ -154,7 +154,7 @@ public final class CgroupManager {
      */
     public void oomKill(String agentId) {
         if (oomKillDisabled.contains(agentId)) {
-            log.warn("[CgroupManager] OOM Kill disabled for agent={}, logging only", agentId);
+            log.warn("[CgroupManager] Agent 的 OOM Kill 已禁用，仅记录日志，agent={}", agentId);
             SemanticEtw.getInstance().logEvent("CGROUP", "OOM_KILL_DISABLED",
                     "agent=" + agentId + " reason=oom_control_disabled");
             return;
@@ -204,7 +204,7 @@ public final class CgroupManager {
      */
     public void disableOomKill(String agentId) {
         oomKillDisabled.add(agentId);
-        log.info("[CgroupManager] OOM Kill disabled for agent={}", agentId);
+        log.info("[CgroupManager] Agent 的 OOM Kill 已禁用，agent={}", agentId);
     }
 
     /**
@@ -212,7 +212,7 @@ public final class CgroupManager {
      */
     public void enableOomKill(String agentId) {
         oomKillDisabled.remove(agentId);
-        log.info("[CgroupManager] OOM Kill re-enabled for agent={}", agentId);
+        log.info("[CgroupManager] Agent 的 OOM Kill 已重新启用，agent={}", agentId);
     }
 
     /**

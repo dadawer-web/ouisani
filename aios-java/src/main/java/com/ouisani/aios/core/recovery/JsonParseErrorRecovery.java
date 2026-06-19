@@ -22,7 +22,7 @@ public class JsonParseErrorRecovery implements RecoveryStrategy {
 
     @Override
     public RecoveryResult apply(RecoveryContext context) {
-        log.info("[JsonParseErrorRecovery] Injecting format correction for agent {}", context.agentId());
+        log.info("[JsonParseErrorRecovery] 正在为 Agent 注入格式修正 {}", context.agentId());
         String errorMsg = context.exception().getMessage() != null ? context.exception().getMessage() : "Unknown parse error";
         String modifier = "\n\n[SYSTEM CRITICAL - FORMAT ERROR]:\n"
                 + "Your previous response had a formatting error that could not be parsed:\n"

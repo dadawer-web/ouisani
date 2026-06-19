@@ -126,8 +126,8 @@ public final class IntentRouter {
     private SyscallDispatcher dispatcher;
 
     private IntentRouter() {
-        log.info("[IntentRouter] Hardcoded regex removed. LLM Semantic Routing active.");
-        System.out.println("[IntentRouter] Hardcoded regex removed. LLM Semantic Routing active.");
+        log.info("[IntentRouter] 硬编码正则已移除。LLM 语义路由已激活。");
+        System.out.println("[IntentRouter] 硬编码正则已移除。LLM 语义路由已激活。");
     }
 
     public void configure(LlmProvider llmProvider, SyscallDispatcher dispatcher) {
@@ -158,17 +158,17 @@ public final class IntentRouter {
      */
     public RouteResult route(String input) {
         if (llmProvider == null && llmRouter == null) {
-            log.error("[IntentRouter] No LLM provider configured!");
+            log.error("[IntentRouter] 未配置 LLM Provider!");
             return new RouteResult(IntentType.CHAT, "IntentRouter not configured — no LLM available", null);
         }
 
-        log.info("[IntentRouter] Semantic routing: \"{}\"", truncate(input, 80));
+        log.info("[IntentRouter] 语义路由: \"{}\"", truncate(input, 80));
         SemanticEtw.getInstance().logEvent("INTENT", "ROUTE_START",
                 "input=" + truncate(input, 100));
 
         // ── Step 0: IntentGate 意图门控 — 检测执行模式 ──
         IntentGate.GateResult gateResult = IntentGate.instance().detectMode(input);
-        log.info("[IntentRouter] IntentGate detected mode: {} (trigger: {})",
+        log.info("[IntentRouter] IntentGate 检测到模式: {} (trigger: {})",
                 gateResult.mode(), gateResult.trigger());
 
         // Step 1: LLM 语义分类 — 输出纯枚举名
@@ -192,10 +192,10 @@ public final class IntentRouter {
             intent = IntentType.valueOf(cleaned);
         } catch (IllegalArgumentException e) {
             // LLM 输出了无法匹配的枚举，降级为 CHAT
-            log.warn("[IntentRouter] LLM returned unrecognized intent, falling back to CHAT");
+            log.warn("[IntentRouter] LLM 返回未识别意图，回退至 CHAT");
             intent = IntentType.CHAT;
         } catch (Exception e) {
-            log.error("[IntentRouter] LLM routing call failed: {}", e.getMessage());
+            log.error("[IntentRouter] LLM 路由调用失败: {}", e.getMessage());
             return new RouteResult(IntentType.CHAT, "LLM routing failed: " + e.getMessage(), gateResult);
         }
 
@@ -260,10 +260,10 @@ public final class IntentRouter {
                     TeamManager.TeamState team = TeamManager.instance().createTeam(spec);
                     teamInfo = " | Team '" + team.name() + "' auto-created with "
                             + team.members().size() + " members (" + gateResult.mode() + " mode)";
-                    log.info("[IntentRouter] Auto-created team '{}' for {} mode", team.name(), gateResult.mode());
+                    log.info("[IntentRouter] 自动创建团队 '{}' for {} mode", team.name(), gateResult.mode());
                 } catch (Exception e) {
                     teamInfo = " | Team auto-creation failed: " + e.getMessage();
-                    log.warn("[IntentRouter] Team auto-creation failed: {}", e.getMessage());
+                    log.warn("[IntentRouter] 团队自动创建失败: {}", e.getMessage());
                 }
             }
 
@@ -339,7 +339,7 @@ public final class IntentRouter {
                 llmOutput = llmProvider.think(userInput, SYSCALL_PROMPT);
             }
         } catch (Exception e) {
-            log.error("[Intent Router] LLM call failed: {}", e.getMessage());
+            log.error("[Intent Router] LLM 调用失败: {}", e.getMessage());
             return SyscallResponse.fail("LLM call failed: " + e.getMessage());
         }
 
@@ -349,7 +349,7 @@ public final class IntentRouter {
                     (llmRouter != null ? llmRouter.getProvider("fast_model") : null);
             intent = InstructionDecoder.decodeJson(llmOutput, IntentDto.class, provider);
         } catch (Exception e) {
-            log.error("[Intent Router] Failed to decode LLM output: {}", e.getMessage());
+            log.error("[Intent Router] 解码 LLM 输出失败: {}", e.getMessage());
             return SyscallResponse.fail("Intent decode failed: " + e.getMessage());
         }
 

@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -107,5 +108,54 @@ public class WorkflowContext {
             }
         }
         return paramValue;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  内存清理 — 借鉴 Symphony 的内存回收策略
+    //  工作流完成后，清理非终点（Sink Node）的中间缓存，防止内存泄漏
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 清理中间节点的内存 — 保留 Sink 节点（终点节点）的输出。
+     * <p>
+     * 工作流执行完毕后，调用此方法清理非终点的中间节点缓存，
+     * 防止 50 个节点的图跑完后所有中间输出死死卡在内存里。
+     * <p>
+     * Sink 节点定义：没有任何下游节点依赖它的输出（即不是其他节点的上游）。
+     *
+     * @param sinkNodeIds 终点节点 ID 集合（这些节点的输出会被保留）
+     * @return 清理的节点数量
+     */
+    public int cleanupIntermediateNodes(Set<String> sinkNodeIds) {
+        int cleaned = 0;
+        // 遍历 globalMemory，删除非 Sink 节点的缓存
+        for (String nodeId : globalMemory.keySet()) {
+            if (!sinkNodeIds.contains(nodeId)) {
+                Map<String, Object> removed = globalMemory.remove(nodeId);
+                if (removed != null) {
+                    cleaned++;
+                    log.debug("[WorkflowContext] 清理中间节点内存: {} ({} 个变量)", nodeId, removed.size());
+                }
+            }
+        }
+        if (cleaned > 0) {
+            log.info("[WorkflowContext] 内存清理完成: 保留 {} 个 Sink 节点, 清理 {} 个中间节点, 剩余 {} 个节点",
+                    sinkNodeIds.size(), cleaned, globalMemory.size());
+        }
+        return cleaned;
+    }
+
+    /**
+     * 获取当前内存总线中的所有节点 ID。
+     */
+    public Set<String> getNodeIds() {
+        return globalMemory.keySet();
+    }
+
+    /**
+     * 获取内存总线大小（节点数）。
+     */
+    public int getMemorySize() {
+        return globalMemory.size();
     }
 }

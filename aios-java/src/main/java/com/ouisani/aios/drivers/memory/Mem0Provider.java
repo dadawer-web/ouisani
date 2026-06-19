@@ -47,7 +47,7 @@ public class Mem0Provider implements MemoryProvider {
                 .build();
 
         if (apiKey != null && !apiKey.isEmpty()) {
-            log.info("[Mem0 Driver] HTTP client initialized. API key loaded (len={}).", apiKey.length());
+            log.info("[Mem0 Driver] HTTP 客户端已初始化。API 密钥已加载 (len={})。", apiKey.length());
         } else {
             log.warn("[Mem0 Driver] No API key found. All requests will fail with SyscallException.");
         }

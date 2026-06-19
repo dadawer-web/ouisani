@@ -37,10 +37,10 @@ public class ToolRegistry {
      */
     public <I extends ToolInput> void register(Tool<I> tool) {
         if (tools.containsKey(tool.name())) {
-            log.warn("[ToolRegistry] Tool '{}' already registered, overwriting", tool.name());
+            log.warn("[ToolRegistry] 工具 '{}' 已注册，正在覆盖", tool.name());
         }
         tools.put(tool.name(), tool);
-        log.info("[ToolRegistry] Registered tool: {} ({})", tool.name(), tool.description());
+        log.info("[ToolRegistry] 已注册工具: {} ({})", tool.name(), tool.description());
     }
 
     /**
@@ -107,15 +107,23 @@ public class ToolRegistry {
         reg.register(new LspTool());
         reg.register(new ConfigTool());
         reg.register(new McpTool());
+        reg.register(new StructuredExtractTool());
+        reg.register(new DeterministicExtractTool());
+        reg.register(new WebScrapeTool());
+        reg.register(new HtmlToMarkdownTool());
+        reg.register(new ContentPipelineTool());
+        // ── Human-in-the-Loop + Frontend Tool（借鉴 CopilotKit） ──
+        reg.register(new HumanResponseTool());
+        reg.register(new FrontendTool());
         // WebSearchTool 已有独立实现 (com.ouisani.aios.core.plugin.WebSearchTool)
         // ── 以下工具已迁移至用户空间 (omnifactory.tools)，内核不再全局注册 ──
         // TodoWriteTool, NotebookEditTool, PlanModeTool, TaskTool, SkillTool
         // 由 OmniMotherAgent 在用户空间按需注册
-        log.info("[Kernel] Advanced cognitive tools relocated to OmniMother user space.");
-        log.info("[Syscall] Blocking human-I/O tools removed. Asynchronous EventBus pattern enforced.");
-        log.info("[ToolRegistry] {} builtin kernel tools registered", reg.tools.size());
-        System.out.println("[Kernel] Advanced cognitive tools relocated to OmniMother user space.");
-        System.out.println("[Syscall] Blocking human-I/O tools removed. Asynchronous EventBus pattern enforced.");
-        System.out.println("[ToolRegistry] " + reg.tools.size() + " builtin kernel tools registered");
+        log.info("[Kernel] 高级认知工具已迁移至 OmniMother 用户空间。");
+        log.info("[Syscall] 阻塞性人机交互工具已移除。异步 EventBus 模式已强制执行。");
+        log.info("[ToolRegistry] {} 个内核内置工具已注册", reg.tools.size());
+        System.out.println("[Kernel] 高级认知工具已迁移至 OmniMother 用户空间。");
+        System.out.println("[Syscall] 阻塞性人机交互工具已移除。异步 EventBus 模式已强制执行。");
+        System.out.println("[ToolRegistry] " + reg.tools.size() + " 个内核内置工具已注册");
     }
 }

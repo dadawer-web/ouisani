@@ -23,7 +23,7 @@ public class ReflectionInjectionRecovery implements RecoveryStrategy {
 
     @Override
     public RecoveryResult apply(RecoveryContext context) {
-        log.info("[ReflectionInjectionRecovery] Injecting reflection for agent {} (attempt {})",
+        log.info("[ReflectionInjectionRecovery] 正在为 Agent 注入反思 {} (attempt {})",
                 context.agentId(), context.attempt());
 
         String lastError = context.lastErrorTrace();

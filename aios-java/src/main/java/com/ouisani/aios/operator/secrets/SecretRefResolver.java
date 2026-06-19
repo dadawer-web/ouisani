@@ -156,7 +156,7 @@ public class SecretRefResolver {
         } catch (SecretResolutionException e) {
             throw e;
         } catch (Exception e) {
-            log.warn("[SecretRefResolver] Security check failed for path {}: {}", path, e.getMessage());
+            log.warn("[SecretRefResolver] 路径安全检查失败 {}: {}", path, e.getMessage());
         }
     }
 }

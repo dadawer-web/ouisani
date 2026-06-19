@@ -22,7 +22,7 @@ public class ToolErrorRecovery implements RecoveryStrategy {
 
     @Override
     public RecoveryResult apply(RecoveryContext context) {
-        log.info("[ToolErrorRecovery] Analyzing tool error for agent {}", context.agentId());
+        log.info("[ToolErrorRecovery] 正在分析 Agent 工具错误 {}", context.agentId());
         String errorMsg = context.exception().getMessage() != null ? context.exception().getMessage() : "Tool error";
         String modifier = "\n\n[SYSTEM CRITICAL - TOOL EXECUTION ERROR]:\n"
                 + "A tool call failed with the following error:\n"

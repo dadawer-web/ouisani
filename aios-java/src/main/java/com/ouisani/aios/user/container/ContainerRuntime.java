@@ -184,7 +184,7 @@ public class ContainerRuntime {
             }
         }, rootPath);
 
-        System.out.printf("  ✓ [Container] '%s' started (PID=%d, quota=%d, network=%s)%n%n",
+        System.out.printf("  ✓ [Container] '%s' 已启动 (PID=%d, quota=%d, network=%s)%n%n",
                 containerId, pid, tokenLimit,
                 config.networkGroup() != null ? config.networkGroup() : "none");
     }
@@ -244,7 +244,7 @@ public class ContainerRuntime {
                 VfsManager.instance().mount(parentDir, nodeName, hostNode.get());
                 System.out.printf("  ├─ [Volume] %s → %s%n", hostPath, containerPath);
             } else {
-                System.out.printf("  ├─ [Volume] %s → %s (host not found, skipped)%n", hostPath, containerPath);
+                System.out.printf("  ├─ [Volume] %s → %s (宿主未找到，跳过)%n", hostPath, containerPath);
             }
         }
     }
@@ -268,10 +268,10 @@ public class ContainerRuntime {
                     System.out.printf("  ├─ [Plugin] sys_insmod %s → loaded (%s)%n",
                             pluginName, tool.type());
                 } else {
-                    System.out.printf("  ├─ [Plugin] sys_insmod %s → not found in catalog%n", pluginName);
+                    System.out.printf("  ├─ [Plugin] sys_insmod %s → 目录中未找到%n", pluginName);
                 }
             } catch (Exception e) {
-                System.out.printf("  ├─ [Plugin] sys_insmod %s → failed: %s%n", pluginName, e.getMessage());
+                System.out.printf("  ├─ [Plugin] sys_insmod %s → 失败: %s%n", pluginName, e.getMessage());
             }
         }
         System.out.printf("  ├─ [Plugin] %d/%d plugins loaded for '%s'%n",
@@ -293,9 +293,9 @@ public class ContainerRuntime {
             MutableFileNode personaNode = new MutableFileNode(personaPath);
             personaNode.write(config.persona());
             VfsManager.instance().mount("/containers/agent_" + pid + "/etc", "persona", personaNode);
-            System.out.printf("  ├─ [Persona] Injected (%d chars) → /etc/persona%n", config.persona().length());
+            System.out.printf("  ├─ [Persona] 已注入 (%d chars) → /etc/persona%n", config.persona().length());
         } catch (Exception e) {
-            System.out.printf("  ├─ [Persona] Injection failed: %s%n", e.getMessage());
+            System.out.printf("  ├─ [Persona] 注入失败: %s%n", e.getMessage());
         }
     }
 
@@ -358,7 +358,7 @@ public class ContainerRuntime {
                     String code = loadCodeString(config.wasmPath());
                     String result = sandbox.executeCode(code, config.entrypoint());
                     String preview = result.length() > 500 ? result.substring(0, 500) + "..." : result;
-                    System.out.printf("  └─ [Cloud] Output (%d chars): %s%n", result.length(), preview);
+                    System.out.printf("  └─ [Cloud] 输出 (%d chars): %s%n", result.length(), preview);
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -388,7 +388,7 @@ public class ContainerRuntime {
     public void stop(String containerId) {
         ContainerContext ctx = containers.remove(containerId);
         if (ctx == null) {
-            System.out.printf("  ⚠ [Container] '%s' not found%n", containerId);
+            System.out.printf("  ⚠ [Container] '%s' 未找到%n", containerId);
             return;
         }
 
@@ -419,7 +419,7 @@ public class ContainerRuntime {
             log.warn("[Container] Plugin cleanup failed for '{}': {}", containerId, e.getMessage());
         }
 
-        System.out.printf("  ■ [Container] '%s' stopped and cleaned up (PID=%d)%n", containerId, ctx.pid());
+        System.out.printf("  ■ [Container] '%s' 已停止并清理 (PID=%d)%n", containerId, ctx.pid());
     }
 
     /**

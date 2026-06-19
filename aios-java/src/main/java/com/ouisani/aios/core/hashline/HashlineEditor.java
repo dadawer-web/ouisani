@@ -95,7 +95,7 @@ public class HashlineEditor {
         }
 
         if (replacedCount == 0 && !edits.isEmpty()) {
-            log.warn("[Hashline] None of the {} target hashes found in the original file.", edits.size());
+            log.warn("[Hashline] 所有 {} 个目标哈希在原始文件中均未找到。", edits.size());
             throw new RuntimeException("Hashline mismatch. No target blocks found.");
         }
 

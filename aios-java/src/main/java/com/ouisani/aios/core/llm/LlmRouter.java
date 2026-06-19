@@ -63,6 +63,9 @@ public class LlmRouter implements LlmProvider {
     /** Budget threshold for cross-node (remote) model access. */
     private static final int REMOTE_BUDGET_THRESHOLD = 100;
 
+    // ── Noop 降级 Provider（借鉴 Langflow Noop 服务设计） ──
+    private final NoopLlmProvider noopProvider = new NoopLlmProvider();
+
     // ── 后端注册 ──
 
     /** 按名称注册的 Provider */
@@ -102,7 +105,7 @@ public class LlmRouter implements LlmProvider {
         ComputeCore core = provider.computeCore();
         coreProviders.computeIfAbsent(core, k -> new ArrayList<>()).add(provider);
 
-        log.info("[LLM Router] Registered backend: '{}' → {} (core={}, NUMA={})",
+        log.info("[LLM Router] 已注册后端: '{}' → {} (core={}, NUMA={})",
                 name, provider.name(), core,
                 isLocalNode(name) ? "LOCAL" : "REMOTE");
     }
@@ -112,7 +115,7 @@ public class LlmRouter implements LlmProvider {
         if (removed != null) {
             coreProviders.getOrDefault(removed.computeCore(), List.of()).remove(removed);
         }
-        log.info("[LLM Router] Unregistered provider: name={}", name);
+        log.info("[LLM Router] 已注销 Provider: name={}", name);
     }
 
     public Map<String, LlmProvider> getBackends() {
@@ -138,7 +141,7 @@ public class LlmRouter implements LlmProvider {
         RoutingDecision decision = route(prompt);
         LlmProvider provider = resolveProvider(decision.backendName);
 
-        log.info("[LLM Router] Dispatch: promptLen={}, core={}, backend={}, reason={}",
+        log.info("[LLM Router] 分发: promptLen={}, core={}, backend={}, reason={}",
                 prompt.length(), decision.targetCore, decision.backendName, decision.reason);
 
         SemanticEtw.getInstance().logEvent("LLM", "ROUTE",
@@ -150,10 +153,10 @@ public class LlmRouter implements LlmProvider {
 
             // ── 安全断言：绝不允许空响应穿透 ──
             if (result == null || result.isBlank()) {
-                log.error("[LLM Router] FATAL: Provider '{}' returned null/blank response! core={}, backend={}",
+                log.error("[LLM Router] 致命错误: Provider '{}' 返回空响应! core={}, backend={}",
                         provider.name(), decision.targetCore, decision.backendName);
                 if (decision.targetCore == ComputeCore.E_CORE) {
-                    log.warn("[LLM Router] E_CORE returned empty, forcing Turbo Boost to P_CORE");
+                    log.warn("[LLM Router] E_CORE 返回空，强制 Turbo Boost 至 P_CORE");
                     return turboBoost(prompt, systemPrompt, decision, null);
                 }
                 // P_CORE 也返回空 — 致命错误，绝不允许系统带着空智能体代码往下走
@@ -175,7 +178,7 @@ public class LlmRouter implements LlmProvider {
             }
             // E_CORE 失败时自动 Turbo Boost 到 P_CORE
             if (decision.targetCore == ComputeCore.E_CORE) {
-                log.warn("[LLM Router] E_CORE failed, Turbo Boost to P_CORE: {}", e.getMessage());
+                log.warn("[LLM Router] E_CORE 失败，Turbo Boost 至 P_CORE: {}", e.getMessage());
                 return turboBoost(prompt, systemPrompt, decision, null);
             }
             throw e;
@@ -185,6 +188,82 @@ public class LlmRouter implements LlmProvider {
     @Override
     public String think(String prompt) {
         return think(prompt, "");
+    }
+
+    /**
+     * 流式推理路由 — 将流式请求路由到底层 Provider。
+     * <p>
+     * 借鉴 CopilotKit 的 SSE 流式渲染：LLM 响应逐 token 推送到前端。
+     * LlmRouter 在这里只做路由转发，不改变流式语义。
+     *
+     * @param prompt       用户提示词
+     * @param systemPrompt 系统提示词
+     * @param onDelta      每个 token 片段的回调
+     * @return 完整的文本回复
+     */
+    public String thinkStream(String prompt, String systemPrompt, java.util.function.Consumer<String> onDelta) {
+        RoutingDecision decision = route(prompt);
+        LlmProvider provider = resolveProvider(decision.backendName());
+
+        if (provider == null) {
+            log.warn("[LlmRouter] 无可用 Provider，降级到 NoopLlmProvider");
+            provider = firstAvailable(ComputeCore.P_CORE);
+            if (provider == null) {
+                String fallback = "Error: No LLM provider available";
+                onDelta.accept(fallback);
+                return fallback;
+            }
+        }
+
+        log.debug("[LlmRouter] thinkStream 路由到: {} (core={})", provider.name(), provider.computeCore());
+
+        try {
+            return provider.thinkStream(prompt, systemPrompt, onDelta);
+        } catch (Exception e) {
+            log.error("[LlmRouter] thinkStream 异常: {}", e.getMessage());
+            // 降级到同步模式
+            String result = provider.think(prompt, systemPrompt);
+            onDelta.accept(result);
+            return result;
+        }
+    }
+
+    /** 流式推理（无系统提示词） */
+    public String thinkStream(String prompt, java.util.function.Consumer<String> onDelta) {
+        return thinkStream(prompt, "", onDelta);
+    }
+
+    /**
+     * 带扩展点的 LLM 调用 — 借鉴 Agent Zero 的 @extensible 机制。
+     * <p>
+     * 包装 {@link #think(String, String)}，支持 before/after 钩子。
+     * <ul>
+     *   <li>before 钩子可短路：返回非 null 时直接作为最终结果</li>
+     *   <li>after 钩子可修改返回值</li>
+     * </ul>
+     * 不替换原始 think 方法，仅提供带扩展点的入口。
+     *
+     * @param prompt       用户 prompt
+     * @param systemPrompt 系统提示词
+     * @return LLM 响应（经过 after 钩子处理）
+     */
+    @com.ouisani.aios.core.plugin.Extensible("llm_think")
+    public String thinkWithExtensions(String prompt, String systemPrompt) {
+        // before 钩子
+        Map<String, Object> hookArgs = new HashMap<>();
+        hookArgs.put("prompt", prompt);
+        hookArgs.put("systemPrompt", systemPrompt);
+        Object shortCircuit = com.ouisani.aios.core.plugin.ExtensibleHookRegistry.before("llm_think", this, hookArgs);
+        if (shortCircuit != null) {
+            String result = (String) shortCircuit;
+            return (String) com.ouisani.aios.core.plugin.ExtensibleHookRegistry.after("llm_think", this, result, hookArgs);
+        }
+
+        // 执行原始逻辑
+        String result = think(prompt, systemPrompt);
+
+        // after 钩子
+        return (String) com.ouisani.aios.core.plugin.ExtensibleHookRegistry.after("llm_think", this, result, hookArgs);
     }
 
     @Override
@@ -205,12 +284,12 @@ public class LlmRouter implements LlmProvider {
 
         // ── 安全断言：绝不允许空响应穿透 ──
         if (result == null || result.isBlank()) {
-            log.error("[LLM Router] FATAL: thinkWithHistory returned null/blank! provider={}, core={}",
+            log.error("[LLM Router] 致命错误: thinkWithHistory 返回空! provider={}, core={}",
                     provider.name(), decision.targetCore);
             if (decision.targetCore == ComputeCore.E_CORE) {
                 LlmProvider pCoreProvider = firstAvailable(ComputeCore.P_CORE);
                 if (pCoreProvider != null) {
-                    log.warn("[LLM Router] E_CORE thinkWithHistory empty, Turbo Boost to P_CORE");
+                    log.warn("[LLM Router] E_CORE thinkWithHistory 为空，Turbo Boost 至 P_CORE");
                     String pCoreResult = pCoreProvider.thinkWithHistory(messages, systemPrompt);
                     if (pCoreResult != null && !pCoreResult.isBlank()) return pCoreResult;
                 }
@@ -236,6 +315,13 @@ public class LlmRouter implements LlmProvider {
     @Override
     public boolean isAvailable() {
         return !backendProviders.isEmpty();
+    }
+
+    /**
+     * 检查是否有可用的 LLM 后端。
+     */
+    public boolean hasAvailableProvider() {
+        return backendProviders.values().stream().anyMatch(LlmProvider::isAvailable);
     }
 
     /**
@@ -294,7 +380,7 @@ public class LlmRouter implements LlmProvider {
     private ComputeCore resolveTargetCore(ComputeAffinity affinity, String prompt) {
         return switch (affinity) {
             case REQUIRE_P_CORE -> {
-                log.debug("[big.LITTLE] Task pinned to P_CORE (REQUIRE_P_CORE)");
+                log.debug("[big.LITTLE] 任务固定至 P_CORE (REQUIRE_P_CORE)");
                 yield ComputeCore.P_CORE;
             }
 
@@ -302,7 +388,7 @@ public class LlmRouter implements LlmProvider {
                 // 优先 P_CORE，但简单任务可降级
                 if (isSimplePrompt(prompt)) {
                     downgrades.incrementAndGet();
-                    log.info("[big.LITTLE] Downgrade: PREFER_P_CORE → E_CORE (simple prompt, len={})",
+                    log.info("[big.LITTLE] 降级: PREFER_P_CORE → E_CORE (简单任务, len={})",
                             prompt.length());
                     yield ComputeCore.E_CORE;
                 }
@@ -328,7 +414,7 @@ public class LlmRouter implements LlmProvider {
                 // 优先 E_CORE，但复杂任务可拉升
                 if (isComplexPrompt(prompt)) {
                     turboBoosts.incrementAndGet();
-                    log.info("[big.LITTLE] Turbo Boost: PREFER_E_CORE → P_CORE (complex prompt, len={})",
+                    log.info("[big.LITTLE] Turbo Boost: PREFER_E_CORE → P_CORE (复杂任务, len={})",
                             prompt.length());
                     yield ComputeCore.P_CORE;
                 }
@@ -336,7 +422,7 @@ public class LlmRouter implements LlmProvider {
             }
 
             case REQUIRE_E_CORE -> {
-                log.debug("[big.LITTLE] Task pinned to E_CORE (REQUIRE_E_CORE)");
+                log.debug("[big.LITTLE] 任务固定至 E_CORE (REQUIRE_E_CORE)");
                 yield ComputeCore.E_CORE;
             }
         };
@@ -402,7 +488,7 @@ public class LlmRouter implements LlmProvider {
         log.warn("[big.LITTLE] ╔══════════════════════════════════════════════════╗");
         log.warn("[big.LITTLE] ║  TURBO BOOST: E_CORE → P_CORE                   ║");
         log.warn("[big.LITTLE] ║  Reason: {}   ║",
-                eCoreResult != null ? "Quality insufficient" : "E_CORE failure");
+                eCoreResult != null ? "质量不足" : "E_CORE 失败");
         log.warn("[big.LITTLE] ╚══════════════════════════════════════════════════╝");
 
         SemanticEtw.getInstance().logEvent("LLM", "TURBO_BOOST",
@@ -492,10 +578,12 @@ public class LlmRouter implements LlmProvider {
         var first = backendProviders.entrySet().stream().findFirst();
         if (first.isPresent()) {
             String fallback = first.get().getKey();
-            log.warn("[LLM Router] Backend '{}' not found, falling back to '{}'", backend, fallback);
+            log.warn("[LLM Router] 后端 '{}' 未找到，回退至 '{}'", backend, fallback);
             return first.get().getValue();
         }
-        throw new RuntimeException("No LLM backend registered in router");
+        // 降级到 NoopLlmProvider（借鉴 Langflow Noop 服务设计）
+        log.warn("[LLM Router] 未找到可用的 Provider: {}。降级到 NoopLlmProvider。", backend);
+        return noopProvider;
     }
 
     private LlmProvider firstAvailable(ComputeCore core) {

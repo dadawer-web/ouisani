@@ -1,0 +1,13 @@
+{
+  "created_files": {
+    "Task.h": "/home/xmy/tryaios/aios-java/workspaces/20260618_103836_\u5148\u627e\u5230\u6211\u672c\u5730\u6587\u4ef6\u5939homexmyt/factory/outputs/cpp_source/Task.h",
+    "TaskQueue.h": "/home/xmy/tryaios/aios-java/workspaces/20260618_103836_\u5148\u627e\u5230\u6211\u672c\u5730\u6587\u4ef6\u5939homexmyt/factory/outputs/cpp_source/TaskQueue.h",
+    "Worker.h": "/home/xmy/tryaios/aios-java/workspaces/20260618_103836_\u5148\u627e\u5230\u6211\u672c\u5730\u6587\u4ef6\u5939homexmyt/factory/outputs/cpp_source/Worker.h",
+    "DistributedTaskQueue.h": "/home/xmy/tryaios/aios-java/workspaces/20260618_103836_\u5148\u627e\u5230\u6211\u672c\u5730\u6587\u4ef6\u5939homexmyt/factory/outputs/cpp_source/DistributedTaskQueue.h",
+    "example_usage.cpp": "/home/xmy/tryaios/aios-java/workspaces/20260618_103836_\u5148\u627e\u5230\u6211\u672c\u5730\u6587\u4ef6\u5939homexmyt/factory/outputs/cpp_source/example_usage.cpp",
+    "CMakeLists.txt": "/home/xmy/tryaios/aios-java/workspaces/20260618_103836_\u5148\u627e\u5230\u6211\u672c\u5730\u6587\u4ef6\u5939homexmyt/factory/outputs/cpp_source/CMakeLists.txt",
+    "README.md": "/home/xmy/tryaios/aios-java/workspaces/20260618_103836_\u5148\u627e\u5230\u6211\u672c\u5730\u6587\u4ef6\u5939homexmyt/factory/outputs/cpp_source/README.md"
+  },
+  "creation_time": 1781750522.317513,
+  "file_count": 7
+}

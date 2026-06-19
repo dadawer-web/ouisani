@@ -26,6 +26,7 @@ import com.ouisani.aios.core.tool.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -60,8 +61,8 @@ public final class AiosSdk {
     }
 
     private AiosSdk() {
-        log.info("[SDK] User-space SDK initialized. Syscall boundary established.");
-        System.out.println("  ✓ [SDK] User-space SDK initialized. Syscall boundary established.");
+        log.info("[SDK] 用户空间 SDK 已初始化。Syscall 边界已建立。");
+        System.out.println("  ✓ [SDK] 用户空间 SDK 已初始化。Syscall 边界已建立。");
     }
 
     // ── LLM ──
@@ -87,6 +88,27 @@ public final class AiosSdk {
                 new LlmPayload(prompt, 0.7, 4096));
         SyscallResponse resp = SyscallDispatcher.getInstance().execute(agentId, request);
         return resp.success() ? resp.data() : "[SDK Error] " + resp.errorMessage();
+    }
+
+    /**
+     * 流式推理 — 借鉴 CopilotKit 的 SSE 流式渲染。
+     * <p>
+     * LLM 响应逐 token 回调，前端可实现打字机效果。
+     * 底层调用 LlmRouter.thinkStream()，如果 Provider 不支持流式则降级为同步。
+     *
+     * @param agentId  Agent ID
+     * @param prompt   提示词
+     * @param onDelta  每个 token 片段的回调
+     * @return 完整的文本回复
+     */
+    public String thinkStream(String agentId, String prompt, java.util.function.Consumer<String> onDelta) {
+        com.ouisani.aios.core.llm.LlmRouter router = SyscallDispatcher.getInstance().getLlmRouter();
+        if (router == null) {
+            String fallback = "[SDK Error] LLM Router not configured";
+            onDelta.accept(fallback);
+            return fallback;
+        }
+        return router.thinkStream(prompt, onDelta);
     }
 
     // ── VFS ──
@@ -118,6 +140,16 @@ public final class AiosSdk {
         if (!resp.success()) {
             log.warn("[SDK] writeFile failed: agent={}, path={}, error={}", agentId, path, resp.errorMessage());
         }
+    }
+
+    /**
+     * 检查 VFS 中指定路径的文件是否存在。
+     */
+    public boolean fileExists(String agentId, String path) {
+        SyscallRequest request = new SyscallRequest("vfs", "exists",
+                new RawPayload(Map.of("path", path)));
+        SyscallResponse resp = SyscallDispatcher.getInstance().execute(agentId, request);
+        return resp.success() && "true".equalsIgnoreCase(resp.data());
     }
 
     // ── Storage (typed payload) ──
@@ -406,6 +438,44 @@ public final class AiosSdk {
     }
 
     // ════════════════════════════════════════════════════════════════
+    //  动态工具锻造（借鉴 Agent Zero 运行时工具生成）
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 动态工具锻造 — 借鉴 Agent Zero 的运行时工具生成模式。
+     * <p>
+     * Agent 描述所需工具功能，LLM 自动生成代码并注册为可调用工具。
+     *
+     * @param agentId     Agent ID
+     * @param description 工具功能描述（自然语言）
+     * @return 锻造结果（含工具名称）
+     */
+    public SyscallResponse forgeTool(String agentId, String description) {
+        SyscallRequest request = new SyscallRequest("tool", "call",
+                new ToolPayload("kernel.forge_tool", Map.of("description", description)));
+        return SyscallDispatcher.getInstance().execute(agentId, request);
+    }
+
+    /**
+     * 动态工具注册 — 将已生成的代码直接注册为工具。
+     *
+     * @param agentId     Agent ID
+     * @param toolName    工具名称
+     * @param code        工具代码（Python）
+     * @param description 工具描述
+     * @return 注册结果
+     */
+    public SyscallResponse registerTool(String agentId, String toolName, String code, String description) {
+        Map<String, Object> args = new HashMap<>();
+        args.put("toolName", toolName);
+        args.put("code", code);
+        args.put("description", description);
+        SyscallRequest request = new SyscallRequest("tool", "call",
+                new ToolPayload("kernel.register_tool", args));
+        return SyscallDispatcher.getInstance().execute(agentId, request);
+    }
+
+    // ════════════════════════════════════════════════════════════════
     //  Claude Code 能力 — 工具增强推理 + 上下文 + 遥测
     // ════════════════════════════════════════════════════════════════
 
@@ -485,5 +555,35 @@ public final class AiosSdk {
     public void setPermissionMode(PermissionMode mode) {
         // 通过 ThreadLocal 或全局状态传递
         log.info("[SDK] Permission mode set to: {}", mode);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  双向状态同步 — 借鉴 CopilotKit 的前端状态与 Agent 状态双向同步
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 推送 Agent 状态到前端 — 借鉴 CopilotKit 的双向状态同步。
+     * <p>
+     * Agent 修改状态后调用此方法，状态会自动同步到前端 UI。
+     * 前端也可以通过 WebSocket 修改状态，Agent 通过 VariablePool 读取。
+     *
+     * @param agentId Agent ID
+     * @param key     状态键名
+     * @param value   状态值
+     */
+    public void pushState(String agentId, String key, Object value) {
+        com.ouisani.aios.core.network.StateSyncChannel.pushAgentState(agentId, key, value);
+    }
+
+    /**
+     * 读取前端同步的状态 — 从 VariablePool SESSION 作用域读取。
+     *
+     * @param sessionId 前端会话 ID
+     * @param key       状态键名
+     * @return 状态值（null 表示不存在）
+     */
+    public Object readFrontendState(String sessionId, String key) {
+        return com.ouisani.aios.core.ipc.VariablePool.getInstance()
+                .get(com.ouisani.aios.core.ipc.VariablePool.Scope.SESSION, sessionId, key);
     }
 }

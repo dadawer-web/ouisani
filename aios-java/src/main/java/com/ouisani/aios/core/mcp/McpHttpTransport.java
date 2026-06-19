@@ -93,14 +93,14 @@ public class McpHttpTransport implements McpTransport {
             // 异步发起 SSE 连接
             sseThread = Thread.startVirtualThread(() -> {
                 try {
-                    log.info("[MCP HTTP] Attempting SSE connection to: {}", sseUrl);
+                    log.info("[MCP HTTP] 尝试 SSE 连接: {}", sseUrl);
                     HttpResponse<java.util.stream.Stream<String>> response = httpClient.send(
                             reqBuilder.build(),
                             HttpResponse.BodyHandlers.ofLines()
                     );
 
                     if (response.statusCode() == 200) {
-                        log.info("[MCP HTTP] SSE connection established: {}", sseUrl);
+                        log.info("[MCP HTTP] SSE 连接已建立: {}", sseUrl);
                         // 解析 SSE 事件流
                         response.body().forEach(line -> {
                             if (!running) return;
@@ -116,16 +116,16 @@ public class McpHttpTransport implements McpTransport {
                             }
                         });
                     } else {
-                        log.debug("[MCP HTTP] SSE endpoint not available ({}), using Streamable HTTP mode", response.statusCode());
+                        log.debug("[MCP HTTP] SSE 端点不可用 ({})，使用 Streamable HTTP 模式", response.statusCode());
                     }
                 } catch (Exception e) {
                     if (running) {
-                        log.debug("[MCP HTTP] SSE connection failed (expected for Streamable HTTP servers): {}", e.getMessage());
+                        log.debug("[MCP HTTP] SSE 连接失败（Streamable HTTP 服务器预期行为）: {}", e.getMessage());
                     }
                 }
             });
         } catch (Exception e) {
-            log.debug("[MCP HTTP] SSE setup failed, using Streamable HTTP mode: {}", e.getMessage());
+            log.debug("[MCP HTTP] SSE 设置失败，使用 Streamable HTTP 模式: {}", e.getMessage());
         }
     }
 
@@ -141,7 +141,7 @@ public class McpHttpTransport implements McpTransport {
      */
     public synchronized void send(String jsonMessage) throws IOException {
         if (!running && messageHandler == null) {
-            throw new IOException("Transport not started");
+            throw new IOException("传输层未启动");
         }
 
         log.debug("[MCP HTTP] SEND: {}", jsonMessage);
@@ -168,14 +168,14 @@ public class McpHttpTransport implements McpTransport {
             String newSessionId = response.headers().firstValue("Mcp-Session-Id").orElse(null);
             if (newSessionId != null) {
                 this.sessionId = newSessionId;
-                log.debug("[MCP HTTP] Session ID updated: {}", sessionId);
+                log.debug("[MCP HTTP] Session ID 已更新: {}", sessionId);
             }
 
             String contentType = response.headers().firstValue("Content-Type").orElse("");
             String body = response.body();
 
             if (response.statusCode() >= 400) {
-                log.error("[MCP HTTP] Server returned error: {} {}", response.statusCode(), body);
+                log.error("[MCP HTTP] 服务器返回错误: {} {}", response.statusCode(), body);
                 throw new IOException("MCP HTTP error: " + response.statusCode() + " - " + body);
             }
 
@@ -190,13 +190,13 @@ public class McpHttpTransport implements McpTransport {
                 }
             } else if (response.statusCode() == 202) {
                 // 已接受，响应将通过 SSE 流异步到达
-                log.debug("[MCP HTTP] Request accepted (202), response will arrive via SSE stream");
+                log.debug("[MCP HTTP] 请求已接受 (202)，响应将通过 SSE 流异步到达");
             }
 
         } catch (IOException e) {
             throw e;
         } catch (Exception e) {
-            throw new IOException("MCP HTTP send failed: " + e.getMessage(), e);
+            throw new IOException("MCP HTTP 发送失败: " + e.getMessage(), e);
         }
     }
 
@@ -224,7 +224,7 @@ public class McpHttpTransport implements McpTransport {
         if (sseThread != null) {
             sseThread.interrupt();
         }
-        log.info("[MCP HTTP] Transport closed for: {}", serverUrl);
+        log.info("[MCP HTTP] 传输层已关闭: {}", serverUrl);
     }
 
     /** 获取当前会话 ID */

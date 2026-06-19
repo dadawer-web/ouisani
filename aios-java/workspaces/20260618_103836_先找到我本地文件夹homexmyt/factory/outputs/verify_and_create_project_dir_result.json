@@ -1,0 +1,14 @@
+{
+  "success": true,
+  "path": "/tmp/test_verify_project",
+  "existed": false,
+  "created_directories": [
+    "src",
+    "tests",
+    "docs",
+    "build",
+    "logs",
+    "outputs"
+  ],
+  "message": "Project directory created with full structure"
+}

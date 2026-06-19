@@ -1,0 +1,7 @@
+/home/xmy/tryaios/aios-java/workspaces/20260618_103836_先找到我本地文件夹homexmyt/factory/cpp_project/build/CMakeFiles/my_app.dir
+/home/xmy/tryaios/aios-java/workspaces/20260618_103836_先找到我本地文件夹homexmyt/factory/cpp_project/build/CMakeFiles/edit_cache.dir
+/home/xmy/tryaios/aios-java/workspaces/20260618_103836_先找到我本地文件夹homexmyt/factory/cpp_project/build/CMakeFiles/rebuild_cache.dir
+/home/xmy/tryaios/aios-java/workspaces/20260618_103836_先找到我本地文件夹homexmyt/factory/cpp_project/build/CMakeFiles/list_install_components.dir
+/home/xmy/tryaios/aios-java/workspaces/20260618_103836_先找到我本地文件夹homexmyt/factory/cpp_project/build/CMakeFiles/install.dir
+/home/xmy/tryaios/aios-java/workspaces/20260618_103836_先找到我本地文件夹homexmyt/factory/cpp_project/build/CMakeFiles/install/local.dir
+/home/xmy/tryaios/aios-java/workspaces/20260618_103836_先找到我本地文件夹homexmyt/factory/cpp_project/build/CMakeFiles/install/strip.dir

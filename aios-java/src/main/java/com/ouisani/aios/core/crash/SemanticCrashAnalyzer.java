@@ -914,7 +914,7 @@ public final class SemanticCrashAnalyzer {
                 dumpJson = coreDump.toJson();
             } catch (Exception toJsonError) {
                 // toJson 自身崩溃 — 写入最小化 fallback
-                log.warn("[CrashAnalyzer] coreDump.toJson() failed, writing minimal fallback: {}",
+                log.warn("[CrashAnalyzer] coreDump.toJson() 失败，写入最小回退: {}",
                         toJsonError.getMessage());
                 dumpJson = "{\"crashInfo\":{\"agentId\":\"" + escJson(agentId)
                         + "\",\"exceptionClass\":\"" + escJson(coreDump.crashInfo().exceptionClass())
@@ -935,7 +935,7 @@ public final class SemanticCrashAnalyzer {
                 dumpNode.write(dumpJson);
                 VfsManager.instance().mount("/var/crash", "dump_" + agentId + ".aios", dumpNode);
             }
-            log.info("[CrashAnalyzer] Core dump written to {}", crashPath);
+            log.info("[CrashAnalyzer] 核心转储已写入 {}", crashPath);
             System.out.printf("  [CrashAnalyzer] Core dump written to %s (%d bytes)%n",
                     crashPath, dumpJson.length());
         } catch (Exception e) {

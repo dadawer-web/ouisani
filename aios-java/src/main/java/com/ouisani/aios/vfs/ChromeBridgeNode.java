@@ -242,8 +242,8 @@ public non-sealed class ChromeBridgeNode implements VfsNode {
 
                 cachedState = new BrowserState(true, cachedState.activeTab, cachedState.tabs);
 
-                log.info("[ChromeBridge] Browser extension connected: sessionId={}", sessionId);
-                System.out.printf("  [ChromeBridge] Browser extension connected: %s%n", sessionId);
+                log.info("[ChromeBridge] 浏览器扩展已连接: sessionId={}", sessionId);
+                System.out.printf("  [ChromeBridge] 浏览器扩展已连接: %s%n", sessionId);
             });
 
             ws.onMessage(ctx -> {
@@ -280,7 +280,7 @@ public non-sealed class ChromeBridgeNode implements VfsNode {
 
         try {
             wsServer.start("0.0.0.0", port);
-            log.info("[ChromeBridge] WebSocket server started on port {}", port);
+            log.info("[ChromeBridge] WebSocket 服务器已在端口 {} 启动", port);
             System.out.printf("  ✓ [ChromeBridge] WebSocket server on port %d (ws://localhost:%d/ws/browser)%n", port, port);
         } catch (Exception e) {
             log.error("[ChromeBridge] Failed to start WebSocket server: {}", e.getMessage());
@@ -295,7 +295,7 @@ public non-sealed class ChromeBridgeNode implements VfsNode {
             wsServer.stop();
             sessions.clear();
             cachedState = new BrowserState(false, null, List.of());
-            log.info("[ChromeBridge] WebSocket server stopped");
+            log.info("[ChromeBridge] WebSocket 服务器已停止");
         }
     }
 

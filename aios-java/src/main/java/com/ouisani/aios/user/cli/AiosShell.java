@@ -95,7 +95,7 @@ public class AiosShell extends AbstractAgent {
 
     @Override
     protected void onStart() {
-        log.info("[AiosShell] Starting as interactive shell agent...");
+        log.info("[AiosShell] 正在启动交互式 Shell Agent...");
 
         // 设置算力亲和性 — 绑定 E_CORE
         // Shell 的命令解析是轻量级任务，不需要旗舰模型
@@ -115,9 +115,9 @@ public class AiosShell extends AbstractAgent {
     private void printReadyPrompt() {
         System.out.println();
         System.out.println(ANSI_CYAN + "  ┌─────────────────────────────────────────────────────────┐");
-        System.out.println("  │  AIOS Shell Ready                                       │");
-        System.out.println("  │  Type naturally or use '/' for raw syscalls             │");
-        System.out.println("  │  Type 'exit' to halt the system                         │");
+        System.out.println("  │  AIOS Shell 就绪                                        │");
+        System.out.println("  │  自然语言输入意图，或使用 '/' 执行原生 Syscall            │");
+        System.out.println("  │  输入 'exit' 停止系统                                    │");
         System.out.println("  └─────────────────────────────────────────────────────────┘" + ANSI_RESET);
         System.out.println();
         System.out.print(PROMPT);
@@ -141,8 +141,8 @@ public class AiosShell extends AbstractAgent {
                 }
 
                 if (input.equalsIgnoreCase("exit")) {
-                    System.out.println(ANSI_RED + "Initiating system halt... Goodbye." + ANSI_RESET);
-                    SemanticEtw.getInstance().logEvent("AiosShell", "SYSTEM_HALT", "User exited shell");
+                    System.out.println(ANSI_RED + "正在执行系统停机... 再见。" + ANSI_RESET);
+                    SemanticEtw.getInstance().logEvent("AiosShell", "SYSTEM_HALT", "用户退出 Shell");
                     exit();
                     break;
                 }
@@ -157,7 +157,7 @@ public class AiosShell extends AbstractAgent {
                         handleNaturalLanguage(input, router);
                     }
                 } catch (Exception e) {
-                    System.out.println(ANSI_RED + "[Error] " + e.getMessage() + ANSI_RESET);
+                    System.out.println(ANSI_RED + "[错误] " + e.getMessage() + ANSI_RESET);
                 }
 
                 System.out.print(PROMPT);
@@ -179,7 +179,7 @@ public class AiosShell extends AbstractAgent {
      * 绝不使用 startsWith/equals/正则表达式等硬编码匹配。
      */
     private void handleNaturalLanguage(String input, IntentRouter router) {
-        System.out.println(ANSI_CYAN + ">> Semantic routing via LLM..." + ANSI_RESET);
+        System.out.println(ANSI_CYAN + ">> 通过 LLM 语义路由..." + ANSI_RESET);
 
         try {
             IntentRouter.RouteResult result = router.route(input);
@@ -190,7 +190,7 @@ public class AiosShell extends AbstractAgent {
                 }
                 case WORKFLOW_DEPLOY -> {
                     System.out.println(ANSI_CYAN + "  [WORKFLOW_DEPLOY] " + ANSI_RESET + result.response());
-                    System.out.println(ANSI_GREEN + ">> Mother Agent dispatched in background. Check TaskScheduler logs for progress." + ANSI_RESET);
+                    System.out.println(ANSI_GREEN + ">> Mother Agent 已在后台调度。请查看 TaskScheduler 日志了解进度。" + ANSI_RESET);
                 }
                 case SEMANTIC_SEARCH -> {
                     System.out.println(ANSI_CYAN + "  [SEMANTIC_SEARCH] " + ANSI_RESET + result.response());
@@ -200,7 +200,7 @@ public class AiosShell extends AbstractAgent {
                 }
             }
         } catch (Exception e) {
-            System.out.println(ANSI_RED + "[Error] Semantic routing failed: " + e.getMessage() + ANSI_RESET);
+            System.out.println(ANSI_RED + "[错误] 语义路由失败：" + e.getMessage() + ANSI_RESET);
         }
     }
 
@@ -223,13 +223,13 @@ public class AiosShell extends AbstractAgent {
             request = new SyscallRequest(action, Map.of());
         }
 
-        System.out.println(ANSI_CYAN + ">> Syscall: " + action + ANSI_RESET);
+        System.out.println(ANSI_CYAN + ">> Syscall：" + action + ANSI_RESET);
         SyscallResponse response = dispatcher.execute("aios_shell", request);
 
         if (response.success()) {
             System.out.println(ANSI_GREEN + response.data() + ANSI_RESET);
         } else {
-            System.out.println(ANSI_RED + "Error: " + response.errorMessage() + ANSI_RESET);
+            System.out.println(ANSI_RED + "错误：" + response.errorMessage() + ANSI_RESET);
         }
     }
 
@@ -237,7 +237,7 @@ public class AiosShell extends AbstractAgent {
     protected void onMessage(String msg) {
         // 外部消息直接输出到终端
         System.out.println();
-        System.out.println(ANSI_CYAN + "[Message] " + msg + ANSI_RESET);
+        System.out.println(ANSI_CYAN + "[消息] " + msg + ANSI_RESET);
         System.out.print(PROMPT);
     }
 
@@ -271,8 +271,8 @@ public class AiosShell extends AbstractAgent {
         TaskScheduler scheduler = new TaskScheduler();
         scheduler.start();
         com.ouisani.aios.user.bin.AiosAppManager.configure(scheduler);
-        System.out.println("  ✓ TaskScheduler started");
-        System.out.println("  ✓ [InitDaemon] AiosAppManager explicitly configured with TaskScheduler.");
+        System.out.println("  ✓ TaskScheduler 已启动");
+        System.out.println("  ✓ [InitDaemon] AiosAppManager 已显式配置 TaskScheduler。");
 
         // 2. LLM Router
         LlmRouter llmRouter = new LlmRouter();
@@ -288,10 +288,10 @@ public class AiosShell extends AbstractAgent {
             llmRouter.registerProvider("fast_model", adapter);
             llmRouter.registerProvider("smart_model", adapter);
             VfsManager.instance().configureLlmProvider(adapter);
-            System.out.printf("  ✓ LLM: %s @ %s (key → vault handle: %s)%n", model, baseUrl,
+            System.out.printf("  ✓ LLM：%s @ %s（密钥 → 保管库句柄：%s）%n", model, baseUrl,
                     com.ouisani.aios.core.security.SecretVault.instance().getHandle("llm", "openai"));
         } else {
-            System.out.println("  ⚠ No OPENAI_API_KEY — LLM unavailable");
+            System.out.println("  ⚠ 未设置 OPENAI_API_KEY — LLM 不可用");
         }
 
         // 2.1 Multimodal Provider — mimo-v2.5 等多模态模型（Computer Use 视觉理解）
@@ -304,10 +304,10 @@ public class AiosShell extends AbstractAgent {
             com.ouisani.aios.core.security.SecretVault.instance().registerSecret("llm", "multimodal", mmApiKey);
             OpenAiAdapter multimodalAdapter = new OpenAiAdapter(mmApiKey, mmBaseUrl, mmModel);
             llmRouter.registerProvider("multimodal", multimodalAdapter);
-            System.out.printf("  ✓ Multimodal: %s @ %s (key → vault handle: %s)%n", mmModel, mmBaseUrl,
+            System.out.printf("  ✓ 多模态：%s @ %s（密钥 → 保管库句柄：%s）%n", mmModel, mmBaseUrl,
                     com.ouisani.aios.core.security.SecretVault.instance().getHandle("llm", "multimodal"));
         } else {
-            System.out.println("  ⚠ No MULTIMODAL_* config — Computer Use vision disabled (screenshot without understanding)");
+            System.out.println("  ⚠ 未配置 MULTIMODAL_* — Computer Use 视觉功能已禁用（截图无法理解）");
         }
 
         // 2.5 WebSearchTool — 注入 Serper API Key
@@ -316,26 +316,37 @@ public class AiosShell extends AbstractAgent {
             // 【安全修复】Serper Key 注册到 SecretVault
             com.ouisani.aios.core.security.SecretVault.instance().registerSecret("search", "serper", serperKey);
             com.ouisani.aios.core.plugin.WebSearchTool.configureSerperApiKey(serperKey);
-            System.out.println("  ✓ WebSearch: Serper API configured (key → vault handle: "
+            System.out.println("  ✓ WebSearch：Serper API 已配置（密钥 → 保管库句柄："
                     + com.ouisani.aios.core.security.SecretVault.instance().getHandle("search", "serper") + ")");
         } else {
-            System.out.println("  ⚠ No SERPER_API_KEY — web search will try Jina (may timeout in China)");
+            System.out.println("  ⚠ 未设置 SERPER_API_KEY — 网页搜索将尝试 Jina（在中国可能超时）");
         }
 
         // 3. VfsManager
         VfsManager.instance().configureTaskScheduler(scheduler);
         VfsManager.instance().init();
-        System.out.println("  ✓ VfsManager initialized");
+
+        // 注册 /factory/ 全局默认物理工作目录 — 仅作为兜底映射
+        // 实际工作流执行时会按 workflowId 注册专属映射，优先级高于此全局映射
+        String factoryPhysicalDir = com.ouisani.aios.core.config.AiosPaths.aiosHome() + "/workspaces/_default/factory";
+        try {
+            java.nio.file.Files.createDirectories(java.nio.file.Path.of(factoryPhysicalDir));
+        } catch (java.io.IOException e) {
+            System.err.println("  ⚠ 无法创建默认工厂目录: " + e.getMessage());
+        }
+        VfsManager.instance().registerPhysicalWorkspace("/factory", factoryPhysicalDir);
+
+        System.out.println("  ✓ VfsManager 已初始化（/factory 默认映射 → " + factoryPhysicalDir + "）");
 
         // 4. CgroupManager
         CgroupManager.instance().init();
-        System.out.println("  ✓ CgroupManager initialized");
+        System.out.println("  ✓ CgroupManager 已初始化");
 
         // 5. SyscallDispatcher + IntentRouter
         if (!apiKey.isEmpty()) {
             SyscallDispatcher.getInstance().configure(llmRouter, VfsManager.instance(), ObjectManager.instance());
             IntentRouter.getInstance().configure(llmRouter, SyscallDispatcher.getInstance());
-            System.out.println("  ✓ SyscallDispatcher + IntentRouter configured");
+            System.out.println("  ✓ SyscallDispatcher + IntentRouter 已配置");
         }
 
         // 6. SyscallServer (HTTP/WebSocket 网关 — 前端连接端口 8080)
@@ -343,16 +354,20 @@ public class AiosShell extends AbstractAgent {
         McpServer mcpServer = new McpServer();
         SyscallServer syscallServer = new SyscallServer(scheduler, mcpServer);
         syscallServer.start(httpPort);
-        System.out.printf("  ✓ SyscallServer started on port %d (HTTP + WebSocket + SSE)%n", httpPort);
+        System.out.printf("  ✓ SyscallServer 已在端口 %d 启动（HTTP + WebSocket + SSE）%n", httpPort);
 
         // 7. SystemMonitorDaemon (遥测心跳 — 每秒采集系统指标)
         com.ouisani.aios.core.telemetry.SystemMonitorDaemon.getInstance().configure(scheduler);
         com.ouisani.aios.core.telemetry.SystemMonitorDaemon.getInstance().start();
-        System.out.println("  ✓ SystemMonitorDaemon started (1s telemetry interval)");
+        System.out.println("  ✓ SystemMonitorDaemon 已启动（1秒遥测间隔）");
+
+        // 8. HeartbeatScheduler (心跳调度器 — Agent 按需唤醒)
+        com.ouisani.aios.core.lifecycle.HeartbeatScheduler.instance().start();
+        System.out.println("  ✓ HeartbeatScheduler 已启动（由 SystemTick 驱动）");
 
         System.out.println();
-        System.out.println("Welcome to AIOS. Type your intent naturally, or use '/' for raw syscalls.");
-        System.out.println("Type 'exit' to halt the system.\n");
+        System.out.println("欢迎使用 AIOS。自然语言输入意图，或使用 '/' 执行原生 Syscall。");
+        System.out.println("输入 'exit' 停止系统。\n");
 
         // ── REPL ──
         Scanner scanner = new Scanner(System.in);
@@ -364,8 +379,8 @@ public class AiosShell extends AbstractAgent {
             String input = scanner.nextLine().trim();
 
             if (input.equalsIgnoreCase("exit")) {
-                System.out.println("Initiating system halt... Goodbye.");
-                SemanticEtw.getInstance().logEvent("AiosShell", "SYSTEM_HALT", "User exited shell");
+                System.out.println("正在执行系统停机... 再见。");
+                SemanticEtw.getInstance().logEvent("AiosShell", "SYSTEM_HALT", "用户退出 Shell");
                 break;
             }
 
@@ -386,28 +401,28 @@ public class AiosShell extends AbstractAgent {
                     } else {
                         request = new SyscallRequest(action, Map.of());
                     }
-                    System.out.println(ANSI_CYAN + ">> Syscall: " + action + ANSI_RESET);
+                    System.out.println(ANSI_CYAN + ">> Syscall：" + action + ANSI_RESET);
                     SyscallResponse response = dispatcher.execute("root_cli", request);
                     if (response.success()) {
-                        System.out.println(ANSI_GREEN + "Response: " + response.data() + ANSI_RESET);
+                        System.out.println(ANSI_GREEN + "响应：" + response.data() + ANSI_RESET);
                     } else {
-                        System.out.println(ANSI_RED + "Error: " + response.errorMessage() + ANSI_RESET);
+                        System.out.println(ANSI_RED + "错误：" + response.errorMessage() + ANSI_RESET);
                     }
                 } else {
-                    System.out.println(ANSI_CYAN + ">> Semantic routing via LLM..." + ANSI_RESET);
+                    System.out.println(ANSI_CYAN + ">> 通过 LLM 语义路由..." + ANSI_RESET);
                     IntentRouter.RouteResult result = router.route(input);
                     switch (result.intentType()) {
                         case SYSTEM_COMMAND -> System.out.println(ANSI_CYAN + "  [SYSTEM_COMMAND] " + ANSI_RESET + result.response());
                         case WORKFLOW_DEPLOY -> {
                             System.out.println(ANSI_CYAN + "  [WORKFLOW_DEPLOY] " + ANSI_RESET + result.response());
-                            System.out.println(ANSI_GREEN + ">> Mother Agent dispatched." + ANSI_RESET);
+                            System.out.println(ANSI_GREEN + ">> Mother Agent 已调度。" + ANSI_RESET);
                         }
                         case SEMANTIC_SEARCH -> System.out.println(ANSI_CYAN + "  [SEMANTIC_SEARCH] " + ANSI_RESET + result.response());
                         case CHAT -> System.out.println(ANSI_GREEN + result.response() + ANSI_RESET);
                     }
                 }
             } catch (Exception e) {
-                System.out.println(ANSI_RED + "[Kernel Panic] " + e.getMessage() + ANSI_RESET);
+                System.out.println(ANSI_RED + "[内核异常] " + e.getMessage() + ANSI_RESET);
             }
         }
         scanner.close();
@@ -415,8 +430,24 @@ public class AiosShell extends AbstractAgent {
 
     private static Map<String, String> loadDotEnv(Path dotEnvPath) {
         Map<String, String> env = new HashMap<>();
-        if (!Files.exists(dotEnvPath)) return env;
-        try (BufferedReader reader = Files.newBufferedReader(dotEnvPath)) {
+
+        // 优先加载项目根目录上层的 .env（/home/xmy/tryaios/.env）
+        Path parentEnv = Path.of(System.getProperty("user.dir")).getParent().resolve(".env");
+        if (Files.exists(parentEnv)) {
+            loadEnvFile(parentEnv, env);
+            System.out.println("  ✓ 已加载 .env：" + parentEnv);
+        }
+
+        // 再加载 aiosHome/.env（会覆盖上层同 key）
+        if (Files.exists(dotEnvPath)) {
+            loadEnvFile(dotEnvPath, env);
+        }
+
+        return env;
+    }
+
+    private static void loadEnvFile(Path path, Map<String, String> env) {
+        try (BufferedReader reader = Files.newBufferedReader(path)) {
             String line;
             while ((line = reader.readLine()) != null) {
                 line = line.trim();
@@ -429,8 +460,7 @@ public class AiosShell extends AbstractAgent {
                 }
             }
         } catch (IOException e) {
-            System.out.println("  ⚠ Failed to read .env: " + e.getMessage());
+            System.out.println("  ⚠ 读取 .env 失败：" + e.getMessage());
         }
-        return env;
     }
 }

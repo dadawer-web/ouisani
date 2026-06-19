@@ -150,7 +150,7 @@ public final class BpfManager implements SyscallFilter {
 
     private BpfManager() {
         registerBuiltinRules();
-        log.info("[BpfManager] Semantic eBPF engine initialized: {} builtin rules", builtinRules.size());
+        log.info("[BpfManager] 语义 eBPF 引擎已初始化: {} 条内置规则", builtinRules.size());
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -183,13 +183,13 @@ public final class BpfManager implements SyscallFilter {
 
                 SemanticEtw.getInstance().logEvent("SECURITY", "BPF_INTERCEPT", auditPayload);
 
-                log.warn("[BpfManager] INTERCEPTED: rule={}, agent={}, action={}, threat={}, reason={}",
+                log.warn("[BpfManager] 已拦截: 规则={}, Agent={}, 操作={}, 威胁={}, 原因={}",
                         rule.id(), agentId, request.fullAction(), verdict.level(), verdict.reason());
 
                 // HIGH 及以上威胁等级直接拦截
                 if (verdict.level().severity >= ThreatLevel.HIGH.severity) {
                     throw new SecurityException(String.format(
-                            "[Semantic eBPF] Agent '%s' blocked by rule '%s': %s",
+                            "[语义 eBPF] Agent '%s' 被规则 '%s' 拦截: %s",
                             agentId, rule.id(), verdict.reason()));
                 }
             }
@@ -455,7 +455,7 @@ public final class BpfManager implements SyscallFilter {
         // 委托给旧的 evaluatePrompt 逻辑
         if (!evaluatePrompt(agentId, prompt)) {
             throw new SecurityException(
-                    "[Semantic eBPF] Agent '" + agentId + "' blocked by JS probe");
+                    "[语义 eBPF] Agent '" + agentId + "' 被 JS 探针拦截");
         }
     }
 
@@ -519,7 +519,7 @@ public final class BpfManager implements SyscallFilter {
      */
     public void attachProbe(String name, String jsCode) {
         jsProbes.put(name, jsCode);
-        log.info("[BpfManager] JS probe '{}' attached ({} chars)", name, jsCode.length());
+        log.info("[BpfManager] JS 探针 '{}' 已附加 ({} 字符)", name, jsCode.length());
     }
 
     /**
@@ -527,7 +527,7 @@ public final class BpfManager implements SyscallFilter {
      */
     public void detachProbe(String name) {
         jsProbes.remove(name);
-        log.info("[BpfManager] JS probe '{}' detached", name);
+        log.info("[BpfManager] JS 探针 '{}' 已分离", name);
     }
 
     /**
@@ -552,11 +552,11 @@ public final class BpfManager implements SyscallFilter {
                 if (result.isBoolean() && !result.asBoolean()) {
                     SemanticEtw.getInstance().logEvent("SECURITY", "JS_PROBE_BLOCK",
                             "agent=" + agentId + " probe=" + probeName);
-                    log.warn("[BpfManager] JS probe '{}' blocked agent '{}'", probeName, agentId);
+                    log.warn("[BpfManager] JS 探针 '{}' 拦截了 Agent '{}'", probeName, agentId);
                     return false;
                 }
             } catch (Exception e) {
-                log.warn("[BpfManager] JS probe '{}' error: {}", probeName, e.getMessage());
+                log.warn("[BpfManager] JS 探针 '{}' 错误: {}", probeName, e.getMessage());
             }
         }
 

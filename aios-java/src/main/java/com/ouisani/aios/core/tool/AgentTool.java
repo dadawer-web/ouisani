@@ -25,8 +25,8 @@ public class AgentTool implements Tool<AgentTool.Input> {
     private static final Logger log = LoggerFactory.getLogger(AgentTool.class);
 
     static {
-        log.info("[Kernel] Hardcoded BuiltinAgentType removed. Strict VFS-driven spawning enforced.");
-        System.out.println("[Kernel] Hardcoded BuiltinAgentType removed. Strict VFS-driven spawning enforced.");
+        log.info("[Kernel] 硬编码 BuiltinAgentType 已移除。严格 VFS 驱动生成已强制执行。");
+        System.out.println("[Kernel] 硬编码 BuiltinAgentType 已移除。严格 VFS 驱动生成已强制执行。");
     }
 
     /**
@@ -79,10 +79,10 @@ public class AgentTool implements Tool<AgentTool.Input> {
         String agentId = "sub_" + System.currentTimeMillis();
         String prompt = buildPrompt(input);
 
-        log.info("[AgentTool] Launching sub-agent: blueprint={}, background={}",
+        log.info("[AgentTool] 正在启动子 Agent: blueprint={}, background={}",
                 input.blueprintPath().isEmpty() ? "(generic)" : input.blueprintPath(),
                 input.runInBackground());
-        System.out.printf("[AgentTool] ├─ Launching sub-agent: blueprint=%s%n",
+        System.out.printf("[AgentTool] ├─ 正在启动子 Agent: blueprint=%s%n",
                 input.blueprintPath().isEmpty() ? "(generic)" : input.blueprintPath());
 
         if (input.runInBackground()) {
@@ -122,7 +122,7 @@ public class AgentTool implements Tool<AgentTool.Input> {
         // 尝试从 VFS 读取蓝图
         String blueprintContent = VfsManager.instance().readText(input.blueprintPath());
         if (blueprintContent != null) {
-            log.info("[AgentTool] Blueprint loaded from VFS: {} ({} bytes)",
+            log.info("[AgentTool] Blueprint 已从 VFS 加载: {} ({} bytes)",
                     input.blueprintPath(), blueprintContent.length());
             return "你是一个由蓝图定义的智能体。蓝图内容如下：\n"
                     + "```json\n" + blueprintContent + "\n```\n\n"
@@ -131,7 +131,7 @@ public class AgentTool implements Tool<AgentTool.Input> {
         }
 
         // VFS 中不存在 — 可能是 Docker 镜像名
-        log.info("[AgentTool] Blueprint not found in VFS, treating as Docker image: {}", input.blueprintPath());
+        log.info("[AgentTool] Blueprint 在 VFS 中未找到，视为 Docker 镜像: {}", input.blueprintPath());
         return input.prompt();
     }
 

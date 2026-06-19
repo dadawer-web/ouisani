@@ -238,7 +238,7 @@ public final class AiosApt {
                 // 有字节码 — 注册为 WASM 插件
                 byte[] bytecode = Base64.getDecoder().decode(manifest.pluginBytecodeBase64());
                 pm.registerPlugin(manifest.name(), bytecode);
-                log.info("[AiosApt] Plugin registered: {} ({} bytes)", manifest.name(), bytecode.length);
+                log.info("[AiosApt] 插件已注册: {} ({} bytes)", manifest.name(), bytecode.length);
             } else {
                 // 无字节码 — 仅注册工具 Schema
                 if (manifest.toolSchema() != null && !manifest.toolSchema().isBlank()) {
@@ -250,7 +250,7 @@ public final class AiosApt {
                             0,
                             "apt:" + manifest.name()
                     ));
-                    log.info("[AiosApt] Tool schema registered: {}", manifest.name());
+                    log.info("[AiosApt] 工具 Schema 已注册: {}", manifest.name());
                 }
             }
 
@@ -335,7 +335,7 @@ public final class AiosApt {
                 log.info("[AiosApt] Knowledge vectorized: {} → {} chunks → {}",
                         manifest.name(), chunks.length, KNOWLEDGE_VFS_PATH);
             } else {
-                log.warn("[AiosApt] Knowledge vectorization skipped: no VectorNode at {}", KNOWLEDGE_VFS_PATH);
+                log.warn("[AiosApt] 知识向量化已跳过: {}", manifest.name());
             }
 
         } catch (Exception e) {
@@ -417,7 +417,7 @@ public final class AiosApt {
      */
     public void update() {
         repository.refresh();
-        log.info("[AiosApt] Package index updated ({} packages available)",
+        log.info("[AiosApt] 包索引已更新 ({} 个可用包)",
                 repository.packageCount());
         SemanticEtw.getInstance().logEvent("APT", "UPDATE",
                 "packages=" + repository.packageCount());
@@ -482,7 +482,7 @@ public final class AiosApt {
             visiting.add(dep);
             PackageManifest depManifest = repository.fetch(dep);
             if (depManifest == null) {
-                log.error("[AiosApt] Dependency not found: {} (required by {})", dep, manifest.name());
+                log.error("[AiosApt] 依赖未找到: {} (被 {} 依赖)", dep, manifest.name());
                 return false;
             }
 

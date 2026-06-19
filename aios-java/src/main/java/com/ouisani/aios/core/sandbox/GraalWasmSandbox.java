@@ -106,9 +106,9 @@ public class GraalWasmSandbox implements SandboxProvider {
         // 先尝试带选项构建，失败则回退到无选项构建
         try {
             context = ctxBuilder.option("wasm.MaxMemoryPages", "1024").build();
-            log.info("[Sandbox] WASM context created with MaxMemoryPages=1024");
+            log.info("[Sandbox] WASM 上下文已创建，MaxMemoryPages=1024");
         } catch (IllegalArgumentException e) {
-            log.warn("[Sandbox] wasm.MaxMemoryPages not available (fallback runtime), creating without memory limit option");
+            log.warn("[Sandbox] wasm.MaxMemoryPages 不可用（回退运行时），创建时无内存限制选项");
             context = Context.newBuilder("wasm").allowAllAccess(false).build();
         }
 
@@ -141,7 +141,7 @@ public class GraalWasmSandbox implements SandboxProvider {
 
             // 路径安全检查 — 防止路径遍历
             if (isPathTraversal(path)) {
-                log.warn("[Ring3] __aios_vfs_read: PATH TRAVERSAL BLOCKED: {}", path);
+                log.warn("[Ring3] __aios_vfs_read: 路径遍历已阻止: {}", path);
                 return -1; // EACCES
             }
 
@@ -155,7 +155,7 @@ public class GraalWasmSandbox implements SandboxProvider {
                 if (content == null) return 0;
                 return Math.min(content.length(), maxLen);
             } catch (Exception e) {
-                log.error("[Ring3] __aios_vfs_read error: path={}, error={}", path, e.getMessage());
+                log.error("[Ring3] __aios_vfs_read 错误: path={}, error={}", path, e.getMessage());
                 return -1;
             }
         });
@@ -167,7 +167,7 @@ public class GraalWasmSandbox implements SandboxProvider {
 
             // 限制 prompt 长度，防止 Token 滥用
             if (prompt.length() > 8000) {
-                log.warn("[Ring3] __aios_think: prompt too long ({}), truncating", prompt.length());
+                log.warn("[Ring3] __aios_think: Prompt 过长 ({}), 正在截断", prompt.length());
                 prompt = prompt.substring(0, 8000);
             }
 
@@ -180,7 +180,7 @@ public class GraalWasmSandbox implements SandboxProvider {
                 if (response == null) return 0;
                 return Math.min(response.length(), maxLen);
             } catch (Exception e) {
-                log.error("[Ring3] __aios_think error: {}", e.getMessage());
+                log.error("[Ring3] __aios_think 错误: {}", e.getMessage());
                 return -1;
             }
         });
@@ -193,12 +193,12 @@ public class GraalWasmSandbox implements SandboxProvider {
 
         try {
             context.getBindings("wasm").putMember("aios_env", aiosEnv);
-            log.info("[Sandbox] Ring 3 environment registered: __aios_syscall, __aios_log, "
+            log.info("[Sandbox] Ring 3 环境已注册: __aios_syscall, __aios_log, "
                     + "__aios_vfs_read, __aios_think, __aios_resource_check");
         } catch (UnsupportedOperationException e) {
-            log.warn("[Sandbox] putMember not supported by WASM global scope (GraalVM limitation)");
-            log.warn("[Sandbox] aios_env ProxyExecutable map created but not injected into WASM bindings");
-            log.warn("[Sandbox] For WASM modules that import aios_env, a JS bridge layer is required");
+            log.warn("[Sandbox] WASM 全局作用域不支持 putMember（GraalVM 限制）");
+            log.warn("[Sandbox] aios_env ProxyExecutable 映射已创建但未注入 WASM 绑定");
+            log.warn("[Sandbox] 对于导入 aios_env 的 WASM 模块，需要 JS 桥接层");
         }
     }
 
@@ -247,7 +247,7 @@ public class GraalWasmSandbox implements SandboxProvider {
 
             // ── 执行成功 ──
             instance.markCompleted();
-            log.debug("[Ring3] Execution completed: instanceId={}, result={}", instanceId, result);
+            log.debug("[Ring3] 执行完成: instanceId={}, result={}", instanceId, result);
 
             return result;
 
@@ -357,11 +357,11 @@ public class GraalWasmSandbox implements SandboxProvider {
                 + " cause=" + cause.getMessage());
 
         log.error("[Ring3] ╔══════════════════════════════════════════════════╗");
-        log.error("[Ring3] ║  SANDBOX FAULT: {}                       ║", faultType);
-        log.error("[Ring3] ║  Instance: {}                       ║", instanceId);
-        log.error("[Ring3] ║  Cause: {}                             ║",
+        log.error("[Ring3] ║  沙箱故障: {}                       ║", faultType);
+        log.error("[Ring3] ║  实例: {}                       ║", instanceId);
+        log.error("[Ring3] ║  原因: {}                             ║",
                 cause.getMessage() != null ? cause.getMessage().substring(0, Math.min(40, cause.getMessage().length())) : "unknown");
-        log.error("[Ring3] ║  Action: SANDBOX DESTROYED, SIGSEGV sent      ║");
+        log.error("[Ring3] ║  操作: Sandbox 已销毁，SIGSEGV 已发送      ║");
         log.error("[Ring3] ╚══════════════════════════════════════════════════╝");
 
         // 返回一个安全的错误值，而不是抛出异常
@@ -428,16 +428,16 @@ public class GraalWasmSandbox implements SandboxProvider {
             SyscallResponse response = dispatcher.execute("sandbox_proxy", request);
 
             if (response.success()) {
-                log.debug("[Ring3→Ring0] Syscall OK: action={}", action);
+                log.debug("[Ring3→Ring0] Syscall 成功: action={}", action);
                 return 0; // 成功
             } else {
-                log.warn("[Ring3→Ring0] Syscall DENIED: action={}, error={}",
+                log.warn("[Ring3→Ring0] Syscall 被拒绝: action={}, error={}",
                         action, response.errorMessage());
                 return -1; // EPERM
             }
 
         } catch (Exception e) {
-            log.error("[Ring3→Ring0] Syscall proxy error: action={}, error={}", action, e.getMessage());
+            log.error("[Ring3→Ring0] Syscall 代理错误: action={}, error={}", action, e.getMessage());
             return -1; // EFAULT
         }
     }
@@ -452,7 +452,7 @@ public class GraalWasmSandbox implements SandboxProvider {
         try {
             wasmBytes = hexToBytes(code);
         } catch (Exception e) {
-            log.debug("[GraalWasmSandbox] Code is not valid hex, using mock WASM bytecode");
+            log.debug("[GraalWasmSandbox] 代码不是有效的十六进制，使用模拟 WASM 字节码");
             wasmBytes = new byte[]{
                     0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
                     0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f, 0x03,
@@ -480,7 +480,7 @@ public class GraalWasmSandbox implements SandboxProvider {
      */
     public void setResourceLimit(SandboxResourceLimit limits) {
         this.currentLimits = limits;
-        log.info("[Sandbox] Resource limits updated: maxCpuCycles={}, maxMemory={}MB, maxStackDepth={}",
+        log.info("[Sandbox] 资源限制已更新: maxCpuCycles={}, maxMemory={}MB, maxStackDepth={}",
                 limits.maxCpuCycles(), limits.maxMemoryBytes() / (1024 * 1024), limits.maxStackDepth());
     }
 

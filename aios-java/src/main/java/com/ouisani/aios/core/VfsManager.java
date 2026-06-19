@@ -70,17 +70,22 @@ public final class VfsManager {
     private volatile TaskScheduler taskScheduler;
     private volatile Javalin javalinApp;
 
+    // ── 磁盘降级模式标志（借鉴 Langflow Noop 设计） ──
+    private volatile boolean diskDegraded = false;
+
+    public boolean isDiskDegraded() { return diskDegraded; }
+
     private VfsManager() {
     }
 
     public void configureLlmProvider(LlmProvider provider) {
         this.defaultLlmProvider = provider;
-        log.info("LlmProvider configured: {}", provider.name());
+        log.info("LlmProvider 已配置: {}", provider.name());
     }
 
     public void configureTaskScheduler(TaskScheduler scheduler) {
         this.taskScheduler = scheduler;
-        log.info("TaskScheduler configured for /proc filesystem");
+        log.info("TaskScheduler 已配置，用于 /proc 文件系统");
     }
 
     /**
@@ -89,29 +94,51 @@ public final class VfsManager {
      * 注册后，所有通过 writeText 写入该前缀下的新文件，
      * 将自动创建 HostSourceNode 并写入物理磁盘，而非内存中的 MutableFileNode。
      * 类比 Linux 的 bind mount：mount --bind /physical/dir /vfs/dir
+     * <p>
+     * 支持按 workflowId 隔离：使用 {@code /factory/{workflowId}} 前缀，
+     * 不同工作流的文件映射到各自独立的物理目录，避免互相覆盖。
      *
-     * @param vfsPrefix    VFS 路径前缀（如 "/factory"）
-     * @param physicalDir  物理磁盘目录（如 "/home/user/aios_workspace_app1"）
+     * @param vfsPrefix    VFS 路径前缀（如 "/factory" 或 "/factory/wf_a1b2c3d4"）
+     * @param physicalDir  物理磁盘目录（如 "/home/user/workspaces/wf_a1b2c3d4_name/factory"）
      */
     public void registerPhysicalWorkspace(String vfsPrefix, String physicalDir) {
         physicalWorkspaceMap.put(vfsPrefix, physicalDir);
-        log.info("[VFS] Physical workspace registered: {} → {}", vfsPrefix, physicalDir);
-        System.out.println("  🔗 [VFS] Physical workspace: " + vfsPrefix + " → " + physicalDir);
+        log.info("[VFS] 物理工作目录已注册: {} → {}", vfsPrefix, physicalDir);
+        System.out.printf("  🔗 [VFS] 物理工作空间: " + vfsPrefix + " → " + physicalDir + "%n");
+    }
+
+    /**
+     * 注销物理工作目录映射 — 工作流结束后清理，防止映射泄漏。
+     *
+     * @param vfsPrefix 要注销的 VFS 路径前缀
+     */
+    public void unregisterPhysicalWorkspace(String vfsPrefix) {
+        String removed = physicalWorkspaceMap.remove(vfsPrefix);
+        if (removed != null) {
+            log.info("[VFS] 物理工作目录已注销: {} → {}", vfsPrefix, removed);
+        }
     }
 
     /**
      * 查找 VFS 路径对应的物理工作目录。
+     * <p>
+     * 优先匹配最长前缀（最具体的映射），确保按 workflowId 隔离的映射
+     * 优先于全局映射。例如 {@code /factory/wf_a1b2c3d4} 优先于 {@code /factory}。
      *
-     * @param vfsPath VFS 路径（如 "/factory/agent_1.py"）
+     * @param vfsPath VFS 路径（如 "/factory/wf_a1b2c3d4/agent_1.py"）
      * @return 物理目录路径，如果没有映射则返回 null
      */
     public String findPhysicalWorkspace(String vfsPath) {
+        String bestMatch = null;
+        String bestPrefix = "";
         for (Map.Entry<String, String> entry : physicalWorkspaceMap.entrySet()) {
-            if (vfsPath.startsWith(entry.getKey())) {
-                return entry.getValue();
+            String prefix = entry.getKey();
+            if (vfsPath.startsWith(prefix) && prefix.length() > bestPrefix.length()) {
+                bestPrefix = prefix;
+                bestMatch = entry.getValue();
             }
         }
-        return null;
+        return bestMatch;
     }
 
     public TaskScheduler getTaskScheduler() {
@@ -120,7 +147,7 @@ public final class VfsManager {
 
     public void configureJavalin(Javalin app) {
         this.javalinApp = app;
-        log.info("Javalin configured for webhook endpoints");
+        log.info("Javalin 已配置，用于 Webhook 端点");
     }
 
     public LlmProvider getLlmProvider() {
@@ -154,87 +181,87 @@ public final class VfsManager {
             if (defaultLlmProvider != null) {
                 SemanticNode semanticNode = new SemanticNode("/dev/semantic", defaultLlmProvider);
                 pathTree.put("/dev/semantic", semanticNode);
-                log.info("VFS mounted: /dev/semantic [SEMANTIC] provider={}", defaultLlmProvider.name());
+                log.info("VFS 已挂载: /dev/semantic [SEMANTIC] provider={}", defaultLlmProvider.name());
 
                 VectorNode vectorNode = new VectorNode("/dev/vec_mem", defaultLlmProvider);
                 pathTree.put("/dev/vec_mem", vectorNode);
-                log.info("VFS mounted: /dev/vec_mem [VECTOR] provider={}", defaultLlmProvider.name());
+                log.info("VFS 已挂载: /dev/vec_mem [VECTOR] provider={}", defaultLlmProvider.name());
 
                 // ── Persistent Long-Term Memory (Dream Daemon target) ──
                 VectorNode memoryDb = new VectorNode("/var/db/memory", defaultLlmProvider);
                 pathTree.put("/var/db/memory", memoryDb);
-                log.info("VFS mounted: /var/db/memory [VECTOR] persistent long-term memory (Dream Daemon target)");
+                log.info("VFS 已挂载: /var/db/memory [VECTOR] 持久化长期记忆 (Dream Daemon 目标)");
 
                 GraphNode graphNode = new GraphNode("/dev/graph_mem", defaultLlmProvider);
                 pathTree.put("/dev/graph_mem", graphNode);
-                log.info("VFS mounted: /dev/graph_mem [GRAPH] provider={}", defaultLlmProvider.name());
+                log.info("VFS 已挂载: /dev/graph_mem [GRAPH] provider={}", defaultLlmProvider.name());
             } else {
-                log.warn("No LlmProvider configured, /dev/semantic, /dev/vec_mem and /dev/graph_mem not mounted");
+                log.warn("未配置 LlmProvider，/dev/semantic、/dev/vec_mem 和 /dev/graph_mem 未挂载");
             }
 
             if (taskScheduler != null) {
                 pathTree.put("/proc/agents", ProcFsNode.agents(taskScheduler));
-                log.info("VFS mounted: /proc/agents [PROCFS] dynamic agent list");
+                log.info("VFS 已挂载: /proc/agents [PROCFS] 动态 Agent 列表");
             } else {
-                log.warn("No TaskScheduler configured, /proc/agents not mounted");
+                log.warn("未配置 TaskScheduler，/proc/agents 未挂载");
             }
 
             pathTree.put("/proc/cgroups", ProcFsNode.cgroups());
-            log.info("VFS mounted: /proc/cgroups [PROCFS] dynamic cgroup tree");
+            log.info("VFS 已挂载: /proc/cgroups [PROCFS] 动态 cgroup 树");
 
             // ── Semantic Registry ──
             pathTree.put("/proc/registry", new RegistryFsNode("/proc/registry"));
-            log.info("VFS mounted: /proc/registry [REGISTRY] global semantic registry");
+            log.info("VFS 已挂载: /proc/registry [REGISTRY] 全局语义注册表");
 
             // ── Virtual hardware devices ──
             pathTree.put("/dev/camera0", new CameraNode("/dev/camera0"));
-            log.info("VFS mounted: /dev/camera0 [CAMERA] read-only virtual camera");
+            log.info("VFS 已挂载: /dev/camera0 [CAMERA] 只读虚拟摄像头");
 
             pathTree.put("/dev/display0", new DisplayNode("/dev/display0"));
-            log.info("VFS mounted: /dev/display0 [DISPLAY] write-only virtual display");
+            log.info("VFS 已挂载: /dev/display0 [DISPLAY] 只写虚拟显示器");
 
             pathTree.put("/dev/audio0", new AudioNode("/dev/audio0"));
-            log.info("VFS mounted: /dev/audio0 [AUDIO] write-only TTS device");
+            log.info("VFS 已挂载: /dev/audio0 [AUDIO] 只写 TTS 音频设备");
 
             // ── GUI / Desktop Automation (OSWorld) ──
             mountDirectory("/dev/gui");
 
             pathTree.put("/dev/gui/dom", new GuiDomNode("/dev/gui/dom"));
-            log.info("VFS mounted: /dev/gui/dom [GUI_DOM] read-only screen UI element tree");
+            log.info("VFS 已挂载: /dev/gui/dom [GUI_DOM] 只读屏幕 UI 元素树");
 
             pathTree.put("/dev/gui/action", new GuiActionNode("/dev/gui/action"));
-            log.info("VFS mounted: /dev/gui/action [GUI_ACTION] write-only desktop automation");
+            log.info("VFS 已挂载: /dev/gui/action [GUI_ACTION] 只写桌面自动化");
 
             // ── Network devices ──
             mountDirectory("/dev/net");
 
             pathTree.put("/dev/net/http", new HttpNode("/dev/net/http"));
-            log.info("VFS mounted: /dev/net/http [HTTP] bidirectional HTTP client");
+            log.info("VFS 已挂载: /dev/net/http [HTTP] 双向 HTTP 客户端");
 
             if (javalinApp != null) {
                 pathTree.put("/dev/net/webhook_1", new WebhookNode("/dev/net/webhook_1", "1", javalinApp));
-                log.info("VFS mounted: /dev/net/webhook_1 [WEBHOOK] POST /webhook/1");
+                log.info("VFS 已挂载: /dev/net/webhook_1 [WEBHOOK] POST /webhook/1");
             } else {
-                log.warn("No Javalin configured, /dev/net/webhook_1 not mounted");
+                log.warn("未配置 Javalin，/dev/net/webhook_1 未挂载");
             }
 
             // ── Shared Memory (SHM IPC) ──
             mountDirectory("/dev/shm");
             pathTree.put("/dev/shm/blackboard", new ShmNode("/dev/shm/blackboard", "blackboard"));
-            log.info("VFS mounted: /dev/shm/blackboard [SHM] shared memory blackboard");
+            log.info("VFS 已挂载: /dev/shm/blackboard [SHM] 共享内存黑板");
 
             // ── Remote Device Mount Point ──
             mountDirectory("/dev/remote");
-            log.info("VFS mounted: /dev/remote [REMOTE_DEVICE] dynamic remote device mount point");
+            log.info("VFS 已挂载: /dev/remote [REMOTE_DEVICE] 动态远程设备挂载点");
 
             // ── Host Physical Layer (/dev/host/) ──
             mountDirectory("/dev/host");
             pathTree.put("/dev/host/notify", new DesktopNotifyNode("/dev/host/notify"));
-            log.info("VFS mounted: /dev/host/notify [DEVICE] native desktop notification (write-only)");
+            log.info("VFS 已挂载: /dev/host/notify [DEVICE] 原生桌面通知 (只写)");
 
             ChromeBridgeNode chromeBridge = new ChromeBridgeNode("/dev/host/browser");
             pathTree.put("/dev/host/browser", chromeBridge);
-            log.info("VFS mounted: /dev/host/browser [DEVICE] Chrome browser bridge (WebSocket)");
+            log.info("VFS 已挂载: /dev/host/browser [DEVICE] Chrome 浏览器桥接 (WebSocket)");
             // 启动浏览器 WebSocket 桥接（端口 19999）
             if (javalinApp != null) {
                 chromeBridge.startWebSocket(19999);
@@ -244,15 +271,15 @@ public final class VfsManager {
             VfsJournal.getInstance().open();
             int replayed = VfsJournal.getInstance().recoverAll();
             if (replayed > 0) {
-                log.info("[VFS Journal] Replaying {} ops from WAL... Crash consistency restored!", replayed);
+                log.info("[VFS Journal] 正在回放 {} 条 WAL 操作... 崩溃一致性已恢复！", replayed);
             }
 
             // ── VSS Shadow Copy directory ──
             mountDirectory("/shadow");
-            log.info("VFS mounted: /shadow [VSS] shadow copy root");
+            log.info("VFS 已挂载: /shadow [VSS] 影子副本根目录");
 
             initialized = true;
-            log.info("VFS root filesystem initialized: /, /bin, /dev, /mem, /proc, /tmp, /containers, /var/crash");
+            log.info("VFS 根文件系统已初始化: /, /bin, /dev, /mem, /proc, /tmp, /containers, /var/crash");
         } finally {
             rwLock.writeLock().unlock();
         }
@@ -271,7 +298,7 @@ public final class VfsManager {
         rwLock.readLock().lock();
         try {
             if (!initialized) {
-                log.warn("VFS not initialized");
+                log.warn("VFS 未初始化");
                 return Optional.empty();
             }
 
@@ -282,7 +309,7 @@ public final class VfsManager {
 
             VfsNode node = pathTree.get(resolved);
             if (node != null) {
-                log.trace("VFS resolve: '{}' -> '{}' [{}]", path, resolved, node.nodeType());
+                log.trace("VFS 解析: '{}' -> '{}' [{}]", path, resolved, node.nodeType());
             } else {
                 log.trace("VFS resolve: '{}' -> '{}' not found", path, resolved);
             }
@@ -310,19 +337,19 @@ public final class VfsManager {
         rwLock.writeLock().lock();
         try {
             if (!initialized) {
-                log.warn("VFS not initialized, cannot mount");
+                log.warn("VFS 未初始化，无法挂载");
                 return false;
             }
 
             String fullPath = dirPath.equals("/") ? "/" + name : dirPath + "/" + name;
 
             if (pathTree.containsKey(fullPath)) {
-                log.warn("VFS mount failed: '{}' already exists", fullPath);
+                log.warn("VFS 挂载失败: '{}' 已存在", fullPath);
                 return false;
             }
 
             pathTree.put(fullPath, node);
-            log.info("VFS mounted: {} [{}]", fullPath, node.nodeType());
+            log.info("VFS 已挂载: {} [{}]", fullPath, node.nodeType());
             return true;
         } finally {
             rwLock.writeLock().unlock();
@@ -340,19 +367,19 @@ public final class VfsManager {
         rwLock.writeLock().lock();
         try {
             if (!initialized) {
-                log.warn("VFS not initialized, cannot mount host file");
+                log.warn("VFS 未初始化，无法挂载宿主文件");
                 return false;
             }
 
             if (pathTree.containsKey(vfsPath)) {
-                log.warn("VFS mount failed: '{}' already exists", vfsPath);
+                log.warn("VFS 挂载失败: '{}' 已存在", vfsPath);
                 return false;
             }
 
             HostSourceNode node = new HostSourceNode(vfsPath, physicalPath);
             pathTree.put(vfsPath, node);
-            System.out.printf("  🔗 [VFS] Physical host path '%s' mounted to virtual node '%s'%n", physicalPath, vfsPath);
-            log.info("[VFS] Host file mounted: vfsPath='{}', physicalPath='{}'", vfsPath, physicalPath);
+            System.out.printf("  🔗 [VFS] 物理宿主路径 '%s' 已挂载至虚拟节点 '%s'%n", physicalPath, vfsPath);
+            log.info("[VFS] 宿主文件已挂载: vfsPath='{}', physicalPath='{}'", vfsPath, physicalPath);
             return true;
         } finally {
             rwLock.writeLock().unlock();
@@ -370,12 +397,12 @@ public final class VfsManager {
         rwLock.writeLock().lock();
         try {
             if (!pathTree.containsKey(path)) {
-                log.warn("VFS unmount failed: '{}' not found", path);
+                log.warn("VFS 卸载失败: '{}' 未找到", path);
                 return false;
             }
 
             pathTree.remove(path);
-            log.info("VFS unmounted: {}", path);
+            log.info("VFS 已卸载: {}", path);
             return true;
         } finally {
             rwLock.writeLock().unlock();
@@ -400,7 +427,7 @@ public final class VfsManager {
     public String createVssSnapshot(String path) {
         var nodeOpt = resolve(path);
         if (nodeOpt.isEmpty()) {
-            log.warn("[VSS] Snapshot failed: path '{}' not found", path);
+            log.warn("[VSS] 快照失败: 路径 '{}' 未找到", path);
             return null;
         }
 
@@ -430,7 +457,7 @@ public final class VfsManager {
         // Mount the shadow node
         pathTree.put(shadowPath, shadow);
 
-        log.info("[VSS] Shadow copy created: '{}' → '{}' (frozen, read-only)",
+        log.info("[VSS] 影子副本已创建: '{}' → '{}' (冻结，只读)",
                 path, shadowPath);
 
         return shadowPath;
@@ -462,7 +489,7 @@ public final class VfsManager {
         String canonicalized = sanitizePath(combined);
 
         if (!isWithinRoot(canonicalized, agentRoot)) {
-            log.warn("PATH ESCAPE BLOCKED: '{}' escapes root '{}' (resolved: '{}')", path, agentRoot, canonicalized);
+            log.warn("路径逃逸已阻止: '{}' 逃逸出根目录 '{}' (解析为: '{}')", path, agentRoot, canonicalized);
             return "";
         }
 
@@ -491,7 +518,7 @@ public final class VfsManager {
             String agentRoot = "/containers/" + agentDirName;
 
             if (agentNamespaces.containsKey(agentId)) {
-                log.debug("Container namespace already exists: {}", agentRoot);
+                log.debug("容器命名空间已存在: {}", agentRoot);
                 return true;
             }
 
@@ -503,7 +530,7 @@ public final class VfsManager {
             mountDirectory(agentRoot + "/dev/mem");
 
             agentNamespaces.put(agentId, agentRoot);
-            log.info("Mount namespace created: {} (CLONE_NEWNS)", agentRoot);
+            log.info("挂载命名空间已创建: {} (CLONE_NEWNS)", agentRoot);
             return true;
         } finally {
             rwLock.writeLock().unlock();
@@ -532,7 +559,7 @@ public final class VfsManager {
             if (agentRoot == null) return false;
 
             pathTree.keySet().removeIf(key -> key.startsWith(agentRoot));
-            log.info("Mount namespace destroyed: {}", agentRoot);
+            log.info("挂载命名空间已销毁: {}", agentRoot);
             return true;
         } finally {
             rwLock.writeLock().unlock();
@@ -627,7 +654,7 @@ public final class VfsManager {
         rwLock.writeLock().lock();
         try {
             if (!initialized) {
-                throw new IllegalStateException("VFS not initialized, cannot mount remote device");
+                throw new IllegalStateException("VFS 未初始化，无法挂载远程设备");
             }
 
             String vfsPath = "/dev/remote/" + deviceId;
@@ -635,7 +662,7 @@ public final class VfsManager {
             // Check if the node already exists (device reconnection)
             VfsNode existing = pathTree.get(vfsPath);
             if (existing instanceof RemoteDeviceMountNode existingNode) {
-                log.info("[VFS] Remote device '{}' already mounted at {}, returning existing node", deviceId, vfsPath);
+                log.info("[VFS] 远程设备 '{}' 已挂载于 {}，返回已有节点", deviceId, vfsPath);
                 return existingNode;
             }
 
@@ -694,12 +721,12 @@ public final class VfsManager {
                 rdmn.markPermanentlyUnmounted();
                 pathTree.remove(vfsPath);
 
-                log.info("[VFS] Remote device unmounted: {} [REMOTE_DEVICE]", vfsPath);
+                log.info("[VFS] 远程设备已卸载: {} [REMOTE_DEVICE]", vfsPath);
                 System.out.println("  \u001B[31m[VFS] Remote device '" + deviceId + "' unmounted from " + vfsPath + "\u001B[0m");
                 return true;
             }
 
-            log.warn("[VFS] Remote device unmount failed: '{}' not found or not a RemoteDeviceMountNode", vfsPath);
+            log.warn("[VFS] 远程设备卸载失败: '{}' 未找到或非 RemoteDeviceMountNode", vfsPath);
             return false;
         } finally {
             rwLock.writeLock().unlock();
@@ -727,7 +754,7 @@ public final class VfsManager {
         }
         VfsNode node = nodeOpt.get();
         if (!node.checkRead(0)) {
-            log.warn("[VFS] readText denied: no read permission on '{}'", path);
+            log.warn("[VFS] readText 被拒绝: 无读取权限 '{}'", path);
             return null;
         }
         return node.read();
@@ -748,13 +775,13 @@ public final class VfsManager {
         rwLock.writeLock().lock();
         try {
             if (!initialized) {
-                log.warn("VFS not initialized, cannot writeText");
+                log.warn("VFS 未初始化，无法 writeText");
                 return false;
             }
 
             String resolved = translatePath(path, AGENT_ROOT.get());
             if (resolved.isEmpty()) {
-                log.warn("[VFS] writeText denied: path escape detected '{}'", path);
+                log.warn("[VFS] writeText 被拒绝: 检测到路径逃逸 '{}'", path);
                 return false;
             }
 
@@ -762,12 +789,12 @@ public final class VfsManager {
             if (existing != null) {
                 // 节点已存在，直接写入
                 if (!existing.checkWrite(0)) {
-                    log.warn("[VFS] writeText denied: no write permission on '{}'", resolved);
+                    log.warn("[VFS] writeText 被拒绝: 无写入权限 '{}'", resolved);
                     return false;
                 }
                 boolean ok = existing.write(content);
                 if (ok) {
-                    log.debug("[VFS] writeText: {} chars -> '{}'", content.length(), resolved);
+                    log.debug("[VFS] writeText: 字符数 {} -> '{}'", content.length(), resolved);
                 }
                 return ok;
             }
@@ -792,8 +819,19 @@ public final class VfsManager {
 
                 HostSourceNode hostNode = new HostSourceNode(resolved, physicalFilePath);
                 boolean ok = hostNode.write(content);
+                if (!ok) {
+                    // 磁盘写入失败，降级为纯内存模式
+                    diskDegraded = true;
+                    log.warn("[VFS] 磁盘写入失败，已降级为纯内存模式。后续写入仅在内存中生效。");
+                    // 回退到 MutableFileNode（内存）
+                    MutableFileNode memNode = new MutableFileNode(resolved);
+                    memNode.write(content);
+                    pathTree.put(resolved, memNode);
+                    log.info("[VFS] writeText: 磁盘写入失败，已回退至 MutableFileNode '{}'，字符数 {}", resolved, content.length());
+                    return true;
+                }
                 pathTree.put(resolved, hostNode);
-                log.info("[VFS] writeText: created HostSourceNode '{}', {} chars → physical: {}", resolved, content.length(), physicalFilePath);
+                log.info("[VFS] writeText: 已创建 HostSourceNode '{}'，字符数 {} → 物理路径: {}", resolved, content.length(), physicalFilePath);
                 return ok;
             }
 
@@ -805,7 +843,7 @@ public final class VfsManager {
             MutableFileNode newNode = new MutableFileNode(resolved);
             newNode.write(content);
             pathTree.put(resolved, newNode);
-            log.info("[VFS] writeText: created new MutableFileNode '{}', {} chars", resolved, content.length());
+            log.info("[VFS] writeText: 已创建新 MutableFileNode '{}'，字符数 {}", resolved, content.length());
             return true;
         } finally {
             rwLock.writeLock().unlock();

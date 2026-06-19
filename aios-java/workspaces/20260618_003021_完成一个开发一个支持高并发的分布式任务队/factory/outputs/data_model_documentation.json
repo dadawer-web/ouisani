@@ -1,0 +1,196 @@
+{
+  "system": "Distributed Task Queue",
+  "version": "1.0.0",
+  "generated_at": "2026-06-17T16:40:30.249243+00:00",
+  "enums": {
+    "TaskStatus": {
+      "PENDING": "pending",
+      "QUEUED": "queued",
+      "ASSIGNED": "assigned",
+      "RUNNING": "running",
+      "SUCCESS": "success",
+      "FAILED": "failed",
+      "RETRYING": "retrying",
+      "TIMEOUT": "timeout",
+      "CANCELLED": "cancelled",
+      "DEAD_LETTER": "dead_letter"
+    },
+    "TaskPriority": {
+      "CRITICAL": 0,
+      "HIGH": 1,
+      "NORMAL": 2,
+      "LOW": 3,
+      "IDLE": 4
+    },
+    "WorkerStatus": {
+      "IDLE": "idle",
+      "BUSY": "busy",
+      "DRAINING": "draining",
+      "OFFLINE": "offline",
+      "ERROR": "error",
+      "MAINTENANCE": "maintenance"
+    },
+    "QueueType": {
+      "STANDARD": "standard",
+      "PRIORITY": "priority",
+      "DELAYED": "delayed",
+      "DEAD_LETTER": "dead_letter",
+      "FIFO": "fifo"
+    },
+    "JobType": {
+      "BATCH": "batch",
+      "STREAMING": "streaming",
+      "CRON": "cron",
+      "ONE_SHOT": "one_shot",
+      "CHAIN": "chain"
+    }
+  },
+  "models": {
+    "TaskDefinition": {
+      "description": "任务定义，系统核心数据模型。包含任务的所有元数据、状态、重试策略等。",
+      "fields": {
+        "task_id": "Field(name='task_id',type=<class 'str'>,default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "task_name": "Field(name='task_name',type=<class 'str'>,default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "task_type": "Field(name='task_type',type=<class 'str'>,default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "queue_name": "Field(name='queue_name',type=<class 'str'>,default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "payload": "Field(name='payload',type=typing.Dict[str, typing.Any],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "priority": "Field(name='priority',type=<class 'str'>,default='NORMAL',default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "status": "Field(name='status',type=<class 'str'>,default='PENDING',default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "created_at": "Field(name='created_at',type=<class 'str'>,default='',default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "updated_at": "Field(name='updated_at',type=<class 'str'>,default='',default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "scheduled_at": "Field(name='scheduled_at',type=typing.Optional[str],default=None,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "started_at": "Field(name='started_at',type=typing.Optional[str],default=None,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "completed_at": "Field(name='completed_at',type=typing.Optional[str],default=None,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "timeout_ms": "Field(name='timeout_ms',type=<class 'int'>,default=30000,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "retry_policy": "Field(name='retry_policy',type=typing.Dict[str, typing.Any],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<function TaskDefinition.<lambda> at 0x789a3435b380>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "resource_requirement": "Field(name='resource_requirement',type=typing.Dict[str, typing.Any],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<function TaskDefinition.<lambda> at 0x789a3435b420>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "metadata": "Field(name='metadata',type=typing.Dict[str, typing.Any],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<class 'dict'>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "result": "Field(name='result',type=typing.Optional[typing.Dict[str, typing.Any]],default=None,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "error_message": "Field(name='error_message',type=typing.Optional[str],default=None,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "retry_count": "Field(name='retry_count',type=<class 'int'>,default=0,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "assigned_worker_id": "Field(name='assigned_worker_id',type=typing.Optional[str],default=None,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "tags": "Field(name='tags',type=typing.List[str],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<class 'list'>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "version": "Field(name='version',type=<class 'int'>,default=1,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)"
+      },
+      "state_machine": {
+        "PENDING -> QUEUED": "任务被提交到队列",
+        "QUEUED -> ASSIGNED": "任务被分配给Worker",
+        "ASSIGNED -> RUNNING": "Worker开始执行",
+        "RUNNING -> SUCCESS": "执行成功",
+        "RUNNING -> FAILED": "执行失败",
+        "FAILED -> RETRYING -> QUEUED": "重试循环",
+        "FAILED -> DEAD_LETTER": "超过最大重试次数",
+        "* -> TIMEOUT": "执行超时",
+        "* -> CANCELLED": "手动取消"
+      }
+    },
+    "WorkerNode": {
+      "description": "Worker节点模型，代表分布式系统中的一个执行单元。",
+      "fields": {
+        "worker_id": "Field(name='worker_id',type=<class 'str'>,default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "worker_name": "Field(name='worker_name',type=<class 'str'>,default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "host": "Field(name='host',type=<class 'str'>,default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "port": "Field(name='port',type=<class 'int'>,default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "status": "Field(name='status',type=<class 'str'>,default='IDLE',default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "capabilities": "Field(name='capabilities',type=typing.List[str],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<class 'list'>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "max_concurrent_tasks": "Field(name='max_concurrent_tasks',type=<class 'int'>,default=5,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "current_task_count": "Field(name='current_task_count',type=<class 'int'>,default=0,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "current_tasks": "Field(name='current_tasks',type=typing.List[str],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<class 'list'>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "resource_capacity": "Field(name='resource_capacity',type=typing.Dict[str, typing.Any],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<function WorkerNode.<lambda> at 0x789a3435b7e0>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "resource_used": "Field(name='resource_used',type=typing.Dict[str, typing.Any],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<function WorkerNode.<lambda> at 0x789a3435b880>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "registered_at": "Field(name='registered_at',type=<class 'str'>,default='',default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "last_heartbeat": "Field(name='last_heartbeat',type=<class 'str'>,default='',default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "health_check_url": "Field(name='health_check_url',type=typing.Optional[str],default=None,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "tags": "Field(name='tags',type=typing.List[str],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<class 'list'>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "metadata": "Field(name='metadata',type=typing.Dict[str, typing.Any],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<class 'dict'>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "completed_tasks": "Field(name='completed_tasks',type=<class 'int'>,default=0,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "failed_tasks": "Field(name='failed_tasks',type=<class 'int'>,default=0,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)"
+      }
+    },
+    "TaskQueue": {
+      "description": "任务队列模型，支持多种队列类型。",
+      "fields": {
+        "queue_id": "Field(name='queue_id',type=<class 'str'>,default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "queue_name": "Field(name='queue_name',type=<class 'str'>,default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "queue_type": "Field(name='queue_type',type=<class 'str'>,default='STANDARD',default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "max_size": "Field(name='max_size',type=<class 'int'>,default=10000,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "current_size": "Field(name='current_size',type=<class 'int'>,default=0,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "pending_count": "Field(name='pending_count',type=<class 'int'>,default=0,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "processing_count": "Field(name='processing_count',type=<class 'int'>,default=0,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "completed_count": "Field(name='completed_count',type=<class 'int'>,default=0,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "failed_count": "Field(name='failed_count',type=<class 'int'>,default=0,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "dead_letter_count": "Field(name='dead_letter_count',type=<class 'int'>,default=0,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "consumer_groups": "Field(name='consumer_groups',type=typing.List[str],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<class 'list'>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "priority_enabled": "Field(name='priority_enabled',type=<class 'bool'>,default=True,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "ttl_seconds": "Field(name='ttl_seconds',type=<class 'int'>,default=86400,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "created_at": "Field(name='created_at',type=<class 'str'>,default='',default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "updated_at": "Field(name='updated_at',type=<class 'str'>,default='',default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "metadata": "Field(name='metadata',type=typing.Dict[str, typing.Any],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<class 'dict'>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)"
+      }
+    },
+    "JobResult": {
+      "description": "任务执行结果模型。",
+      "fields": {
+        "task_id": "Field(name='task_id',type=<class 'str'>,default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "worker_id": "Field(name='worker_id',type=<class 'str'>,default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "status": "Field(name='status',type=<class 'str'>,default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "result_data": "Field(name='result_data',type=typing.Dict[str, typing.Any],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<class 'dict'>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "error_message": "Field(name='error_message',type=typing.Optional[str],default=None,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "error_traceback": "Field(name='error_traceback',type=typing.Optional[str],default=None,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "started_at": "Field(name='started_at',type=<class 'str'>,default='',default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "completed_at": "Field(name='completed_at',type=<class 'str'>,default='',default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "duration_ms": "Field(name='duration_ms',type=<class 'int'>,default=0,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "metrics": "Field(name='metrics',type=typing.Dict[str, typing.Any],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<class 'dict'>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)"
+      }
+    },
+    "ScheduledTask": {
+      "description": "定时任务配置模型。",
+      "fields": {
+        "schedule_id": "Field(name='schedule_id',type=<class 'str'>,default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "task_template": "Field(name='task_template',type=typing.Dict[str, typing.Any],default=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "cron_expression": "Field(name='cron_expression',type=typing.Optional[str],default=None,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "interval_ms": "Field(name='interval_ms',type=typing.Optional[int],default=None,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "next_run_at": "Field(name='next_run_at',type=typing.Optional[str],default=None,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "last_run_at": "Field(name='last_run_at',type=typing.Optional[str],default=None,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "enabled": "Field(name='enabled',type=<class 'bool'>,default=True,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "max_instances": "Field(name='max_instances',type=<class 'int'>,default=1,default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)",
+        "misfire_policy": "Field(name='misfire_policy',type=<class 'str'>,default='DO_NOTHING',default_factory=<dataclasses._MISSING_TYPE object at 0x789a345fd640>,init=True,repr=True,hash=None,compare=True,metadata=mappingproxy({}),kw_only=False,_field_type=_FIELD)"
+      }
+    }
+  },
+  "api_summary": {
+    "total_endpoints": 17,
+    "categories": {
+      "Task Management": [
+        "/tasks",
+        "/tasks/{task_id}",
+        "/tasks/{task_id}/retry",
+        "/tasks/batch"
+      ],
+      "Queue Management": [
+        "/queues",
+        "/queues/{queue_name}",
+        "/queues/{queue_name}/purge"
+      ],
+      "Worker Management": [
+        "/workers",
+        "/workers/{worker_id}",
+        "/workers/{worker_id}/heartbeat",
+        "/workers/{worker_id}/drain"
+      ],
+      "Monitoring": [
+        "/metrics",
+        "/health"
+      ]
+    }
+  },
+  "design_decisions": [
+    "采用有限状态机(FSM)管理任务生命周期，确保状态转换合法性",
+    "任务支持指数退避重试策略，自动处理瞬时故障",
+    "Worker支持排空模式(Draining)，实现优雅下线",
+    "队列支持TTL机制，避免过期任务占用资源",
+    "资源需求声明式设计，支持CPU/Memory/GPU异构调度",
+    "所有模型支持序列化为字典，便于JSON传输",
+    "版本号字段支持乐观锁并发控制"
+  ]
+}

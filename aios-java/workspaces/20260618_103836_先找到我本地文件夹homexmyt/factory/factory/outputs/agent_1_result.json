@@ -1,0 +1,36 @@
+{
+  "status": "success",
+  "target_folder": "/home/xmy/tryaios/aios-java/workspaces/20260618_101813_开发一个支持高并发的分布式任务队列",
+  "exists": true,
+  "is_directory": true,
+  "absolute_path": "/home/xmy/tryaios/aios-java/workspaces/20260618_101813_开发一个支持高并发的分布式任务队列",
+  "files": [
+    {
+      "name": "task.meta",
+      "path": "/home/xmy/tryaios/aios-java/workspaces/20260618_101813_开发一个支持高并发的分布式任务队列/task.meta",
+      "is_file": true,
+      "is_dir": false,
+      "size": 310
+    }
+  ],
+  "subdirectories": [
+    {
+      "name": "factory",
+      "path": "/home/xmy/tryaios/aios-java/workspaces/20260618_101813_开发一个支持高并发的分布式任务队列/factory",
+      "is_file": false,
+      "is_dir": true,
+      "size": 0
+    },
+    {
+      "name": "outputs",
+      "path": "/home/xmy/tryaios/aios-java/workspaces/20260618_101813_开发一个支持高并发的分布式任务队列/outputs",
+      "is_file": false,
+      "is_dir": true,
+      "size": 0
+    }
+  ],
+  "file_count": 1,
+  "dir_count": 2,
+  "total_size": 310,
+  "total_size_human": "310 B"
+}

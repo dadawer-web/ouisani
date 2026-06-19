@@ -114,7 +114,7 @@ public final class CognitiveDreamDaemon {
     /** 配置 LLM Provider — 用于记忆巩固时的摘要生成。 */
     public void configure(LlmProvider llmProvider) {
         this.llmProvider = llmProvider;
-        log.info("[DreamDaemon] Configured with LlmProvider: {}",
+        log.info("[DreamDaemon] 已配置 LlmProvider: {}",
                 llmProvider != null ? llmProvider.name() : "null");
     }
 
@@ -137,8 +137,8 @@ public final class CognitiveDreamDaemon {
                 TimeUnit.SECONDS
         );
 
-        log.info("[DreamDaemon] Started. Dream cycle interval: {}s", DREAM_CYCLE_INTERVAL_SEC);
-        System.out.println("  \u001B[35m[DreamDaemon] Cognitive dream daemon started. The system now dreams.\u001B[0m");
+        log.info("[DreamDaemon] 已启动。梦境周期间隔: {}s", DREAM_CYCLE_INTERVAL_SEC);
+        System.out.println("  \u001B[35m[DreamDaemon] 认知梦境守护进程已启动。系统现在可以做梦了。\u001B[0m");
     }
 
     /** 停止梦境守护进程。 */
@@ -159,7 +159,7 @@ public final class CognitiveDreamDaemon {
             }
         }
 
-        log.info("[DreamDaemon] Stopped. Stats: cycles={}, consolidated={}, ideas={}",
+        log.info("[DreamDaemon] 已停止。统计: cycles={}, consolidated={}, ideas={}",
                 totalDreamCycles.get(), totalMemoriesConsolidated.get(), totalSpontaneousIdeas.get());
     }
 
@@ -187,7 +187,7 @@ public final class CognitiveDreamDaemon {
         // ── Idle Check: only dream when the system is idle ──
         TaskScheduler scheduler = VfsManager.instance().getTaskScheduler();
         if (scheduler != null && !scheduler.isSystemIdle()) {
-            log.debug("[DreamDaemon] System not idle (active: {}), skipping dream cycle",
+            log.debug("[DreamDaemon] 系统非空闲 (active: {})，跳过梦境周期",
                     scheduler.activeCount());
             return;
         }
@@ -202,21 +202,21 @@ public final class CognitiveDreamDaemon {
             List<SemanticCacheManager.CacheEntry> decaying = scanDecayingMemories(cacheMgr);
 
             if (decaying.size() < MIN_DECAYING_ENTRIES) {
-                log.debug("[DreamDaemon] Not enough decaying memories ({}/{}), skipping dream cycle",
+                log.debug("[DreamDaemon] 衰减记忆不足 ({}/{})，跳过梦境周期",
                         decaying.size(), MIN_DECAYING_ENTRIES);
                 return;
             }
 
-            log.info("[DreamDaemon] Dream cycle #{}: found {} decaying memories",
+            log.info("[DreamDaemon] 梦境周期 #{}：发现 {} 个衰减记忆",
                     totalDreamCycles.get(), decaying.size());
-            System.out.printf("  \u001B[35m[DreamDaemon] Dream cycle #%d: scanning %d decaying memories...\u001B[0m%n",
+            System.out.printf("  \u001B[35m[DreamDaemon] 梦境周期 #%d：扫描 %d 个衰减记忆...\u001B[0m%n",
                     totalDreamCycles.get(), decaying.size());
 
             // ── Phase 2: Consolidate via LLM ──
             String consolidated = consolidateMemories(decaying);
 
             if (consolidated == null || consolidated.isBlank()) {
-                log.warn("[DreamDaemon] Consolidation produced no output, aborting dream cycle");
+                log.warn("[DreamDaemon] 整合未产生输出，中止梦境周期");
                 return;
             }
 
@@ -228,14 +228,14 @@ public final class CognitiveDreamDaemon {
 
             totalMemoriesConsolidated.addAndGet(decaying.size());
 
-            log.info("[DreamDaemon] Dream cycle #{} complete: {} memories consolidated, {} chars persisted",
+            log.info("[DreamDaemon] 梦境周期 #{} 完成：{} 个记忆已整合，{} 字符已持久化",
                     totalDreamCycles.get(), decaying.size(), consolidated.length());
 
             // ── Phase 5: Check for spontaneous ideas ──
             checkForSpontaneousIdeas(consolidated);
 
         } catch (Exception e) {
-            log.error("[DreamDaemon] Dream cycle error: {}", e.getMessage(), e);
+            log.error("[DreamDaemon] 梦境周期错误: {}", e.getMessage(), e);
         } finally {
             dreaming.set(false);
         }
@@ -256,7 +256,7 @@ public final class CognitiveDreamDaemon {
             double retention = bionicStrategy.computeRetention(entry, now);
             if (retention < RETENTION_THRESHOLD) {
                 decaying.add(entry);
-                log.debug("[DreamDaemon] Decaying memory: retention={:.4f}, age={}ms, accessCount={}",
+                log.debug("[DreamDaemon] 衰减记忆: retention={:.4f}, age={}ms, accessCount={}",
                         retention, now - entry.createdAt(), entry.accessCount());
             }
         }
@@ -279,7 +279,7 @@ public final class CognitiveDreamDaemon {
      */
     private String consolidateMemories(List<SemanticCacheManager.CacheEntry> entries) {
         if (llmProvider == null) {
-            log.warn("[DreamDaemon] No LlmProvider configured, cannot consolidate");
+            log.warn("[DreamDaemon] LlmProvider 未配置，无法整合");
             return null;
         }
 
@@ -300,12 +300,12 @@ public final class CognitiveDreamDaemon {
 
         try {
             String result = llmProvider.think(prompt);
-            log.info("[DreamDaemon] LLM consolidation complete: {} chars", result != null ? result.length() : 0);
-            System.out.printf("  \u001B[35m[DreamDaemon] Memory consolidation: %d fragments → %d chars of distilled experience\u001B[0m%n",
+            log.info("[DreamDaemon] LLM 整合完成: {} chars", result != null ? result.length() : 0);
+            System.out.printf("  \u001B[35m[DreamDaemon] 记忆整合：%d 个碎片 → %d 字符的提炼经验\u001B[0m%n",
                     entries.size(), result != null ? result.length() : 0);
             return result;
         } catch (Exception e) {
-            log.error("[DreamDaemon] LLM consolidation failed: {}", e.getMessage());
+            log.error("[DreamDaemon] LLM 整合失败: {}", e.getMessage());
             return null;
         }
     }
@@ -330,12 +330,12 @@ public final class CognitiveDreamDaemon {
                 // Write the consolidated memory — VectorNode.write() will
                 // automatically embed it and store the vector
                 vecNode.write(consolidated);
-                log.info("[DreamDaemon] Persisted consolidated memory to {} ({} chars)",
+                log.info("[DreamDaemon] 已持久化整合记忆至 {} ({} chars)",
                         MEMORY_DB_PATH, consolidated.length());
-                System.out.printf("  \u001B[35m[DreamDaemon] Memory persisted to %s (%d chars) → long-term storage\u001B[0m%n",
+                System.out.printf("  \u001B[35m[DreamDaemon] 记忆已持久化至 %s（%d 字符）→ 长期存储\u001B[0m%n",
                         MEMORY_DB_PATH, consolidated.length());
             } else {
-                log.warn("[DreamDaemon] VectorNode not found at {}, falling back to VFS file write", MEMORY_DB_PATH);
+                log.warn("[DreamDaemon] VectorNode 未找到 {}，回退至 VFS 文件写入", MEMORY_DB_PATH);
                 // Fallback: write as a plain text file
                 String fallbackPath = MEMORY_DB_PATH + "/dream_log_" + System.currentTimeMillis();
                 vfs.mount(fallbackPath, "dream_log",
@@ -343,7 +343,7 @@ public final class CognitiveDreamDaemon {
                 vfs.resolve(fallbackPath).ifPresent(node -> node.write(consolidated));
             }
         } catch (Exception e) {
-            log.error("[DreamDaemon] Failed to persist memory: {}", e.getMessage());
+            log.error("[DreamDaemon] 持久化记忆失败: {}", e.getMessage());
         }
     }
 
@@ -363,7 +363,7 @@ public final class CognitiveDreamDaemon {
             entry.meta("consolidation_time", System.currentTimeMillis());
         }
 
-        log.info("[DreamDaemon] Marked {} entries as consolidated (will be evicted on next cycle)",
+        log.info("[DreamDaemon] 已标记 {} 条目为已整合（将在下一周期被驱逐）",
                 entries.size());
     }
 
@@ -417,9 +417,9 @@ public final class CognitiveDreamDaemon {
 
             EventBus.instance().broadcast("spontaneous_idea", eventPayload);
 
-            log.info("[DreamDaemon] SPONTANEOUS IDEA detected! Trigger: '{}', insight: {} chars",
+            log.info("[DreamDaemon] 检测到自发灵感！触发词: '{}'，洞见: {} chars",
                     triggerWord, consolidated.length());
-            System.out.printf("  \u001B[33m[DreamDaemon] ⚡ SPONTANEOUS IDEA! Trigger='%s' — event broadcast to all subscribers\u001B[0m%n",
+            System.out.printf("  \u001B[33m[DreamDaemon] ⚡ 自发灵感！触发词='%s' — 事件已广播至所有订阅者\u001B[0m%n",
                     triggerWord);
 
             SemanticEtw.getInstance().logEvent("DREAM", "SPONTANEOUS_IDEA",
@@ -433,7 +433,7 @@ public final class CognitiveDreamDaemon {
 
     /** 手动触发一次梦境周期（用于测试或管理操作）。 */
     public void triggerDreamCycle() {
-        log.info("[DreamDaemon] Manual dream cycle triggered");
+        log.info("[DreamDaemon] 手动梦境周期已触发");
         dreamCycle();
     }
 

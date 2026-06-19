@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>番茄钟计时器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            text-align: center;
+            max-width: 500px;
+            width: 100%;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 2.5rem;
+            font-weight: 300;
+        }
+        
+        .timer-display {
+            font-size: 6rem;
+            font-weight: 200;
+            color: #4a5568;
+            margin: 30px 0;
+            font-variant-numeric: tabular-nums;
+        }
+        
+        .timer-status {
+            font-size: 1.2rem;
+            color: #718096;
+            margin-bottom: 40px;
+            min-height: 24px;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 15px 40px;
+            font-size: 1.1rem;
+            font-weight: 500;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-width: 160px;
+        }
+        
+        .start-btn {
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(72, 187, 120, 0.4);
+        }
+        
+        .start-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(72, 187, 120, 0.6);
+        }
+        
+        .start-btn:disabled {
+            background: #a0aec0;
+            box-shadow: none;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .stop-btn {
+            background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(245, 101, 101, 0.4);
+        }
+        
+        .stop-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(245, 101, 101, 0.6);
+        }
+        
+        .stop-btn:disabled {
+            background: #a0aec0;
+            box-shadow: none;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .reset-btn {
+            background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);
+            color: white;
+            box-shadow: 0 4px 15px rgba(66, 153, 225, 0.4);
+        }
+        
+        .reset-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(66, 153, 225, 0.6);
+        }
+        
+        .progress-container {
+            margin: 30px 0;
+            background: #e2e8f0;
+            border-radius: 10px;
+            height: 10px;
+            overflow: hidden;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #48bb78 0%, #4299e1 100%);
+            width: 100%;
+            transition: width 1s linear;
+            border-radius: 10px;
+        }
+        
+        .settings {
+            margin-top: 40px;
+            padding-top: 30px;
+            border-top: 1px solid #e2e8f0;
+        }
+        
+        .settings label {
+            display: block;
+            margin-bottom: 10px;
+            color: #4a5568;
+            font-weight: 500;
+        }
+        
+        .settings input {
+            padding: 10px 15px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 1rem;
+            width: 100%;
+            max-width: 200px;
+            margin-bottom: 15px;
+        }
+        
+        .settings input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+        
+        .connected {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+        
+        .disconnected {
+            background: #fed7d7;
+            color: #9b2c2c;
+        }
+        
+        .error-message {
+            color: #e53e3e;
+            margin-top: 20px;
+            font-weight: 500;
+        }
+        
+        @media (max-width: 600px) {
+            .container {
+                padding: 30px 20px;
+            }
+            
+            .timer-display {
+                font-size: 4rem;
+            }
+            
+            .controls {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            button {
+                width: 100%;
+                max-width: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🍅 番茄钟</h1>
+        
+        <div class="timer-display" id="timer">25:00</div>
+        
+        <div class="progress-container">
+            <div class="progress-bar" id="progress"></div>
+        </div>
+        
+        <div class="timer-status" id="status">就绪</div>
+        
+        <div class="controls">
+            <button class="start-btn" id="startBtn" onclick="startTimer()">开始计时</button>
+            <button class="stop-btn" id="stopBtn" onclick="stopTimer()" disabled>结束计时</button>
+            <button class="reset-btn" onclick="resetTimer()">重置</button>
+        </div>
+        
+        <div class="settings">
+            <label for="duration">计时器时长（分钟）:</label>
+            <input type="number" id="duration" value="25" min="1" max="120" onchange="updateDuration()">
+        </div>
+        
+        <div class="error-message" id="errorMessage"></div>
+    </div>
+    
+    <div class="connection-status disconnected" id="connectionStatus">
+        未连接到后端
+    </div>
+
+    <script>
+        // Configuration - automatically references backend API
+        const API_BASE_URL = 'http://localhost:8000';
+        
+        // State
+        let timerInterval = null;
+        let timeLeft = 25 * 60; // 25 minutes in seconds
+        let isRunning = false;
+        let totalDuration = 25 * 60;
+        
+        // DOM elements
+        const timerDisplay = document.getElementById('timer');
+        const statusDisplay = document.getElementById('status');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const progress = document.getElementById('progress');
+        const durationInput = document.getElementById('duration');
+        const errorMessage = document.getElementById('errorMessage');
+        const connectionStatus = document.getElementById('connectionStatus');
+        
+        // Format time as MM:SS
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+        
+        // Update the display
+        function updateDisplay() {
+            timerDisplay.textContent = formatTime(timeLeft);
+            const percentage = (timeLeft / totalDuration) * 100;
+            progress.style.width = `${percentage}%`;
+        }
+        
+        // Check backend connection
+        async function checkConnection() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/health`);
+                if (response.ok) {
+                    connectionStatus.textContent = '已连接到后端';
+                    connectionStatus.className = 'connection-status connected';
+                    errorMessage.textContent = '';
+                    return true;
+                }
+            } catch (error) {
+                console.log('Backend connection failed:', error);
+            }
+            
+            connectionStatus.textContent = '未连接到后端';
+            connectionStatus.className = 'connection-status disconnected';
+            return false;
+        }
+        
+        // Fetch timer status from backend
+        async function fetchStatus() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/status`);
+                if (response.ok) {
+                    const data = await response.json();
+                    timeLeft = Math.ceil(data.time_left);
+                    isRunning = data.status === 'running';
+                    totalDuration = data.duration;
+                    
+                    updateDisplay();
+                    updateButtons();
+                    updateStatusDisplay();
+                    
+                    if (isRunning) {
+                        startTimerUpdates();
+                    } else {
+                        stopTimerUpdates();
+                    }
+                    
+                    return data;
+                }
+            } catch (error) {
+                console.error('Failed to fetch status:', error);
+                errorMessage.textContent = '无法连接到后端服务，请确保后端已启动。';
+            }
+            return null;
+        }
+        
+        // Start timer updates
+        function startTimerUpdates() {
+            if (timerInterval) {
+                clearInterval(timerInterval);
+            }
+            
+            timerInterval = setInterval(async () => {
+                const status = await fetchStatus();
+                if (!status || status.status !== 'running') {
+                    stopTimerUpdates();
+                }
+            }, 1000);
+        }
+        
+        // Stop timer updates
+        function stopTimerUpdates() {
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+        }
+        
+        // Update button states
+        function updateButtons() {
+            startBtn.disabled = isRunning;
+            stopBtn.disabled = !isRunning;
+        }
+        
+        // Update status display
+        function updateStatusDisplay() {
+            if (isRunning) {
+                statusDisplay.textContent = '计时中...';
+            } else if (timeLeft === 0) {
+                statusDisplay.textContent = '计时完成！';
+            } else {
+                statusDisplay.textContent = '已暂停';
+            }
+        }
+        
+        // Start timer
+        async function startTimer() {
+            const connected = await checkConnection();
+            if (!connected) {
+                errorMessage.textContent = '无法连接到后端服务，请确保后端已启动。';
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/start`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    isRunning = true;
+                    updateButtons();
+                    updateStatusDisplay();
+                    startTimerUpdates();
+                    errorMessage.textContent = '';
+                } else {
+                    errorMessage.textContent = '启动计时器失败';
+                }
+            } catch (error) {
+                console.error('Failed to start timer:', error);
+                errorMessage.textContent = '无法连接到后端服务';
+            }
+        }
+        
+        // Stop timer
+        async function stopTimer() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/stop`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    isRunning = false;
+                    updateButtons();
+                    updateStatusDisplay();
+                    stopTimerUpdates();
+                    errorMessage.textContent = '';
+                } else {
+                    errorMessage.textContent = '停止计时器失败';
+                }
+            } catch (error) {
+                console.error('Failed to stop timer:', error);
+                errorMessage.textContent = '无法连接到后端服务';
+            }
+        }
+        
+        // Reset timer
+        async function resetTimer() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/reset`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    isRunning = false;
+                    timeLeft = totalDuration;
+                    updateDisplay();
+                    updateButtons();
+                    updateStatusDisplay();
+                    stopTimerUpdates();
+                    errorMessage.textContent = '';
+                } else {
+                    errorMessage.textContent = '重置计时器失败';
+                }
+            } catch (error) {
+                console.error('Failed to reset timer:', error);
+                errorMessage.textContent = '无法连接到后端服务';
+            }
+        }
+        
+        // Update duration setting
+        function updateDuration() {
+            const minutes = parseInt(durationInput.value);
+            if (minutes > 0 && minutes <= 120) {
+                totalDuration = minutes * 60;
+                if (!isRunning) {
+                    timeLeft = totalDuration;
+                    updateDisplay();
+                }
+            }
+        }
+        
+        // Initialize
+        async function init() {
+            updateDisplay();
+            updateButtons();
+            
+            // Check connection and fetch initial status
+            await checkConnection();
+            await fetchStatus();
+            
+            // Set up periodic connection check
+            setInterval(checkConnection, 30000);
+        }
+        
+        // Start the app
+        init();
+    </script>
+</body>
+</html>
+</tool_result>
+
+现在我需要创建create_frontend.py文件，它必须继承BaseAgent：
+<tool_call>
+<function=file_write>
+<parameter=path>/factory/create_frontend.py

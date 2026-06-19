@@ -22,6 +22,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * OpenAI API 适配器 — AIOS 用户空间设备驱动实现。
@@ -59,6 +60,15 @@ public class OpenAiAdapter implements LlmProvider {
     private final String embeddingModel;
 
     /**
+     * 共享 HttpClient 连接池 — 按 baseUrl 隔离。
+     * Java 21 的 HttpClient 内部维护连接池（Keep-Alive + HTTP/2 多路复用），
+     * 虚拟线程环境下共享同一个实例是安全的（send() 方法是线程安全的）。
+     * 之前的 "selector manager closed" 问题是因为 HttpClient 被 GC 回收导致的，
+     * 用强引用持有即可解决。
+     */
+    private static final ConcurrentHashMap<String, HttpClient> CLIENT_POOL = new ConcurrentHashMap<>();
+
+    /**
      * 完整构造器。
      *
      * @param apiKey         Chat API 密钥
@@ -78,7 +88,7 @@ public class OpenAiAdapter implements LlmProvider {
                 System.getenv().getOrDefault("EMBEDDING_BASE_URL", ""));
         this.embeddingModel = System.getenv().getOrDefault("EMBEDDING_MODEL", "text-embedding-3-small");
 
-        log.info("OpenAiAdapter initialized: baseUrl={}, model={}, timeout={}s",
+        log.info("OpenAiAdapter 已初始化: baseUrl={}, model={}, timeout={}s",
                 this.baseUrl, this.model, this.timeoutSeconds);
         log.info("Embedding config: baseUrl={}, model={}, hasKey={}",
                 this.embeddingBaseUrl, this.embeddingModel,
@@ -97,13 +107,18 @@ public class OpenAiAdapter implements LlmProvider {
     }
 
     /**
-     * 为每次请求创建新的 HttpClient。
-     * 避免在虚拟线程环境下共享 HttpClient 导致的 "selector manager closed" 问题。
+     * 获取或创建共享 HttpClient — 连接池复用。
+     * 按 baseUrl 隔离，同一 API 端点共享同一个 HttpClient 实例。
+     * HttpClient 内部自动管理 Keep-Alive 连接池和 HTTP/2 多路复用，
+     * 并发虚拟线程共享同一个实例是线程安全的。
      */
-    private HttpClient createHttpClient() {
-        return HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(300))
-                .build();
+    private HttpClient getOrCreateClient(String url) {
+        return CLIENT_POOL.computeIfAbsent(url, k -> {
+            log.info("[OpenAiAdapter] Created shared HttpClient for: {}", k);
+            return HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(30))
+                    .build();
+        });
     }
 
     /**
@@ -133,10 +148,10 @@ public class OpenAiAdapter implements LlmProvider {
                     .POST(HttpRequest.BodyPublishers.ofString(bodyStr))
                     .build();
 
-            HttpResponse<String> response = createHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = getOrCreateClient(embeddingBaseUrl).send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() != 200) {
-                log.error("Embedding API returned HTTP {}: {}", response.statusCode(),
+                log.error("Embedding API 返回 HTTP {}: {}", response.statusCode(),
                         response.body().length() > 200 ? response.body().substring(0, 200) : response.body());
                 System.out.println("  [LLM Adapter] Embedding API failed (HTTP " + response.statusCode()
                         + "), falling back to Mock Embedding");
@@ -145,8 +160,8 @@ public class OpenAiAdapter implements LlmProvider {
 
             return parseEmbeddingResponse(response.body());
         } catch (Exception e) {
-            log.error("Embedding request failed: {}", e.getMessage());
-            System.out.println("  [LLM Adapter] Embedding request failed (" + e.getMessage()
+            log.error("Embedding 请求失败: {}", e.getMessage());
+            System.out.println("  [LLM Adapter] Embedding 请求失败 (" + e.getMessage()
                     + "), falling back to Mock Embedding");
             return mockEmbedLocal(text);
         }
@@ -332,7 +347,7 @@ public class OpenAiAdapter implements LlmProvider {
 
         try {
             long startNanos = System.nanoTime();
-            HttpResponse<String> response = createHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = getOrCreateClient(requestBaseUrl).send(request, HttpResponse.BodyHandlers.ofString());
             long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;
 
             SemanticEtw.getInstance().logEvent("LLM", "CALL",
@@ -350,7 +365,7 @@ public class OpenAiAdapter implements LlmProvider {
             return parseResponse(response.body());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            log.warn("Request interrupted");
+            log.warn("请求被中断");
             throw new RuntimeException("LLM request interrupted", e);
         } catch (RuntimeException e) {
             throw e;
@@ -377,10 +392,10 @@ public class OpenAiAdapter implements LlmProvider {
                     .GET()
                     .build();
 
-            HttpResponse<String> response = createHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = getOrCreateClient(embeddingBaseUrl).send(request, HttpResponse.BodyHandlers.ofString());
             return response.statusCode() == 200 || response.statusCode() == 401;
         } catch (Exception e) {
-            log.debug("Availability check failed: {}", e.getMessage());
+            log.debug("可用性检查失败: {}", e.getMessage());
             return false;
         }
     }
@@ -406,10 +421,10 @@ public class OpenAiAdapter implements LlmProvider {
                     .getAsJsonObject("message")
                     .get("content").getAsString();
 
-            log.debug("Response received ({} chars)", content.length());
+            log.debug("已收到响应（{} 字符）", content.length());
             return content;
         } catch (Exception e) {
-            log.error("JSON parse error: {} | body={}", e.getMessage(),
+            log.error("JSON 解析错误: {} | body={}", e.getMessage(),
                     responseBody.length() > 200 ? responseBody.substring(0, 200) + "..." : responseBody);
             throw new RuntimeException("LLM response parse error: " + e.getMessage(), e);
         }

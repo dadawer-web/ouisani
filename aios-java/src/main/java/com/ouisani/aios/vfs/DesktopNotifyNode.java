@@ -206,7 +206,7 @@ public non-sealed class DesktopNotifyNode implements VfsNode {
     private boolean sendAwtNotification(String title, String message, NotifyLevel level) {
         try {
             if (!java.awt.SystemTray.isSupported()) {
-                log.debug("[DesktopNotify] SystemTray not supported on this platform");
+                log.debug("[DesktopNotify] 此平台不支持 SystemTray");
                 return false;
             }
 

@@ -9,6 +9,7 @@ import com.ouisani.aios.core.dream.AutoDreamService;
 import com.ouisani.aios.core.hook.HookManager;
 import com.ouisani.aios.core.lsp.LspManager;
 import com.ouisani.aios.core.memory.MemoryDir;
+import com.ouisani.aios.core.memory.SelfKnowledgeIndex;
 import com.ouisani.aios.core.memory.SessionMemoryService;
 import com.ouisani.aios.core.permission.PermissionMode;
 import com.ouisani.aios.core.plugin.WebSearchTool;
@@ -71,11 +72,14 @@ public class OmniMotherAgent extends AbstractAgent {
     private CompactService.AutoCompactState compactState;
     private CoordinatorMode coordinator;
 
+    // ── 自描述知识上下文（借鉴 Agent Zero knowledge/main/about/） ──
+    private String selfKnowledgeContext = null;
+
     /** 原有构造函数：兼容 AppGateway 等旧调用方 */
     public OmniMotherAgent(WorkflowManifest manifest) {
         super("Omni-Mother", ProcessPriority.REALTIME, 100000);
         this.manifest = manifest;
-        this.workingDir = System.getProperty("user.dir");
+        this.workingDir = resolveContainerFactoryDir(manifest.workflowName());
     }
 
     /** Dify 风格构造函数：DAG 引擎按节点级调度时使用 */
@@ -85,7 +89,43 @@ public class OmniMotherAgent extends AbstractAgent {
                 context.getWorkflowId() + "_" + node.instanceId(),
                 List.of(node), List.of(), List.of(), node.executor());
         this.context = context;
-        this.workingDir = System.getProperty("user.dir");
+        this.workingDir = resolveContainerFactoryDir(context.getWorkflowId());
+    }
+
+    /**
+     * 解析当前工作流对应的集装箱 factory 目录作为 workingDir。
+     * <p>
+     * 确保所有 BashTool 执行、Python 输出文件都落在集装箱内部，
+     * 而不是项目根目录。
+     */
+    private String resolveContainerFactoryDir(String workflowName) {
+        // 查找 workspaces 下最新的集装箱目录（时间戳前缀排序）
+        java.nio.file.Path wsDir = java.nio.file.Path.of(
+                com.ouisani.aios.core.config.AiosPaths.workspaces());
+        if (java.nio.file.Files.isDirectory(wsDir)) {
+            try (var stream = java.nio.file.Files.list(wsDir)) {
+                var containerDir = stream
+                        .filter(p -> java.nio.file.Files.isDirectory(p))
+                        .filter(p -> p.getFileName().toString().contains(workflowName)
+                                || p.getFileName().toString().startsWith("20")) // 时间戳前缀
+                        .sorted(java.util.Comparator.comparing(
+                                (java.nio.file.Path p) -> p.getFileName().toString()).reversed())
+                        .findFirst();
+                if (containerDir.isPresent()) {
+                    java.nio.file.Path factoryDir = containerDir.get().resolve("factory");
+                    java.nio.file.Files.createDirectories(factoryDir);
+                    return factoryDir.toString();
+                }
+            } catch (java.io.IOException e) {
+                // 回退到默认
+            }
+        }
+        // 回退：使用默认 factory 目录
+        String fallback = com.ouisani.aios.core.config.AiosPaths.workspaces() + "/_default/factory";
+        try {
+            java.nio.file.Files.createDirectories(java.nio.file.Path.of(fallback));
+        } catch (java.io.IOException ignored) {}
+        return fallback;
     }
 
     @Override
@@ -97,14 +137,44 @@ public class OmniMotherAgent extends AbstractAgent {
         // ════════════════════════════════════════════════════════════════
         initializeClaudeCodeCapabilities();
 
+        // ── 自描述知识加载（借鉴 Agent Zero knowledge/main/about/） ──
+        SelfKnowledgeIndex selfKnowledge = SelfKnowledgeIndex.getInstance();
+        selfKnowledge.load(com.ouisani.aios.core.config.AiosPaths.workspaces() + "/../aios_skills/self_knowledge");
+        if (selfKnowledge.isLoaded()) {
+            log.info("[OmniMother] 自描述知识已加载: {} 个条目", selfKnowledge.size());
+        }
+
+        // 检查是否需要自描述知识 — 当任务涉及"能做什么"、"架构"等问题时注入相关知识
+        String taskDescription = manifest.workflowName();
+        String taskLower = taskDescription.toLowerCase();
+        if (taskLower.contains("能做什么") || taskLower.contains("架构") ||
+            taskLower.contains("capability") || taskLower.contains("architecture")) {
+            List<SelfKnowledgeIndex.KnowledgeEntry> relevant = selfKnowledge.search(taskDescription, 2);
+            if (!relevant.isEmpty()) {
+                StringBuilder kb = new StringBuilder("\n## System Self-Knowledge\n");
+                for (SelfKnowledgeIndex.KnowledgeEntry entry : relevant) {
+                    kb.append("### ").append(entry.title()).append("\n");
+                    kb.append(entry.content()).append("\n\n");
+                }
+                // 将知识注入到系统提示上下文
+                selfKnowledgeContext = (selfKnowledgeContext == null ? "" : selfKnowledgeContext) + kb.toString();
+                log.info("[OmniMother] 自描述知识已注入系统提示: {} 个相关条目", relevant.size());
+            }
+        }
+
         System.out.println("[Mother Agent] ══════════════════════════════════════════");
-        System.out.println("[Mother Agent] Analyzing N-Node Topology... Total nodes: " + manifest.nodes().size());
-        System.out.println("[Mother Agent] Claude Code capabilities: ONLINE");
-        System.out.println("[Mother Agent] Tools: " + ToolRegistry.instance().all().size() + " registered");
+        System.out.println("[Mother Agent] 正在分析 N 节点拓扑... 总节点数: " + manifest.nodes().size());
+        System.out.println("[Mother Agent] Claude Code 能力: 在线");
+        System.out.println("[Mother Agent] 工具: " + ToolRegistry.instance().all().size() + " 已注册");
         System.out.println("[Mother Agent] ══════════════════════════════════════════");
-        log.info("[Mother Agent] Topology: {} nodes | Tools: {} | Mode: {}",
+        log.info("[Mother Agent] 拓扑: {} 个节点 | 工具: {} | 模式: {}",
                 manifest.nodes().size(), ToolRegistry.instance().all().size(),
                 PermissionMode.DEFAULT);
+
+        // ════════════════════════════════════════════════════════════════
+        //  Phase 0.5: 技能按需加载（借鉴 Langflow lazy_load）
+        // ════════════════════════════════════════════════════════════════
+        loadSkillsOnDemand();
 
         // ════════════════════════════════════════════════════════════════
         //  Phase 1: The Forge Loop — 动态 N 节点量产
@@ -127,7 +197,6 @@ public class OmniMotherAgent extends AbstractAgent {
             sdk.writeFile(this.agentId, "/factory/configs/" + node.instanceId() + ".json", "{}");
 
             // ── RAG: 网络搜索已禁用 — 国内 Jina 被墙，直接进入盲写模式 ──
-            // 母体拿到任务后直接进入 Claude Code REPL 写代码，不再等待网络搜索
             String context = "";
 
             // ── Dify 变量解析：从内存总线动态替换 {{nodeId.variable}} 引用 ──
@@ -137,53 +206,76 @@ public class OmniMotherAgent extends AbstractAgent {
                     Object resolved = this.context.resolveValue(entry.getValue());
                     resolvedParams.put(entry.getKey(), resolved != null ? resolved.toString() : "");
                 }
-                log.info("[OmniMother] Memory parameters resolved for node {}: {}", node.instanceId(), resolvedParams);
+                log.info("[OmniMother] 内存参数已解析，节点 {}: {}", node.instanceId(), resolvedParams);
             }
 
-            System.out.println("[Mother Agent]   ├─ Web search skipped (offline mode), entering REPL directly");
+            System.out.println("[Mother Agent]   ├─ 网络搜索已跳过（离线模式），直接进入 REPL");
 
-            // ── Claude Code: QueryEngine 自治 SWE 闭环 ──
+            // ── Claude Code: QueryEngine 自治 SWE 闭环（带自愈重试） ──
             String codePrompt = buildCodePrompt(node, context);
+            boolean nodeVerified = false;
+            String lastNodeError = "";
 
-            System.out.println("[Mother Agent] Initiating Claude Code REPL for node: " + node.instanceId());
+            for (int attempt = 1; attempt <= MAX_SELF_HEAL_RETRIES && !nodeVerified; attempt++) {
+                try {
+                    String prompt = codePrompt;
+                    // 反思注入：把上次错误怼到大模型脸上
+                    if (attempt > 1 && !lastNodeError.isEmpty()) {
+                        prompt += "\n\n[SYSTEM CRITICAL - PREVIOUS ATTEMPT FAILED]:\n"
+                                + "The previous execution failed with the following error/logs:\n"
+                                + "```text\n" + lastNodeError + "\n```\n"
+                                + "Please thoroughly analyze this error, figure out what went wrong, "
+                                + "and provide a CORRECTED solution or code. "
+                                + "Do NOT repeat the same mistake!\n";
+                        log.warn("[OmniMother] onStart 节点 {} 自愈重试 {}/{}，注入错误轨迹。",
+                                node.instanceId(), attempt, MAX_SELF_HEAL_RETRIES);
+                    }
 
-            // ── CostTracker: 记录推理开始 ──
-            long nodeStartTokens = CostTracker.instance().getTotalTokens();
+                    System.out.println("[Mother Agent] 正在为节点启动 Claude Code REPL: " + node.instanceId()
+                            + (attempt > 1 ? " (重试 " + attempt + "/" + MAX_SELF_HEAL_RETRIES + ")" : ""));
 
-            // ── ToolExecutionPipeline: 通过管线执行（Hook→权限→执行→遥测） ──
-            String result = queryEngine.query(codePrompt); // 大模型会在内部自主调用工具、修改、测试
-            if (!result.contains("NODE_VERIFIED_AND_READY")) {
-                System.err.println("[Mother Agent] Warning: Node " + node.instanceId()
-                        + " might not be fully verified. Final response: " + result);
-            } else {
-                System.out.println("[Mother Agent]   ├─ Node '" + node.instanceId() + "' VERIFIED_AND_READY ✓");
+                    long nodeStartTokens = CostTracker.instance().getTotalTokens();
+                    String result = queryEngine.query(prompt);
+
+                    if (result.contains("NODE_VERIFIED_AND_READY")) {
+                        System.out.println("[Mother Agent]   ├─ Node '" + node.instanceId() + "' VERIFIED_AND_READY ✓");
+                        nodeVerified = true;
+                    } else {
+                        lastNodeError = result.length() > 500 ? result.substring(0, 500) : result;
+                        System.err.println("[Mother Agent] 警告：节点 " + node.instanceId()
+                                + " 可能未完全验证 (尝试 " + attempt + "/" + MAX_SELF_HEAL_RETRIES + ")。"
+                                + "最终响应: " + lastNodeError);
+                    }
+
+                    long nodeTokens = CostTracker.instance().getTotalTokens() - nodeStartTokens;
+                    CostTracker.CostLevel costLevel = CostTracker.instance().checkThreshold();
+
+                    MemoryDir.instance().save(new MemoryDir.MemoryEntry(
+                            node.instanceId(), MemoryDir.MemoryType.PROJECT,
+                            "Role: " + node.role() + " | Verified: " + nodeVerified,
+                            System.currentTimeMillis(), new String[]{"omnifactory", node.instanceId()}
+                    ));
+
+                } catch (Exception e) {
+                    lastNodeError = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                    log.error("[OmniMother] onStart 节点 {} 执行异常 (尝试 {}/{}): {}",
+                            node.instanceId(), attempt, MAX_SELF_HEAL_RETRIES, lastNodeError);
+                }
             }
 
-            // ── CostTracker: 记录本节点消耗 ──
-            long nodeTokens = CostTracker.instance().getTotalTokens() - nodeStartTokens;
-            CostTracker.CostLevel costLevel = CostTracker.instance().checkThreshold();
-
-            // ── MemoryDir: 将节点生成记录保存到跨会话记忆 ──
-            MemoryDir.instance().save(new MemoryDir.MemoryEntry(
-                    node.instanceId(), MemoryDir.MemoryType.PROJECT,
-                    "Role: " + node.role() + " | Verified: " + result.contains("NODE_VERIFIED_AND_READY"),
-                    System.currentTimeMillis(), new String[]{"omnifactory", node.instanceId()}
-            ));
-
-            // ── LspManager: 对生成的 Python 文件做语法检查 ──
-            List<LspManager.LspDiagnostic> diagnostics =
-                    LspManager.instance().getDiagnostics("/factory/" + node.instanceId() + ".py");
-            if (!diagnostics.isEmpty()) {
-                System.out.println("[Mother Agent]   ├─ LSP diagnostics for " + node.instanceId()
-                        + ": " + diagnostics.size() + " issues");
+            if (!nodeVerified) {
+                log.error("[OmniMother] onStart 节点 {} 在 {} 次自愈后仍失败，跳过继续执行。",
+                        node.instanceId(), MAX_SELF_HEAL_RETRIES);
+                System.err.println("[Mother Agent]   ├─ Node '" + node.instanceId()
+                        + "' 自愈失败，跳过。错误: " + lastNodeError);
             }
 
             // ── Dify 内存总线：将节点输出提交到全局上下文，供下游节点收割 ──
-            if (this.context != null) {
+            if (this.context != null && nodeVerified) {
                 Map<String, Object> outputs = new HashMap<>();
-                outputs.put("result_text", result);
+                outputs.put("result_text", "verified");
                 this.context.commitNodeOutput(node.instanceId(), outputs);
-                log.info("[OmniMother] Node '{}' output committed to memory bus", node.instanceId());
+                log.info("[OmniMother] Node '{}' 输出已提交到内存总线", node.instanceId());
             }
 
             // ── CoordinatorMode: 如果节点数 > 3，启用协作模式分配 Worker ──
@@ -195,17 +287,20 @@ public class OmniMotherAgent extends AbstractAgent {
             TelemetryService.instance().logEvent("node_forged", Map.of(
                     "node_id", node.instanceId(),
                     "role", node.role(),
-                    "verified", result.contains("NODE_VERIFIED_AND_READY")
+                    "verified", nodeVerified
             ));
 
-            shellScriptBuilder.append("export NODE_ID=").append(node.instanceId()).append("\n");
-            shellScriptBuilder.append("export INPUT_TOPIC=").append(node.subscribeTopic()).append("\n");
-            shellScriptBuilder.append("export OUTPUT_TOPIC=").append(node.publishTopic()).append("\n");
-            shellScriptBuilder.append("python3 /factory/").append(node.instanceId()).append(".py &\n");
+            // ── 只有验证通过的节点才加入 run_all.sh ──
+            if (nodeVerified) {
+                shellScriptBuilder.append("export NODE_ID=").append(node.instanceId()).append("\n");
+                shellScriptBuilder.append("export INPUT_TOPIC=").append(node.subscribeTopic()).append("\n");
+                shellScriptBuilder.append("export OUTPUT_TOPIC=").append(node.publishTopic()).append("\n");
+                shellScriptBuilder.append("python3 -u /factory/").append(node.instanceId()).append(".py\n");
+            }
 
             agentfileBuilder.append("SPAWN ").append(node.instanceId()).append(" 1\n");
 
-            System.out.printf("[Mother Agent]   ├─ Node '%s' forged via autonomous SWE loop%n",
+            System.out.printf("[Mother Agent]   ├─ Node '%s' 已通过自治 SWE 闭环锻造%n",
                     node.instanceId());
 
             // ── SessionMemory: 记录节点生成到会话记忆 ──
@@ -218,11 +313,36 @@ public class OmniMotherAgent extends AbstractAgent {
         // ════════════════════════════════════════════════════════════════
         //  Phase 2: Ignition — 总装与点火
         // ════════════════════════════════════════════════════════════════
-        sdk.writeFile(this.agentId, "/factory/run_all.sh", shellScriptBuilder.toString());
+
+        // ── 校验 run_all.sh 引用的 .py 文件是否真实存在于 VFS ──
+        String[] scriptLines = shellScriptBuilder.toString().split("\n");
+        StringBuilder validatedScript = new StringBuilder("#!/bin/sh\nset -e\n\n");
+        for (String line : scriptLines) {
+            if (line.startsWith("python3")) {
+                // 提取文件路径，如 "python3 -u /factory/agent_1.py"
+                String pyPath = line.replaceAll(".*python3\\s+-u\\s+", "").trim();
+                if (sdk.fileExists(this.agentId, pyPath)) {
+                    validatedScript.append(line).append("\n");
+                } else {
+                    log.error("[OmniMother] run_all.sh 引用了不存在的文件: {}，已跳过！", pyPath);
+                    System.err.println("[Mother Agent]   ├─ 警告：跳过不存在的脚本 " + pyPath);
+                }
+            } else {
+                validatedScript.append(line).append("\n");
+            }
+        }
+
+        if (validatedScript.toString().lines().filter(l -> l.startsWith("python3")).count() == 0) {
+            log.error("[OmniMother] run_all.sh 中没有任何可执行的 Python 脚本，跳过点火。");
+            System.err.println("[Mother Agent] 没有可执行的脚本，跳过点火。");
+            return;
+        }
+
+        sdk.writeFile(this.agentId, "/factory/run_all.sh", validatedScript.toString());
         agentfileBuilder.append("ENTRYPOINT sh /factory/run_all.sh");
 
-        System.out.println("[Mother Agent] Ignition! Deploying workflow...");
-        log.info("[Mother Agent] Ignition! Deploying workflow.");
+        System.out.println("[Mother Agent] 点火！正在部署工作流...");
+        log.info("[Mother Agent] 点火！正在部署工作流。");
 
         AiosAppManager.installAndRun(agentfileBuilder.toString());
 
@@ -232,9 +352,9 @@ public class OmniMotherAgent extends AbstractAgent {
 
         // ── SessionMemory: 更新工作日志 ──
         sessionMemory.setSection(SessionMemoryService.Section.WORKLOG,
-                "Generated " + manifest.nodes().size() + " nodes for workflow: " + manifest.workflowName());
+                "已为工作流生成 " + manifest.nodes().size() + " 个节点: " + manifest.workflowName());
         sessionMemory.setSection(SessionMemoryService.Section.CURRENT_STATE,
-                "Workflow deployed. All nodes running in background.");
+                "工作流已部署。所有节点在后台运行。");
 
         // ── Compact: 检查是否需要压缩 ──
         long estimatedTokens = estimateTokensFromHistory();
@@ -247,15 +367,15 @@ public class OmniMotherAgent extends AbstractAgent {
         // ── AutoDream: 检查是否应该触发梦境整合 ──
         if (AutoDreamService.shouldDream()) {
             TaskScheduler.instance().scheduleDream(this.agentId, sdk, 60);
-            System.out.println("[Mother Agent] Dream consolidation scheduled");
+            System.out.println("[Mother Agent] 梦境整合已调度");
         }
 
         // ── 遥测: 打印成本报告 ──
         long elapsed = System.currentTimeMillis() - startTime;
         TelemetryService.instance().recordApiDuration(elapsed);
-        System.out.println("[Mother Agent] Total time: " + elapsed + "ms");
+        System.out.println("[Mother Agent] 总耗时: " + elapsed + "ms");
         System.out.println("[Mother Agent] " + CostTracker.instance().formatReport());
-        log.info("[Mother Agent] Cost report:\n{}", TelemetryService.instance().formatCostReport());
+        log.info("[Mother Agent] 成本报告:\n{}", TelemetryService.instance().formatCostReport());
 
         this.exit();
     }
@@ -267,7 +387,7 @@ public class OmniMotherAgent extends AbstractAgent {
                 HookManager.HookEvent.STOP, Map.of("message", msg));
 
         if (result.proceed()) {
-            log.debug("[Mother Agent] Message (retiring): {}", msg.substring(0, Math.min(60, msg.length())));
+            log.debug("[Mother Agent] 消息（正在退出）: {}", msg.substring(0, Math.min(60, msg.length())));
         }
     }
 
@@ -299,7 +419,7 @@ public class OmniMotherAgent extends AbstractAgent {
     @Override
     protected void handleTask(Object rawPayload) {
         if (!(rawPayload instanceof com.ouisani.aios.core.team.TaskPayload payload)) {
-            log.error("[OmniMother] Received invalid payload type: {}", rawPayload.getClass().getSimpleName());
+            log.error("[OmniMother] 收到无效的载荷类型: {}", rawPayload.getClass().getSimpleName());
             return;
         }
 
@@ -311,7 +431,7 @@ public class OmniMotherAgent extends AbstractAgent {
         while (currentAttempt < MAX_SELF_HEAL_RETRIES && !success) {
             currentAttempt++;
             try {
-                log.info("[OmniMother] Task Attempt {}/{} starting for node: {}",
+                log.info("[OmniMother] 任务尝试 {}/{} 正在启动，节点: {}",
                         currentAttempt, MAX_SELF_HEAL_RETRIES, payload.node().instanceId());
 
                 // ── 初始化能力模块（仅首次） ──
@@ -333,7 +453,7 @@ public class OmniMotherAgent extends AbstractAgent {
                             + "and provide a CORRECTED solution or code. "
                             + "Do NOT repeat the same mistake!\n";
                     basePrompt += reflectionBlock;
-                    log.warn("[OmniMother] Injecting error trace into LLM context for Self-Correction (attempt {}).",
+                    log.warn("[OmniMother] 正在将错误轨迹注入 LLM 上下文以进行自纠正（第 {} 次尝试）。",
                             currentAttempt);
                 }
 
@@ -344,7 +464,7 @@ public class OmniMotherAgent extends AbstractAgent {
                         Object resolved = this.context.resolveValue(entry.getValue());
                         resolvedParams.put(entry.getKey(), resolved != null ? resolved.toString() : "");
                     }
-                    log.info("[OmniMother] Memory parameters resolved for node {}: {}", node.instanceId(), resolvedParams);
+                    log.info("[OmniMother] 内存参数已解析，节点 {}: {}", node.instanceId(), resolvedParams);
                 }
 
                 // ── 执行 LLM 自治 SWE 闭环 ──
@@ -355,7 +475,7 @@ public class OmniMotherAgent extends AbstractAgent {
                 try {
                     long memTokens = estimateTokensFromHistory();
                     if (memTokens > 100000) {
-                        log.warn("[OmniMother] Memory high watermark breached ({} tokens), OOM Killer engaged!", memTokens);
+                        log.warn("[OmniMother] 内存高水位线被突破（{} tokens），OOM Killer 已启动！", memTokens);
                         // 将 SessionMemory 各 Section 的内容压缩
                         for (com.ouisani.aios.core.memory.SessionMemoryService.Section section
                                 : com.ouisani.aios.core.memory.SessionMemoryService.Section.values()) {
@@ -367,7 +487,7 @@ public class OmniMotherAgent extends AbstractAgent {
                         }
                     }
                 } catch (Exception oomEx) {
-                    log.warn("[OmniMother] OOM Killer pre-check failed (non-fatal): {}", oomEx.getMessage());
+                    log.warn("[OmniMother] OOM Killer 预检查失败（非致命）: {}", oomEx.getMessage());
                 }
 
                 String result = queryEngine.query(basePrompt);
@@ -376,8 +496,8 @@ public class OmniMotherAgent extends AbstractAgent {
                 if (!result.contains("NODE_VERIFIED_AND_READY")) {
                     // 节点未验证通过 — 视为执行失败，触发多层自愈
                     String errorMsg = "Node " + node.instanceId()
-                            + " not verified. LLM response: " + result;
-                    log.warn("[OmniMother] Attempt {}/{} verification failed: {}",
+                            + " 未验证通过。LLM 响应: " + result;
+                    log.warn("[OmniMother] 尝试 {}/{} 验证失败: {}",
                             currentAttempt, MAX_SELF_HEAL_RETRIES, errorMsg);
                     throw new RuntimeException(errorMsg);
                 }
@@ -385,7 +505,7 @@ public class OmniMotherAgent extends AbstractAgent {
                 // ── 成功！重置恢复计数器 ──
                 recovery.resetFailures(this.agentId);
                 long nodeTokens = CostTracker.instance().getTotalTokens() - nodeStartTokens;
-                log.info("[OmniMother] Node '{}' VERIFIED on attempt {} ({} tokens consumed)",
+                log.info("[OmniMother] Node '{}' 在第 {} 次尝试时验证通过（消耗 {} tokens）",
                         node.instanceId(), currentAttempt, nodeTokens);
 
                 MemoryDir.instance().save(new MemoryDir.MemoryEntry(
@@ -400,41 +520,53 @@ public class OmniMotherAgent extends AbstractAgent {
                     outputs.put("result_text", result);
                     outputs.put("attempts_required", currentAttempt);
                     this.context.commitNodeOutput(node.instanceId(), outputs);
-                    log.info("[OmniMother] Node '{}' output committed to memory bus", node.instanceId());
+                    log.info("[OmniMother] Node '{}' 输出已提交到内存总线", node.instanceId());
                 }
 
                 // ── ABI Firewall: 强类型输出安检 ──
-                // 将 LLM 输出经过 JSON 提取与校验，写入 VariablePool 供下游节点安全读取
-                log.info("[OmniMother] Task reasoning completed. Proceeding to ABI Firewall check...");
-                try {
-                    com.fasterxml.jackson.databind.JsonNode purifiedData =
-                            com.ouisani.aios.core.ipc.OutputSchemaValidator.enforceJsonStructure(result);
+                // 对于代码生成类任务（NODE_VERIFIED_AND_READY），LLM 输出是自然语言确认，
+                // 不需要强制 JSON 格式。只有数据产出类任务才需要 JSON 校验。
+                log.info("[OmniMother] 任务推理完成。正在进行 ABI Firewall 检查...");
+                boolean isCodeGenerationTask = result.contains("NODE_VERIFIED_AND_READY");
 
-                    // 将安检合格的干净数据写入共享内存池，供下游节点调用
-                    com.ouisani.aios.core.ipc.VariablePool.getInstance().set(
-                            com.ouisani.aios.core.ipc.VariablePool.Scope.TASK,
-                            payload.node().instanceId(),
-                            "result",
-                            purifiedData
-                    );
-                    log.info("[OmniMother] ABI Firewall passed. Output committed to VariablePool for node: {}",
-                            node.instanceId());
-                } catch (IllegalArgumentException abiEx) {
-                    // ABI 校验失败 — LLM 输出了非 JSON 格式
-                    // 这个异常会被 catch 块捕获，经 JsonParseErrorRecovery 处理后重新注入 Prompt
-                    log.warn("[OmniMother] ABI Firewall rejected output for node {}: {}",
-                            node.instanceId(), abiEx.getMessage());
-                    throw abiEx;
-                } catch (Exception abiEx) {
-                    // JSON 提取失败但非 ABI 违规 — 宽松处理，将原始文本写入 VariablePool
-                    log.debug("[OmniMother] ABI Firewall lenient fallback for node {}: storing raw text",
-                            node.instanceId());
+                if (isCodeGenerationTask) {
+                    // 代码生成任务 — 节点已验证通过，将确认信息存入 VariablePool
                     com.ouisani.aios.core.ipc.VariablePool.getInstance().set(
                             com.ouisani.aios.core.ipc.VariablePool.Scope.TASK,
                             payload.node().instanceId(),
                             "result",
                             result
                     );
+                    log.info("[OmniMother] ABI Firewall 跳过（代码生成任务已验证通过）。节点: {}",
+                            node.instanceId());
+                } else {
+                    // 数据产出任务 — 强制 JSON 校验
+                    try {
+                        com.fasterxml.jackson.databind.JsonNode purifiedData =
+                                com.ouisani.aios.core.ipc.OutputSchemaValidator.enforceJsonStructure(result);
+
+                        com.ouisani.aios.core.ipc.VariablePool.getInstance().set(
+                                com.ouisani.aios.core.ipc.VariablePool.Scope.TASK,
+                                payload.node().instanceId(),
+                                "result",
+                                purifiedData
+                        );
+                        log.info("[OmniMother] ABI Firewall 通过。输出已提交到 VariablePool，节点: {}",
+                                node.instanceId());
+                    } catch (IllegalArgumentException abiEx) {
+                        log.warn("[OmniMother] ABI Firewall 拒绝了节点 {} 的输出: {}",
+                                node.instanceId(), abiEx.getMessage());
+                        throw abiEx;
+                    } catch (Exception abiEx) {
+                        log.debug("[OmniMother] ABI Firewall 宽松回退，节点 {}: 存储原始文本",
+                                node.instanceId());
+                        com.ouisani.aios.core.ipc.VariablePool.getInstance().set(
+                                com.ouisani.aios.core.ipc.VariablePool.Scope.TASK,
+                                payload.node().instanceId(),
+                                "result",
+                                result
+                        );
+                    }
                 }
 
                 TelemetryService.instance().logEvent("node_forged", Map.of(
@@ -446,12 +578,12 @@ public class OmniMotherAgent extends AbstractAgent {
 
                 // ── 业务顺利办完，跳出循环 ──
                 success = true;
-                log.info("[OmniMother] Task complete on attempt {}. Output safely committed to VariablePool. Signing receipt for node: {}",
+                log.info("[OmniMother] 任务在第 {} 次尝试时完成。输出已安全提交到 VariablePool。正在签收回执，节点: {}",
                         currentAttempt, node.instanceId());
                 payload.completionReceipt().complete(null);
 
             } catch (Exception e) {
-                log.warn("[OmniMother] Attempt {}/{} failed: {}", currentAttempt, MAX_SELF_HEAL_RETRIES, e.getMessage());
+                log.warn("[OmniMother] 尝试 {}/{} 失败: {}", currentAttempt, MAX_SELF_HEAL_RETRIES, e.getMessage());
                 lastErrorTrace = e.getMessage() != null ? e.getMessage() : e.toString();
 
                 // ══════════════════════════════════════════════════════════
@@ -465,7 +597,7 @@ public class OmniMotherAgent extends AbstractAgent {
                 if (recoveryResult.success() && recoveryResult.modifiedPrompt() != null) {
                     // 恢复策略提供了 Prompt 修改 — 注入到下一次尝试
                     lastErrorTrace += "\n[RECOVERY STRATEGY APPLIED: " + recoveryResult.message() + "]";
-                    log.info("[OmniMother] Recovery strategy applied: {}", recoveryResult.message());
+                    log.info("[OmniMother] 恢复策略已应用: {}", recoveryResult.message());
                 }
 
                 // 【广播自愈警告事件 — 触发前端大屏红光闪烁动效】
@@ -483,7 +615,7 @@ public class OmniMotherAgent extends AbstractAgent {
                 // 指数退避 (Exponential Backoff) 防止 API 限流
                 try {
                     long backoffMs = 2000L * currentAttempt;
-                    log.info("[OmniMother] Backing off {}ms before retry...", backoffMs);
+                    log.info("[OmniMother] 退避 {}ms 后重试...", backoffMs);
                     Thread.sleep(backoffMs);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
@@ -494,11 +626,11 @@ public class OmniMotherAgent extends AbstractAgent {
 
         // ── 如果三次都没救回来，宣告失败 ──
         if (!success) {
-            log.error("[OmniMother] Max retries ({}) exhausted for node: {}. Agent failed to heal itself.",
+            log.error("[OmniMother] 最大重试次数 ({}) 已耗尽，节点: {}。Agent 自愈失败。",
                     MAX_SELF_HEAL_RETRIES, payload.node().instanceId());
             payload.completionReceipt().completeExceptionally(
-                    new RuntimeException("Agent failed after " + MAX_SELF_HEAL_RETRIES
-                            + " self-heal attempts. Last error: " + lastErrorTrace));
+                    new RuntimeException("Agent 在 " + MAX_SELF_HEAL_RETRIES
+                            + " 次自愈尝试后失败。最后错误: " + lastErrorTrace));
         }
     }
 
@@ -541,16 +673,16 @@ public class OmniMotherAgent extends AbstractAgent {
         // ── 7. CLAUDE.md — 加载项目指令 ──
         List<ClaudeMdLoader.MemoryFileInfo> claudeMds = ClaudeMdLoader.loadAll(workingDir);
         if (!claudeMds.isEmpty()) {
-            System.out.println("[Mother Agent] CLAUDE.md loaded: " + claudeMds.size() + " files");
-            log.info("[Mother Agent] CLAUDE.md: {} files loaded", claudeMds.size());
+            System.out.println("[Mother Agent] CLAUDE.md 已加载: " + claudeMds.size() + " 个文件");
+            log.info("[Mother Agent] CLAUDE.md: 已加载 {} 个文件", claudeMds.size());
         }
 
         // ── 8. Skills — 加载技能 ──
         Map<String, com.ouisani.aios.core.skill.SkillLoader.SkillDef> skills =
                 com.ouisani.aios.core.skill.SkillLoader.loadAll(workingDir);
         if (!skills.isEmpty()) {
-            System.out.println("[Mother Agent] Skills loaded: " + skills.keySet());
-            log.info("[Mother Agent] Skills: {} loaded", skills.size());
+            System.out.println("[Mother Agent] 技能已加载: " + skills.keySet());
+            log.info("[Mother Agent] 技能: 已加载 {} 个", skills.size());
         }
 
         // ── 9. AutoDream — 记录新会话 ──
@@ -571,7 +703,7 @@ public class OmniMotherAgent extends AbstractAgent {
         // ── 14. 母体专属认知工具 — 通过 QueryEngine 独享，不污染全局注册表 ──
         // (已在步骤1中通过 buildMotherToolList() 传入 QueryEngine)
 
-        log.info("[Mother Agent] Claude Code capabilities initialized (15 modules)");
+        log.info("[Mother Agent] Claude Code 能力已初始化（15 个模块）");
     }
 
     /**
@@ -592,9 +724,46 @@ public class OmniMotherAgent extends AbstractAgent {
         tools.add(new com.ouisani.aios.operator.tools.AstSearchTool());
         tools.add(new com.ouisani.aios.operator.tools.AstRewriteTool());
         tools.add(new com.ouisani.aios.operator.tools.TeamTool());
-        System.out.println("[Mother Agent] 10 exclusive cognitive tools mounted (TodoWrite, NotebookEdit, PlanMode, Task, Skill, HashlineRead, HashlineEdit, AstSearch, AstRewrite, Team)");
-        log.info("[Mother Agent] Exclusive cognitive tools mounted: TodoWrite, NotebookEdit, PlanMode, Task, Skill, HashlineRead, HashlineEdit, AstSearch, AstRewrite, Team");
+        System.out.println("[Mother Agent] 10 个专属认知工具已挂载 (TodoWrite, NotebookEdit, PlanMode, Task, Skill, HashlineRead, HashlineEdit, AstSearch, AstRewrite, Team)");
+        log.info("[Mother Agent] 专属认知工具已挂载: TodoWrite, NotebookEdit, PlanMode, Task, Skill, HashlineRead, HashlineEdit, AstSearch, AstRewrite, Team");
         return tools;
+    }
+
+    /**
+     * 技能按需加载 — 借鉴 Langflow 的 lazy_load 按需加载机制。
+     * <p>
+     * 不再全量写入 MANIFEST.md，而是根据任务描述匹配相关技能，
+     * 只把匹配到的技能描述写入 ACTIVE_SKILLS.md，减少 token 消耗。
+     * 当没有匹配到技能时，回退到全量加载（保持兼容）。
+     */
+    private void loadSkillsOnDemand() {
+        try {
+            SkillIndex skillIndex = SkillIndex.getInstance();
+            String skillsDir = com.ouisani.aios.core.config.AiosPaths.skillsDir();
+            skillIndex.buildIndex(skillsDir);
+
+            // 构建任务描述：工作流名称 + 各节点角色
+            String taskDesc = manifest.workflowName() + " " +
+                manifest.nodes().stream().map(WorkflowNode::role).reduce("", (a, b) -> a + " " + b);
+            List<SkillIndex.SkillEntry> matchedSkills = skillIndex.matchSkills(taskDesc, 5);
+
+            if (matchedSkills.isEmpty()) {
+                // 没有匹配到技能，回退到全量加载（保持兼容）
+                log.info("[OmniMother] SkillIndex 未匹配到相关技能，回退到全量加载 ACTIVE_SKILLS.md");
+                return; // AiosAppManager 会处理全量加载
+            }
+
+            StringBuilder skillContent = new StringBuilder("# Active Skills (按需加载)\n\n");
+            for (SkillIndex.SkillEntry skill : matchedSkills) {
+                skillContent.append("## ").append(skill.name()).append("\n");
+                skillContent.append(skill.description()).append("\n\n");
+            }
+            sdk.writeFile(this.agentId, "/factory/ACTIVE_SKILLS.md", skillContent.toString());
+            log.info("[OmniMother] 按需加载了 {} 个相关技能（共 {} 个可用）",
+                matchedSkills.size(), skillIndex.size());
+        } catch (Exception e) {
+            log.warn("[OmniMother] 技能按需加载失败（非致命），回退到默认行为: {}", e.getMessage());
+        }
     }
 
     /**
@@ -621,6 +790,11 @@ public class OmniMotherAgent extends AbstractAgent {
             prompt.append("【项目指令 (CLAUDE.md)】\n").append(claudeMdContext).append("\n\n");
         }
 
+        // 自描述知识上下文（借鉴 Agent Zero knowledge/main/about/）
+        if (selfKnowledgeContext != null && !selfKnowledgeContext.isEmpty()) {
+            prompt.append(selfKnowledgeContext).append("\n");
+        }
+
         // 自治 SWE 协议 — 核心指令
         prompt.append("你是一个自治软件工程师 (Autonomous SWE)。你需要为节点 [")
               .append(node.instanceId()).append("] 实现功能：[").append(node.role()).append("]。\n")
@@ -639,7 +813,13 @@ public class OmniMotherAgent extends AbstractAgent {
               .append("4. 【绝对禁止交互式命令】：你正在一个无头 (Headless) 的自动化沙箱中运行！执行 bash 工具时，**绝对禁止使用 `sudo`**，绝对禁止使用任何需要人类输入或交互的命令（如 vim, nano, python -i 等）。\n")
               .append("5. 如果需要安装 Python 依赖，必须使用 `pip3 install --user <package>` 规避权限问题，并加上 `-y` 或相关静默参数！违者将导致进程永久阻塞！\n")
               .append("6. 【必须有控制台打印】：你编写的所有 `.py` 脚本，在执行完毕或者执行过程中，必须使用 `print()` 语句在控制台打印出极其明显的标记！例如 `print('AGENT_1_SUCCESS: Data fetched!')`，绝不允许没有任何输出就结束进程！\n")
-              .append("7. 【强制生成工序纪律】：你必须严格按照以下顺序执行任务，绝不允许跳步或敷衍！\n")
+              .append("7. 【输出目录强制规范 (CRITICAL)】：所有文件输出（JSON结果、日志、数据文件等）必须写入以下目录，严禁使用 `os.getcwd()` 或相对路径创建新目录！\n")
+              .append("    - 结果文件 → 写入 `/factory/outputs/` 目录（如 `/factory/outputs/agent_1_result.json`）\n")
+              .append("    - 临时文件 → 写入 `/factory/` 目录（如 `/factory/agent_1_temp.json`）\n")
+              .append("    - 严禁在当前工作目录下创建 `result_store/`、`outputs/`、`data/` 等子目录！\n")
+              .append("    - 严禁使用 `os.path.join(os.getcwd(), 'xxx')` 这种写法！必须使用绝对路径 `/factory/outputs/xxx`！\n")
+              .append("    - 示例：`output_path = '/factory/outputs/agent_1_result.json'`，而不是 `output_path = './result_store/agent_1_result.json'`\n")
+              .append("8. 【强制生成工序纪律】：你必须严格按照以下顺序执行任务，绝不允许跳步或敷衍！\n")
               .append("    - 第一步：调用 `file_write` 工具，为当前节点生成 Python 源码到 `/factory` 目录下。\n")
               .append("      你现在的角色是高级底层开发工程师 (Python Coder)。系统架构师已经为你规划好了整个工作流的 DAG 拓扑，当前正在处理的节点是：[").append(node.instanceId()).append("]，它的职责是：[").append(node.role()).append("]。\n")
               .append("      你只需要专心致志地为这单个节点编写 Python 代码，严禁在当前文件中实现其他节点的功能！\n")

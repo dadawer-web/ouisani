@@ -153,7 +153,7 @@ public non-sealed class GraphNode implements VfsNode {
                     "Extract core knowledge triplets from this text in the format [EntityA|Relation|EntityB]. Text: " + payload,
                     "System: Graph Extractor");
         } catch (Exception e) {
-            System.out.printf("  [GraphNode] LLM extraction failed: %s%n", e.getMessage());
+            System.out.printf("  [GraphNode] LLM 提取失败: %s%n", e.getMessage());
             return false;
         }
 

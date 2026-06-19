@@ -274,7 +274,7 @@ public non-sealed class GuiActionNode implements VfsNode {
      */
     public void subscribe(String agentId, Consumer<String> callback) {
         actionSubscribers.put(agentId, callback);
-        log.info("[GuiActionNode] Subscriber registered for agent={}", agentId);
+        log.info("[GuiActionNode] Agent 订阅者已注册: agent={}", agentId);
     }
 
     /**

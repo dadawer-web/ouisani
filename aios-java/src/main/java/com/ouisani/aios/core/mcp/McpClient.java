@@ -65,7 +65,7 @@ public class McpClient {
      * 连接到 Stdio 类型的 MCP 服务器。
      */
     public void connect(List<String> command) throws IOException {
-        log.info("[MCP Client] Connecting to server '{}' via Stdio", serverName);
+        log.info("[MCP Client] 正在通过 Stdio 连接服务器 '{}'", serverName);
         if (transport instanceof McpStdioTransport stdio) {
             stdio.start(command, this::handleIncomingMessage);
         } else {
@@ -75,11 +75,11 @@ public class McpClient {
         // ── MCP 规范握手流程 ──
         try {
             performHandshake();
-            log.info("[MCP Client] Server '{}' connected and initialized. Protocol={}", serverName, negotiatedProtocolVersion);
+            log.info("[MCP Client] 服务器 '{}' 已连接并初始化，Protocol={}", serverName, negotiatedProtocolVersion);
         } catch (Exception e) {
-            log.error("[MCP Client] Handshake failed for server '{}': {}", serverName, e.getMessage());
+            log.error("[MCP Client] 服务器 '{}' 握手失败: {}", serverName, e.getMessage());
             transport.close();
-            throw new IOException("MCP handshake failed: " + e.getMessage(), e);
+            throw new IOException("MCP 握手失败: " + e.getMessage(), e);
         }
     }
 
@@ -87,7 +87,7 @@ public class McpClient {
      * 连接到 HTTP/SSE 类型的 MCP 服务器。
      */
     public void connectHttp() throws IOException {
-        log.info("[MCP Client] Connecting to server '{}' via HTTP/SSE", serverName);
+        log.info("[MCP Client] 正在通过 HTTP/SSE 连接服务器 '{}'", serverName);
         if (transport instanceof McpHttpTransport http) {
             http.start(this::handleIncomingMessage);
         } else {
@@ -97,11 +97,11 @@ public class McpClient {
         // ── MCP 规范握手流程 ──
         try {
             performHandshake();
-            log.info("[MCP Client] Server '{}' connected and initialized via HTTP. Protocol={}", serverName, negotiatedProtocolVersion);
+            log.info("[MCP Client] 服务器 '{}' 已通过 HTTP 连接并初始化，Protocol={}", serverName, negotiatedProtocolVersion);
         } catch (Exception e) {
-            log.error("[MCP Client] HTTP handshake failed for server '{}': {}", serverName, e.getMessage());
+            log.error("[MCP Client] 服务器 '{}' HTTP 握手失败: {}", serverName, e.getMessage());
             transport.close();
-            throw new IOException("MCP HTTP handshake failed: " + e.getMessage(), e);
+            throw new IOException("MCP HTTP 握手失败: " + e.getMessage(), e);
         }
     }
 
@@ -139,7 +139,7 @@ public class McpClient {
             JsonNode serverInfo = initResult.path("serverInfo");
             String serverName = serverInfo.path("name").asText("unknown");
             String serverVersion = serverInfo.path("version").asText("unknown");
-            log.info("[MCP Client] Server info: name={}, version={}, protocol={}, capabilities={}",
+            log.info("[MCP Client] 服务器信息: name={}, version={}, protocol={}, capabilities={}",
                     serverName, serverVersion, negotiatedProtocolVersion,
                     serverCapabilities != null && !serverCapabilities.isMissingNode() ? serverCapabilities.fieldNames().hasNext() : "none");
         }
@@ -148,9 +148,9 @@ public class McpClient {
         try {
             McpNotification notification = new McpNotification("notifications/initialized", null);
             transport.send(mapper.writeValueAsString(notification));
-            log.debug("[MCP Client] Sent notifications/initialized to server '{}'", serverName);
+            log.debug("[MCP Client] 已发送 notifications/initialized 到服务器 '{}'", serverName);
         } catch (IOException e) {
-            log.warn("[MCP Client] Failed to send initialized notification: {}", e.getMessage());
+            log.warn("[MCP Client] 发送 initialized 通知失败: {}", e.getMessage());
         }
     }
 
@@ -165,15 +165,15 @@ public class McpClient {
                     McpResponse response = mapper.treeToValue(root, McpResponse.class);
                     future.complete(response);
                 } else {
-                    log.warn("[MCP Client] Received response for unknown/expired ID: {}", id);
+                    log.warn("[MCP Client] 收到未知/过期 ID 的响应: {}", id);
                 }
             } else if (root.has("method")) {
                 // 处理服务端发来的通知 (如 log/message, notifications/resources/updated)
                 String method = root.get("method").asText();
-                log.info("[MCP Client] Received notification from server '{}': {}", serverName, method);
+                log.info("[MCP Client] 收到服务器 '{}' 的通知: {}", serverName, method);
             }
         } catch (Exception e) {
-            log.error("[MCP Client] Failed to parse incoming message: {}", rawJson, e);
+            log.error("[MCP Client] 解析传入消息失败: {}", rawJson, e);
         }
     }
 
@@ -201,16 +201,16 @@ public class McpClient {
 
         } catch (java.util.concurrent.TimeoutException e) {
             pendingRequests.remove(id);
-            throw new RuntimeException("MCP request timed out after " + timeoutMs + "ms");
+            throw new RuntimeException("MCP 请求超时 (" + timeoutMs + "ms)");
         } catch (Exception e) {
             pendingRequests.remove(id);
-            throw new RuntimeException("MCP request failed: " + e.getMessage(), e);
+            throw new RuntimeException("MCP 请求失败: " + e.getMessage(), e);
         }
     }
 
     public void disconnect() {
         transport.close();
-        pendingRequests.values().forEach(f -> f.completeExceptionally(new RuntimeException("Client disconnected")));
+        pendingRequests.values().forEach(f -> f.completeExceptionally(new RuntimeException("客户端已断开连接")));
         pendingRequests.clear();
     }
 

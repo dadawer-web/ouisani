@@ -153,7 +153,7 @@ public class OperatorAgent extends AbstractAgent {
         System.out.println("[Operator Agent] ══════════════════════════════════════════");
         System.out.println("[Operator Agent] Physical Interaction Mode: ONLINE");
         System.out.println("[Operator Agent] Task nodes: " + manifest.nodes().size());
-        System.out.println("[Operator Agent] Tools: " + ToolRegistry.instance().all().size() + " registered");
+        System.out.println("[Operator Agent] Tools: " + ToolRegistry.instance().all().size() + " 工具已注册");
         System.out.println("[Operator Agent] ══════════════════════════════════════════");
         log.info("[Operator Agent] Initialized | Nodes: {} | Tools: {}",
                 manifest.nodes().size(), ToolRegistry.instance().all().size());
@@ -162,7 +162,7 @@ public class OperatorAgent extends AbstractAgent {
         //  Phase 1: ReAct Loop — 逐节点即时执行
         // ════════════════════════════════════════════════════════════════
         for (WorkflowNode node : manifest.nodes()) {
-            System.out.println("[Operator Agent] Executing node: " + node.instanceId()
+            System.out.println("[Operator Agent] 正在执行节点: " + node.instanceId()
                     + " | Role: " + node.role());
 
             // 构建操作员 Prompt — 注入节点职责和上下文
@@ -216,7 +216,7 @@ public class OperatorAgent extends AbstractAgent {
                 Map<String, Object> outputs = new HashMap<>();
                 outputs.put("result_text", result);
                 this.context.commitNodeOutput(node.instanceId(), outputs);
-                log.info("[OperatorAgent] Node '{}' output committed to memory bus", node.instanceId());
+                log.info("[OperatorAgent] 节点 '{}' 输出已提交至内存总线", node.instanceId());
             }
 
             // ── SessionMemory: 记录操作到会话记忆 ──
@@ -289,7 +289,7 @@ public class OperatorAgent extends AbstractAgent {
     @Override
     protected void handleTask(Object rawPayload) {
         if (!(rawPayload instanceof com.ouisani.aios.core.team.TaskPayload payload)) {
-            log.error("[OperatorAgent] Received invalid payload type: {}", rawPayload.getClass().getSimpleName());
+            log.error("[OperatorAgent] 收到无效负载类型: {}", rawPayload.getClass().getSimpleName());
             return;
         }
 
@@ -305,7 +305,7 @@ public class OperatorAgent extends AbstractAgent {
             payload.completionReceipt().complete(null);
 
         } catch (Exception e) {
-            log.error("[OperatorAgent] Task failed for node: {}", payload.node().instanceId(), e);
+            log.error("[OperatorAgent] 节点任务失败: {}", payload.node().instanceId(), e);
             // 异常也要填写回执单（异常版），否则 DAG 引擎会死锁
             payload.completionReceipt().completeExceptionally(e);
         }
@@ -354,7 +354,7 @@ public class OperatorAgent extends AbstractAgent {
         this.pluginRegistry = new PluginRegistry();
         this.pluginLoader = new PluginLoader(pluginRegistry, Paths.get(OPENCLAW_PLUGINS_DIR));
         int pluginCount = pluginLoader.scanAndLoad();
-        System.out.println("[Operator Agent] OpenClaw plugins loaded: " + pluginCount);
+        System.out.println("[Operator Agent] OpenClaw 插件已加载: " + pluginCount);
 
         // ── 1. OpenClaw 会话管理 — 创建/恢复会话 ──
         Path sessionDir = Paths.get(OPENCLAW_SESSIONS_DIR);
@@ -386,7 +386,7 @@ public class OperatorAgent extends AbstractAgent {
         channelRegistry.register(new ChannelRegistry.ChannelEntry(
                 "discord", "Discord", List.of("dc"), true,
                 true, true, true, false, "openclaw-discord"));
-        System.out.println("[Operator Agent] OpenClaw channels: " + channelRegistry.size() + " registered");
+        System.out.println("[Operator Agent] OpenClaw 通道已注册: " + channelRegistry.size());
 
         // ── 1.7. OpenClaw 密钥快照 — 解析运行时密钥 ──
         List<SecretRef> secretRefs = new ArrayList<>();
@@ -408,12 +408,12 @@ public class OperatorAgent extends AbstractAgent {
             HostRpaManager rpaManager = HostRpaManager.getInstance();
             if (rpaManager.isAvailable()) {
                 this.rpaToken = rpaManager.issueSysAdminToken("OperatorAgent:" + manifest.workflowName());
-                System.out.println("[Operator Agent] RPA: SYS_ADMIN token issued — physical control ENABLED");
+                System.out.println("[Operator Agent] RPA: SYS_ADMIN Token 已签发 — 物理控制已启用");
             } else {
-                System.out.println("[Operator Agent] RPA: HostRpaManager not available (headless mode?) — physical control DISABLED");
+                System.out.println("[Operator Agent] RPA: HostRpaManager 不可用（无头模式？）— 物理控制已禁用");
             }
         } catch (Exception e) {
-            System.out.println("[Operator Agent] RPA: Failed to issue token — " + e.getMessage());
+            System.out.println("[Operator Agent] RPA: Token 签发失败 — " + e.getMessage());
         }
 
         // ── 1.9. VisionService — 从 LlmRouter 获取多模态 Provider ──
@@ -427,7 +427,7 @@ public class OperatorAgent extends AbstractAgent {
                 if (router != null) {
                     multimodalProvider = router.getProvider("smart_model");
                     if (multimodalProvider != null) {
-                        System.out.println("[Operator Agent] VisionService: Using main LLM as multimodal fallback ("
+                        System.out.println("[Operator Agent] VisionService: 使用主 LLM 作为多模态回退 ("
                                 + multimodalProvider.name() + ")");
                     }
                 }
@@ -435,10 +435,10 @@ public class OperatorAgent extends AbstractAgent {
 
             if (multimodalProvider != null && multimodalProvider.isAvailable()) {
                 this.visionService = new VisionService(multimodalProvider);
-                System.out.println("[Operator Agent] VisionService: ONLINE — multimodal provider '"
+                System.out.println("[Operator Agent] VisionService: 在线 — multimodal provider '"
                         + multimodalProvider.name() + "' connected");
             } else {
-                System.out.println("[Operator Agent] VisionService: DISABLED — no multimodal provider registered");
+                System.out.println("[Operator Agent] VisionService: 已禁用 — no multimodal provider registered");
             }
         } catch (Exception e) {
             System.out.println("[Operator Agent] VisionService: Failed to initialize — " + e.getMessage());
@@ -477,7 +477,7 @@ public class OperatorAgent extends AbstractAgent {
         // ── 6. CLAUDE.md — 加载项目指令 ──
         List<ClaudeMdLoader.MemoryFileInfo> claudeMds = ClaudeMdLoader.loadAll(workingDir);
         if (!claudeMds.isEmpty()) {
-            System.out.println("[Operator Agent] CLAUDE.md loaded: " + claudeMds.size() + " files");
+            System.out.println("[Operator Agent] CLAUDE.md 已加载: " + claudeMds.size() + " files");
         }
 
         // ── 7. CostTracker — 成本追踪 ──
@@ -486,7 +486,7 @@ public class OperatorAgent extends AbstractAgent {
         // ── 8. MemoryDir — 跨会话记忆 ──
         MemoryDir.instance().scan();
 
-        log.info("[Operator Agent] Capabilities initialized (9 modules, {} plugins)", pluginCount);
+        log.info("[Operator Agent] 能力已初始化 (9 modules, {} plugins)", pluginCount);
     }
 
     /**
@@ -514,12 +514,12 @@ public class OperatorAgent extends AbstractAgent {
                 computerUseTool.setVisionService(visionService);
                 System.out.println("[Operator Agent] ComputerUseTool: MOUNTED with VisionService (mimo-v2.5)");
             } else {
-                System.out.println("[Operator Agent] ComputerUseTool: MOUNTED but VisionService unavailable (no multimodal provider)");
+                System.out.println("[Operator Agent] ComputerUseTool: 已挂载但 VisionService 不可用 (no multimodal provider)");
             }
 
             builder.extraTool(computerUseTool);
         } else {
-            System.out.println("[Operator Agent] ComputerUseTool: SKIPPED — no RPA token (headless or token issue)");
+            System.out.println("[Operator Agent] ComputerUseTool: 已跳过 — 无 RPA Token (headless or token issue)");
         }
 
         // ── Browser Control — DOM 级浏览器自动化（对标 OpenClaw Browser Control） ──
@@ -530,12 +530,12 @@ public class OperatorAgent extends AbstractAgent {
                 // 注册响应回调：浏览器扩展执行完命令后，通过此回调通知 BrowserTool
                 chromeBridge.setResponseCallback(browserTool::onBrowserResponse);
                 builder.extraTool(browserTool);
-                System.out.println("[Operator Agent] BrowserTool: MOUNTED (Chrome extension bridge at /dev/host/browser)");
+                System.out.println("[Operator Agent] BrowserTool: 已挂载 (Chrome extension bridge at /dev/host/browser)");
             } else {
-                System.out.println("[Operator Agent] BrowserTool: SKIPPED — ChromeBridgeNode not mounted");
+                System.out.println("[Operator Agent] BrowserTool: 已跳过 — ChromeBridgeNode not mounted");
             }
         } catch (Exception e) {
-            System.out.println("[Operator Agent] BrowserTool: SKIPPED — " + e.getMessage());
+            System.out.println("[Operator Agent] BrowserTool: 已跳过 — " + e.getMessage());
         }
 
         // ── Desktop GUI — 双引擎桌面控件定位（无障碍 API + VLM 视觉降级） ──
@@ -544,7 +544,7 @@ public class OperatorAgent extends AbstractAgent {
             builder.extraTool(desktopTool);
             System.out.println("[Operator Agent] DesktopGuiTool: MOUNTED (Dual-Engine: Accessibility API + VLM Vision)");
         } else {
-            System.out.println("[Operator Agent] DesktopGuiTool: SKIPPED — requires RPA token + VisionService");
+            System.out.println("[Operator Agent] DesktopGuiTool: 已跳过 — 需要 RPA Token + VisionService");
         }
 
         // OpenClaw 内置工具 — 通过 Gateway Bridge 与 OpenClaw 通信

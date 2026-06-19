@@ -60,7 +60,7 @@ public final class TraceManager {
         if (mode == TraceMode.REPLAY) {
             replayCursors.clear();
         }
-        log.info("[TraceManager] Mode changed: {} → {}", old, mode);
+        log.info("[TraceManager] 模式已切换: {} → {}", old, mode);
     }
 
     public void recordEvent(String agentId, String eventType, String req, String res) {
@@ -73,7 +73,7 @@ public final class TraceManager {
         long count = totalRecorded.incrementAndGet();
 
         if (count % 100 == 0) {
-            log.debug("[TraceManager] Recorded {} events total", count);
+            log.debug("[TraceManager] 已记录事件总数 {}", count);
         }
 
         appendToTape(agentId, record);
@@ -86,13 +86,13 @@ public final class TraceManager {
 
         List<TraceRecord> records = timeline.get(agentId);
         if (records == null || records.isEmpty()) {
-            log.warn("[TraceManager] REPLAY miss: no records for agentId={}", agentId);
+            log.warn("[TraceManager] 回放未命中: agentId={} 无记录", agentId);
             return null;
         }
 
         int cursor = replayCursors.getOrDefault(agentId, 0);
         if (cursor >= records.size()) {
-            log.warn("[TraceManager] REPLAY exhausted: agentId={}, cursor={}, size={}", agentId, cursor, records.size());
+            log.warn("[TraceManager] 回放已耗尽: agentId={}, cursor={}, size={}", agentId, cursor, records.size());
             return null;
         }
 
@@ -102,17 +102,17 @@ public final class TraceManager {
 
         if (!record.eventType().equals(eventType)) {
             totalMismatches.incrementAndGet();
-            log.warn("[TraceManager] REPLAY mismatch: agentId={}, expected eventType='{}', got='{}'",
+            log.warn("[TraceManager] 回放不匹配: agentId={}, 期望 eventType='{}', 实际='{}'",
                     agentId, record.eventType(), eventType);
         }
 
         if (!record.requestPayload().equals(req)) {
             totalMismatches.incrementAndGet();
-            log.warn("[TraceManager] REPLAY mismatch: agentId={}, eventType={}, request payload differs",
+            log.warn("[TraceManager] 回放不匹配: agentId={}, eventType={}, 请求负载不一致",
                     agentId, eventType);
         }
 
-        log.debug("[TraceManager] REPLAY hit: agentId={}, eventType={}, cursor={}/{}",
+        log.debug("[TraceManager] 回放命中: agentId={}, eventType={}, cursor={}/{}",
                 agentId, eventType, cursor + 1, records.size());
         return record.responsePayload();
     }
@@ -123,19 +123,19 @@ public final class TraceManager {
         totalRecorded.set(0);
         totalReplayed.set(0);
         totalMismatches.set(0);
-        log.info("[TraceManager] All history cleared");
+        log.info("[TraceManager] 所有历史已清除");
     }
 
     public void clearHistory(String agentId) {
         timeline.remove(agentId);
         replayCursors.remove(agentId);
-        log.info("[TraceManager] History cleared for agentId={}", agentId);
+        log.info("[TraceManager] agentId={} 的历史已清除", agentId);
     }
 
     public void loadTape(String agentId) {
         Path tapePath = Path.of(TAPE_DIR, agentId + ".tape");
         if (!Files.exists(tapePath)) {
-            log.warn("[TraceManager] Tape file not found: {}", tapePath);
+            log.warn("[TraceManager] 磁带文件未找到: {}", tapePath);
             return;
         }
 
@@ -145,16 +145,16 @@ public final class TraceManager {
             List<TraceRecord> list = Collections.synchronizedList(new ArrayList<>(Arrays.asList(records)));
             timeline.put(agentId, list);
             replayCursors.remove(agentId);
-            log.info("[TraceManager] Loaded tape: agentId={}, records={}", agentId, list.size());
+            log.info("[TraceManager] 已加载磁带: agentId={}, records={}", agentId, list.size());
         } catch (IOException e) {
-            log.error("[TraceManager] Failed to load tape: agentId={}, error={}", agentId, e.getMessage());
+            log.error("[TraceManager] 加载磁带失败: agentId={}, error={}", agentId, e.getMessage());
         }
     }
 
     public void saveTape(String agentId) {
         List<TraceRecord> records = timeline.get(agentId);
         if (records == null || records.isEmpty()) {
-            log.warn("[TraceManager] No records to save for agentId={}", agentId);
+            log.warn("[TraceManager] agentId={} 无记录可保存", agentId);
             return;
         }
 
@@ -163,9 +163,9 @@ public final class TraceManager {
             Files.createDirectories(dir);
             Path tapePath = dir.resolve(agentId + ".tape");
             objectMapper.writeValue(tapePath.toFile(), records);
-            log.info("[TraceManager] Saved tape: agentId={}, records={}, path={}", agentId, records.size(), tapePath);
+            log.info("[TraceManager] 已保存磁带: agentId={}, records={}, path={}", agentId, records.size(), tapePath);
         } catch (IOException e) {
-            log.error("[TraceManager] Failed to save tape: agentId={}, error={}", agentId, e.getMessage());
+            log.error("[TraceManager] 保存磁带失败: agentId={}, error={}", agentId, e.getMessage());
         }
     }
 
@@ -174,13 +174,13 @@ public final class TraceManager {
         for (String agentId : agentIds) {
             saveTape(agentId);
         }
-        log.info("[TraceManager] All tapes saved ({} agents)", agentIds.size());
+        log.info("[TraceManager] 所有磁带已保存 ({} 个 Agent)", agentIds.size());
     }
 
     public void loadAllTapes() {
         Path dir = Path.of(TAPE_DIR);
         if (!Files.isDirectory(dir)) {
-            log.warn("[TraceManager] Tape directory not found: {}", TAPE_DIR);
+            log.warn("[TraceManager] 磁带目录未找到: {}", TAPE_DIR);
             return;
         }
 
@@ -192,7 +192,7 @@ public final class TraceManager {
                         loadTape(agentId);
                     });
         } catch (IOException e) {
-            log.error("[TraceManager] Failed to list tape directory: {}", e.getMessage());
+            log.error("[TraceManager] 列出磁带目录失败: {}", e.getMessage());
         }
     }
 
@@ -231,7 +231,7 @@ public final class TraceManager {
             existing.add(record);
             objectMapper.writeValue(tapePath.toFile(), existing);
         } catch (IOException e) {
-            log.debug("[TraceManager] Tape append failed: agentId={}, error={}", agentId, e.getMessage());
+            log.debug("[TraceManager] 磁带追加失败: agentId={}, error={}", agentId, e.getMessage());
         }
     }
 

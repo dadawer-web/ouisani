@@ -22,7 +22,7 @@ public class EmptyResponseRecovery implements RecoveryStrategy {
 
     @Override
     public RecoveryResult apply(RecoveryContext context) {
-        log.info("[EmptyResponseRecovery] Injecting retry prompt for agent {}", context.agentId());
+        log.info("[EmptyResponseRecovery] 正在为 Agent 注入重试 Prompt {}", context.agentId());
         String modifier = "\n\n[SYSTEM WARNING - EMPTY RESPONSE DETECTED]:\n"
                 + "Your previous response was empty or null. This is not acceptable.\n"
                 + "You MUST provide a substantive response. Please retry with actual content.\n";

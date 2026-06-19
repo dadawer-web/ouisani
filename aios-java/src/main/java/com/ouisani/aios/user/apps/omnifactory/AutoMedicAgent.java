@@ -1,8 +1,10 @@
 package com.ouisani.aios.user.apps.omnifactory;
 
 import com.ouisani.aios.core.ProcessPriority;
+import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.network.EventBus;
 import com.ouisani.aios.user.sdk.AbstractAgent;
+import com.ouisani.aios.user.sdk.AiosSdk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,10 +30,53 @@ import java.util.regex.Pattern;
  *     ├─ 去除 Markdown 标记 + 注入新基因: sdk.writeFile(vfs_script_path, fixedCode)
  *     └─ 电击复活: WorkflowEngine.restartNode() / 日志
  * </pre>
+ * <p>
+ * V2 增强：支持同步紧急手术（emergencySurgery），直接被 WorkflowEngine 调用。
+ * 三种诊断结果：
+ * <ul>
+ *   <li>HEALED — 修复成功，可以热重启</li>
+ *   <li>INCAPABLE — 节点无能，需要拓扑突变</li>
+ *   <li>FAILED — 修复失败，节点标记 FAILED</li>
+ * </ul>
  */
 public class AutoMedicAgent extends AbstractAgent {
 
     private static final Logger log = LoggerFactory.getLogger(AutoMedicAgent.class);
+
+    // ════════════════════════════════════════════════════════════════
+    //  Medical Report — 诊断报告（AutoMedic 的手术记录）
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 诊断结果枚举。
+     */
+    public enum Outcome {
+        /** 修复成功，可以热重启 */
+        HEALED,
+        /** 节点无能，需要拓扑突变（插入替代节点） */
+        INCAPABLE,
+        /** 修复失败，节点标记 FAILED */
+        FAILED
+    }
+
+    /**
+     * 医疗报告 — AutoMedic 的手术记录。
+     *
+     * @param outcome       诊断结果
+     * @param diagnosis     诊断描述
+     * @param patchedCode   修复后的代码（HEALED 时非空）
+     * @param patchedVfsPath 修复代码的 VFS 路径
+     * @param reflectionHint 反思提示（注入到节点的上下文中）
+     * @param suggestedRole  建议的替代角色（INCAPABLE 时非空）
+     */
+    public record MedicalReport(
+            Outcome outcome,
+            String diagnosis,
+            String patchedCode,
+            String patchedVfsPath,
+            String reflectionHint,
+            String suggestedRole
+    ) {}
 
     public AutoMedicAgent() {
         super("AutoMedic-001", ProcessPriority.HIGH, 100000);
@@ -48,22 +93,192 @@ public class AutoMedicAgent extends AbstractAgent {
         log.info("[AutoMedic] Subscribed to sys.kernel.panic event channel.");
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  紧急手术 — 同步模式，被 WorkflowEngine 直接调用
+    // ════════════════════════════════════════════════════════════════
+
     /**
-     * 核心修复逻辑 — 拦截崩溃事件，诊断并热修复。
+     * 紧急手术 — WorkflowEngine 节点崩溃时的同步修复入口。
      * <p>
-     * 处理流程：
-     * <ol>
-     *   <li>解析崩溃 JSON，提取失败节点 ID、脚本路径、异常堆栈</li>
-     *   <li>从 VFS 读取原始代码（病历）</li>
-     *   <li>调用 LLM 进行 Bug 修复（手术）</li>
-     *   <li>去除 Markdown 代码块标记，将修复后的代码覆盖写入 VFS（注入新基因）</li>
-     *   <li>发送唤醒信号（电击复活）</li>
-     * </ol>
+     * 流程：
+     * 1. 读取 Core Dump 文件
+     * 2. 诊断崩溃原因（代码错误 vs 节点无能）
+     * 3. 如果是代码错误 → LLM 手术 → 返回 HEALED
+     * 4. 如果是节点无能 → 建议替代角色 → 返回 INCAPABLE
+     * 5. 如果修复失败 → 返回 FAILED
      *
-     * @param crashJson 崩溃事件 JSON，包含 failed_node_id / vfs_script_path / error_stacktrace
+     * @param node      崩溃的节点
+     * @param error     崩溃异常
+     * @param dumpPath  Core Dump 文件路径
+     * @param context   工作流上下文
+     * @param workflowId 工作流 ID
+     * @return MedicalReport 诊断报告
+     */
+    public static MedicalReport emergencySurgery(WorkflowNode node, Exception error,
+                                                  String dumpPath, WorkflowContext context,
+                                                  String workflowId) {
+        log.info("[AutoMedic] 紧急手术启动: node={}, error={}", node.instanceId(), error.getMessage());
+
+        AiosSdk sdk = AiosSdk.getInstance();
+
+        // ── Step 1: 读取 Core Dump ──
+        String dumpContent = null;
+        try {
+            dumpContent = java.nio.file.Files.readString(java.nio.file.Path.of(dumpPath));
+        } catch (Exception e) {
+            // 如果 dump 文件不可读，用异常信息代替
+            dumpContent = "Exception: " + error.getClass().getName() + ": " + error.getMessage();
+        }
+
+        // ── Step 2: 诊断崩溃原因 ──
+        String diagnosisPrompt = """
+            你是一个系统诊断专家。分析以下节点崩溃的 Core Dump，判断崩溃原因属于哪一类：
+
+            1. CODE_ERROR — 代码有 Bug（语法错误、缺少依赖、逻辑错误等），可以通过修复代码解决
+            2. CAPABILITY_MISMATCH — 节点的能力不匹配任务需求（比如让 Python Agent 编译 C++），需要替换为更合适的角色
+            3. RESOURCE_EXHAUSTED — 资源耗尽（Token OOM、超时等），需要调整参数重试
+
+            请用以下 JSON 格式回复（只输出 JSON，不要其他内容）：
+            {"category": "CODE_ERROR|CAPABILITY_MISMATCH|RESOURCE_EXHAUSTED", "reason": "具体原因", "suggested_role": "如果是 CAPABILITY_MISMATCH，建议的替代角色名"}
+
+            Core Dump:
+            ---
+            %s
+            ---
+            """.formatted(dumpContent.substring(0, Math.min(dumpContent.length(), 4000)));
+
+        String diagnosisResponse;
+        try {
+            diagnosisResponse = sdk.think("AutoMedic-001", diagnosisPrompt);
+        } catch (Exception e) {
+            log.error("[AutoMedic] 诊断 LLM 调用失败: {}", e.getMessage());
+            return new MedicalReport(Outcome.FAILED, "Diagnosis LLM call failed: " + e.getMessage(),
+                    null, null, null, null);
+        }
+
+        // 解析诊断结果
+        String category = extractJsonField(diagnosisResponse, "category");
+        String reason = extractJsonField(diagnosisResponse, "reason");
+        String suggestedRole = extractJsonField(diagnosisResponse, "suggested_role");
+
+        log.info("[AutoMedic] 诊断结果: category={}, reason={}", category, reason);
+
+        // ── Step 3: 根据诊断结果采取行动 ──
+
+        if ("CAPABILITY_MISMATCH".equals(category)) {
+            // 节点无能 → 建议拓扑突变
+            log.warn("[AutoMedic] 节点 '{}' 能力不匹配: {}。建议替代角色: {}",
+                    node.instanceId(), reason, suggestedRole);
+            return new MedicalReport(Outcome.INCAPABLE, reason, null, null, null,
+                    suggestedRole != null ? suggestedRole : "General_Coder");
+        }
+
+        if ("RESOURCE_EXHAUSTED".equals(category)) {
+            // 资源耗尽 → 注入反思提示，建议减少输出
+            String hint = "注意：你上次执行时资源耗尽（" + reason + "）。请精简输出，减少不必要的冗余内容。";
+            log.info("[AutoMedic] 资源耗尽，注入反思提示");
+            return new MedicalReport(Outcome.HEALED, reason, null, null, hint, null);
+        }
+
+        // CODE_ERROR → LLM 手术修复代码
+        return performCodeSurgery(node, error, dumpContent, reason, sdk);
+    }
+
+    /**
+     * 代码手术 — LLM 修复代码 Bug。
+     */
+    private static MedicalReport performCodeSurgery(WorkflowNode node, Exception error,
+                                                     String dumpContent, String diagnosis,
+                                                     AiosSdk sdk) {
+        // 尝试从 VFS 读取节点的脚本文件
+        String vfsScriptPath = "/factory/" + node.instanceId() + ".py";
+        String originalCode = null;
+        try {
+            originalCode = VfsManager.instance().readText(vfsScriptPath);
+        } catch (Exception e) {
+            // 尝试其他路径
+            String[] altPaths = {
+                    "/factory/" + node.role() + ".py",
+                    "/factory/run_all.sh",
+                    "/factory/main.py"
+            };
+            for (String altPath : altPaths) {
+                try {
+                    originalCode = VfsManager.instance().readText(altPath);
+                    if (originalCode != null && !originalCode.isBlank()) {
+                        vfsScriptPath = altPath;
+                        break;
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+
+        if (originalCode == null || originalCode.isBlank()) {
+            // 没有代码可修复 → 注入反思提示
+            String hint = "注意：你上次执行时出错（" + error.getMessage() + "）。诊断：" + diagnosis
+                    + "。请仔细检查你的代码逻辑，确保所有依赖都已正确导入，所有文件路径都存在。";
+            log.info("[AutoMedic] 无代码可修复，注入反思提示");
+            return new MedicalReport(Outcome.HEALED, diagnosis, null, null, hint, null);
+        }
+
+        // LLM 手术
+        String surgeryPrompt = String.format("""
+            你是一个极其严谨的高级后端专家。这个节点代码在沙箱中抛出了异常。
+
+            诊断结果：%s
+
+            源代码：
+            ---
+            %s
+            ---
+
+            异常信息：
+            ---
+            %s
+            ---
+
+            请找出 Bug 并重写代码。注意：
+            1. 确保所有第三方库都已经正确 import
+            2. 不要使用沙箱中不存在的库
+            3. 确保所有引用的文件路径存在
+            4. 严格只输出纯净的代码文本，绝不能包含任何 Markdown 标记 (如 ```python) 和任何解释性文字！
+            """, diagnosis, originalCode, error.getMessage());
+
+        String fixedCode;
+        try {
+            fixedCode = sdk.think("AutoMedic-001", surgeryPrompt);
+        } catch (Exception e) {
+            log.error("[AutoMedic] LLM 手术失败: {}", e.getMessage());
+            return new MedicalReport(Outcome.FAILED, "LLM surgery failed: " + e.getMessage(),
+                    null, null, null, null);
+        }
+
+        if (fixedCode == null || fixedCode.isBlank()) {
+            return new MedicalReport(Outcome.FAILED, "LLM returned empty fix",
+                    null, null, null, null);
+        }
+
+        // 基因提纯 — 剥离 Markdown 包装壳
+        fixedCode = fixedCode.replaceAll("^```(python|java|bash)?\\s*", "").replaceAll("```$", "").trim();
+
+        // 构建反思提示
+        String hint = "注意：AutoMedic 已修复你的代码。诊断：" + diagnosis
+                + "。请确保修复后的代码逻辑正确。";
+
+        log.info("[AutoMedic] 代码手术成功: node={}, originalLen={}, fixedLen={}",
+                node.instanceId(), originalCode.length(), fixedCode.length());
+
+        return new MedicalReport(Outcome.HEALED, diagnosis, fixedCode, vfsScriptPath, hint, null);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  EventBus 异步模式 — 监听 sys.kernel.panic 广播
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 核心修复逻辑 — 拦截崩溃事件，诊断并热修复（EventBus 异步模式）。
      */
     private void handleCrash(String crashJson) {
-        // ── Step 1: 解析崩溃 JSON ──
         String failedNodeId = extractJsonField(crashJson, "failed_node_id");
         String vfsScriptPath = extractJsonField(crashJson, "vfs_script_path");
         String errorStacktrace = extractJsonField(crashJson, "error_stacktrace");
@@ -74,7 +289,7 @@ public class AutoMedicAgent extends AbstractAgent {
                 retryCount = Integer.parseInt(retryCountStr);
             }
         } catch (NumberFormatException e) {
-            // ignore, default to 0
+            // ignore
         }
 
         if (failedNodeId == null || failedNodeId.isBlank()) {
@@ -82,161 +297,102 @@ public class AutoMedicAgent extends AbstractAgent {
             return;
         }
 
-        // ── Step 1.5: 熔断机制 (Circuit Breaker) ──
+        // 熔断机制
         if (retryCount >= 3) {
-            System.err.printf("[AutoMedic] CRITICAL: Node %s failed 3 times. Circuit breaker activated. Initiating Human-in-the-Loop escalation!%n",
+            System.err.printf("[AutoMedic] CRITICAL: Node %s failed 3 times. Circuit breaker activated!%n",
                     failedNodeId);
-            log.error("[AutoMedic] Circuit breaker activated for node '{}': retry_count={}. Human-in-the-Loop required.", failedNodeId, retryCount);
+            log.error("[AutoMedic] 节点 '{}' 熔断器已激活: retry_count={}", failedNodeId, retryCount);
 
-            // 组装结构化告警 JSON
             String escapedStacktrace = (errorStacktrace != null ? errorStacktrace : "")
-                    .replace("\\", "\\\\")
-                    .replace("\"", "\\\"")
-                    .replace("\n", "\\n")
-                    .replace("\r", "\\r")
-                    .replace("\t", "\\t");
-            String escapedNodeId = failedNodeId.replace("\"", "\\\"");
-            String alertJson = "{\"type\": \"HUMAN_INTERVENTION\", \"nodeId\": \"" + escapedNodeId
-                    + "\", \"message\": \"AutoMedic gave up. Human intervention required.\", \"dump\": \"" + escapedStacktrace + "\"}";
+                    .replace("\\", "\\\\").replace("\"", "\\\"")
+                    .replace("\n", "\\n").replace("\r", "").replace("\t", "\\t");
+            String alertJson = "{\"type\": \"HUMAN_INTERVENTION\", \"nodeId\": \""
+                    + failedNodeId.replace("\"", "\\\"")
+                    + "\", \"message\": \"AutoMedic gave up. Human intervention required.\", \"dump\": \""
+                    + escapedStacktrace + "\"}";
 
             EventBus.instance().broadcast("sys.human_intervention_required", alertJson);
-            System.out.println("[AutoMedic] Rescue signal broadcasted to dashboard.");
             return;
         }
 
-        System.out.printf("[AutoMedic] Intercepted core dump from %s (retry=%d). Initiating diagnostic sequence on %s...%n",
-                failedNodeId, retryCount, vfsScriptPath != null ? vfsScriptPath : "N/A");
-        log.warn("[AutoMedic] Core dump intercepted: node={}, retry={}, script={}", failedNodeId, retryCount, vfsScriptPath);
+        System.out.printf("[AutoMedic] Intercepted core dump from %s (retry=%d).%n",
+                failedNodeId, retryCount);
+        log.warn("[AutoMedic] 核心转储已拦截: node={}, retry={}", failedNodeId, retryCount);
 
         if (vfsScriptPath == null || vfsScriptPath.isBlank()) {
-            System.out.println("[AutoMedic]   ⚠ No script path provided. Cannot auto-repair without source code.");
-            log.error("[AutoMedic] Missing vfs_script_path for node '{}'. Cannot repair.", failedNodeId);
+            log.error("[AutoMedic] 未提供节点 '{}' 的 vfs_script_path", failedNodeId);
             return;
         }
 
-        // ── Step 2: 读取病历 — 获取原始代码 ──
-        System.out.printf("[AutoMedic]   ├─ Reading patient record from %s...%n", vfsScriptPath);
+        // 读取病历
         String originalCode;
         try {
             originalCode = sdk.readFile(this.agentId, vfsScriptPath);
         } catch (Exception e) {
-            System.out.printf("[AutoMedic]   ⚠ Failed to read script from VFS: %s%n", e.getMessage());
-            log.error("[AutoMedic] VFS read failed for '{}': {}", vfsScriptPath, e.getMessage());
+            log.error("[AutoMedic] 从 VFS 读取 '{}' 失败: {}", vfsScriptPath, e.getMessage());
             return;
         }
 
         if (originalCode == null || originalCode.isBlank()) {
-            System.out.println("[AutoMedic]   ⚠ Script is empty. Nothing to repair.");
             log.error("[AutoMedic] Script at '{}' is empty.", vfsScriptPath);
             return;
         }
 
-        // ── Step 3: 大模型手术 — 强化 Bug 修复 ──
-        System.out.printf("[AutoMedic]   ├─ Initiating LLM surgery on %s (attempt %d/3)...%n", failedNodeId, retryCount);
-        log.info("[AutoMedic] Starting LLM repair for node '{}', attempt {}/3, script: '{}'", failedNodeId, retryCount, vfsScriptPath);
-
+        // LLM 手术
         String debugPrompt = "你是一个极其严谨的高级后端专家。这个节点代码在沙箱中抛出了异常。这是它第 ["
                 + retryCount + "] 次尝试修复。\n源代码:\n" + originalCode
                 + "\n异常堆栈:\n" + (errorStacktrace != null ? errorStacktrace : "Unknown error")
-                + "\n请找出 Bug 并重写代码。注意：1. 确保所有第三方库都已经正确 import；2. 不要使用沙箱中不存在的库；3. 严格只输出纯净的代码文本，绝不能包含任何 Markdown 标记 (如 ```python) 和任何解释性文字！";
+                + "\n请找出 Bug 并重写代码。注意：1. 确保所有第三方库都已经正确 import；2. 不要使用沙箱中不存在的库；3. 严格只输出纯净的代码文本！";
 
         String fixedCode;
         try {
             fixedCode = sdk.think(this.agentId, debugPrompt);
         } catch (Exception e) {
-            System.out.printf("[AutoMedic]   ⚠ LLM surgery failed: %s%n", e.getMessage());
-            log.error("[AutoMedic] LLM repair failed for node '{}': {}", failedNodeId, e.getMessage());
+            log.error("[AutoMedic] 节点 '{}' LLM 修复失败: {}", failedNodeId, e.getMessage());
             return;
         }
 
         if (fixedCode == null || fixedCode.isBlank()) {
-            System.out.println("[AutoMedic]   ⚠ LLM returned empty fix. Aborting.");
-            log.error("[AutoMedic] LLM returned empty fix for node '{}'.", failedNodeId);
+            log.error("[AutoMedic] LLM 为节点 '{}' 返回空修复", failedNodeId);
             return;
         }
 
-        // ── Step 3.5: 基因提纯 (Code Sanitizer) — 强行剥离 Markdown 包装壳 ──
+        // 基因提纯
         fixedCode = fixedCode.replaceAll("^```(python|java)?\\s*", "").replaceAll("```$", "").trim();
 
-        // ── Step 4: 注入新基因 — 覆盖写入提纯后的代码 ──
-        System.out.printf("[AutoMedic] Sanitized hot-patch injected for node %s. Rebooting sandbox...%n", failedNodeId);
+        // 注入新基因
         try {
             sdk.writeFile(this.agentId, vfsScriptPath, fixedCode);
         } catch (Exception e) {
-            System.out.printf("[AutoMedic]   ⚠ Failed to write patched code: %s%n", e.getMessage());
             log.error("[AutoMedic] VFS write failed for '{}': {}", vfsScriptPath, e.getMessage());
             return;
         }
 
-        // ── Step 5: 电击复活 — 唤醒失败节点 ──
-        System.out.printf("[AutoMedic]   └─ Hot-patch applied. Sending wake-up signal to orchestrator for node restart...%n");
+        // 电击复活
         log.info("[AutoMedic] Hot-patch applied to '{}'. Node '{}' ready for restart.",
                 vfsScriptPath, failedNodeId);
-
-        // 预留 WorkflowEngine.restartNode() 接口
-        // WorkflowEngine.getInstance().restartNode(failedNodeId);
-        System.out.printf("[AutoMedic] ✦ Node '%s' patched and queued for restart.%n", failedNodeId);
+        System.out.printf("[AutoMedic] Node '%s' patched and queued for restart.%n", failedNodeId);
     }
 
     @Override
     protected void onMessage(String msg) {
-        // AutoMedic 也通过消息队列接收崩溃通知（备用通道）
         log.debug("[AutoMedic] Message received: {}", msg.substring(0, Math.min(msg.length(), 80)));
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Markdown 代码块剥离器 — 去除 LLM 输出中的 ```python ... ```
+    //  工具方法
     // ════════════════════════════════════════════════════════════════
 
-    /**
-     * 去除 LLM 输出中可能带有的 Markdown 代码块标记。
-     * <p>
-     * LLM 经常返回 ```python\n...code...\n``` 格式，
-     * 此方法提取其中的纯代码部分。
-     *
-     * @param text LLM 原始输出
-     * @return 去除 Markdown 标记后的纯代码
-     */
-    private String stripMarkdownCodeBlock(String text) {
-        if (text == null) return null;
-
-        // 匹配 ```lang\n...code...\n``` 格式
-        Pattern codeBlockPattern = Pattern.compile("```(?:\\w+)?\\s*\\n([\\s\\S]*?)\\n\\s*```");
-        Matcher matcher = codeBlockPattern.matcher(text.trim());
-        if (matcher.find()) {
-            return matcher.group(1).trim();
-        }
-
-        // 如果没有代码块标记，直接返回原文（去除首尾空白）
-        return text.trim();
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    //  JSON Field Extractor — 正则提取，兼容各种 LLM 输出格式
-    // ════════════════════════════════════════════════════════════════
-
-    /**
-     * 从 JSON 字符串中提取指定字段的值。
-     * <p>
-     * 兼容 "key":"value" 和 "key": "value" 格式，
-     * 也兼容 "key": value（无引号数字/布尔值）。
-     */
-    private String extractJsonField(String json, String key) {
+    private static String extractJsonField(String json, String key) {
         if (json == null || key == null) return null;
 
-        // 先尝试 "key":"value" 格式
         Pattern stringPattern = Pattern.compile("\"" + key + "\"\\s*:\\s*\"([^\"]*?)\"");
         Matcher stringMatcher = stringPattern.matcher(json);
-        if (stringMatcher.find()) {
-            return stringMatcher.group(1);
-        }
+        if (stringMatcher.find()) return stringMatcher.group(1);
 
-        // 再尝试 "key":value 格式（数字/布尔值）
         Pattern rawPattern = Pattern.compile("\"" + key + "\"\\s*:\\s*([^,}\\s]+)");
         Matcher rawMatcher = rawPattern.matcher(json);
-        if (rawMatcher.find()) {
-            return rawMatcher.group(1).trim();
-        }
+        if (rawMatcher.find()) return rawMatcher.group(1).trim();
 
         return null;
     }

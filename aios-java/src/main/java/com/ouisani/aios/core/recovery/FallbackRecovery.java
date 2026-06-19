@@ -22,7 +22,7 @@ public class FallbackRecovery implements RecoveryStrategy {
 
     @Override
     public RecoveryResult apply(RecoveryContext context) {
-        log.info("[FallbackRecovery] Applying generic fallback for agent {}", context.agentId());
+        log.info("[FallbackRecovery] 正在为 Agent 应用通用回退 {}", context.agentId());
         String errorMsg = context.exception().getMessage() != null ? context.exception().getMessage() : "Unknown error";
 
         String modifier = "\n\n[SYSTEM - RECOVERY FALLBACK]:\n"

@@ -81,31 +81,31 @@ public final class SyscallDispatcher {
         this.llmRouter = llmRouter;
         this.vfsManager = vfsManager;
         this.objectManager = objectManager;
-        log.info("[Syscall Dispatcher] Configured: llmRouter={}, vfsManager={}, objectManager={}",
+        log.info("[Syscall Dispatcher] 已配置: llmRouter={}, vfsManager={}, objectManager={}",
                 llmRouter != null, vfsManager != null, objectManager != null);
 
         // ── Kernel ABI v2: Namespace-based ABI Router ──
-        System.out.println("[Kernel Dispatcher] ABI Router upgraded. Now listening on standard namespaces.");
-        log.info("[Kernel Dispatcher] ABI Router upgraded. Now listening on standard namespaces.");
+        System.out.println("[Kernel Dispatcher] ABI Router 已升级，正在监听标准命名空间。");
+        log.info("[Kernel Dispatcher] ABI Router 已升级，正在监听标准命名空间。");
 
         // ── MCP routing protocol engaged ──
-        System.out.println("[Kernel Dispatcher] MCP routing protocol engaged. The AIOS ecosystem is now limitless.");
-        log.info("[Kernel Dispatcher] MCP routing protocol engaged. The AIOS ecosystem is now limitless.");
+        System.out.println("[Kernel Dispatcher] MCP 路由协议已启用，AIOS 生态系统现已无限扩展。");
+        log.info("[Kernel Dispatcher] MCP 路由协议已启用，AIOS 生态系统现已无限扩展。");
 
         // ── Semantic eBPF: 注册 BpfManager 到 Seccomp 过滤器链 ──
         // BpfManager 实现了 SyscallFilter 接口，在每次 Syscall 执行前
         // 进行意图拦截（Prompt 注入检测、VFS 破坏性写入保护、权限提升拦截等）
         addFilter(BpfManager.instance());
-        log.info("[Kernel Dispatcher] Semantic eBPF probe registered. Intent interception active.");
-        System.out.println("[Kernel Dispatcher] Semantic eBPF probe registered. Intent interception active.");
+        log.info("[Kernel Dispatcher] Semantic eBPF 探针已注册，意图拦截已激活。");
+        System.out.println("[Kernel Dispatcher] Semantic eBPF 探针已注册，意图拦截已激活。");
 
         // ── Semantic Firewall: 注册 AI 语义审核过滤器 ──
         // SemanticSyscallFilter 拦截高危操作（bash, fs_write, fs_delete 等），
         // 并移交 AiSecurityAuditor 进行 LLM 语义判定。
         // 这是 Seccomp-BPF 的语义升级版：不仅检查 syscall 号，还理解意图。
         addFilter(new com.ouisani.aios.core.security.SemanticSyscallFilter());
-        log.info("[Kernel Dispatcher] Semantic Firewall (AI Auditor) registered. High-risk syscalls will be audited.");
-        System.out.println("[Kernel Dispatcher] Semantic Firewall (AI Auditor) registered. High-risk syscalls will be audited.");
+        log.info("[Kernel Dispatcher] Semantic Firewall (AI Auditor) 已注册，高危 Syscall 将被审计。");
+        System.out.println("[Kernel Dispatcher] Semantic Firewall (AI Auditor) 已注册，高危 Syscall 将被审计。");
     }
 
     /**
@@ -114,8 +114,17 @@ public final class SyscallDispatcher {
      */
     public void addFilter(SyscallFilter filter) {
         filters.add(filter);
-        log.info("[Syscall Dispatcher] Seccomp filter registered: {} (total={})",
+        log.info("[Syscall Dispatcher] Seccomp 过滤器已注册: {} (total={})",
                 filter.getClass().getSimpleName(), filters.size());
+    }
+
+    /**
+     * 获取已配置的 LlmRouter 实例 — 供流式推理等需要直接访问 Router 的场景使用。
+     *
+     * @return LlmRouter 实例，未配置时返回 null
+     */
+    public LlmRouter getLlmRouter() {
+        return llmRouter;
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -142,7 +151,7 @@ public final class SyscallDispatcher {
         long startNanos = System.nanoTime();
 
         String fullAction = request.fullAction();
-        log.info("[Syscall Dispatcher] Intercepted namespace='{}' action='{}' from Agent '{}'",
+        log.info("[Syscall Dispatcher] 拦截命名空间='{}' 动作='{}' 来自 Agent '{}'",
                 request.namespace(), request.action(), agentId);
 
         // ── Seccomp/eBPF Firewall: pre-filter chain ──
@@ -154,7 +163,7 @@ public final class SyscallDispatcher {
                         "agent=" + agentId + " action=" + fullAction
                         + " filter=" + filter.getClass().getSimpleName()
                         + " reason=" + e.getMessage());
-                log.warn("[Security BPF] Malicious syscall intercepted! agent={}, action={}, filter={}",
+                log.warn("[Security BPF] 恶意 Syscall 已拦截! agent={}, action={}, filter={}",
                         agentId, fullAction, filter.getClass().getSimpleName());
                 return SyscallResponse.fail("SECURITY: " + e.getMessage());
             }
@@ -187,7 +196,7 @@ public final class SyscallDispatcher {
                 + " success=" + response.success()
                 + " latencyMs=" + elapsedMs);
 
-        log.info("[Syscall Dispatcher] Completed action '{}' for Agent '{}': success={}, latency={}ms",
+        log.info("[Syscall Dispatcher] 动作 '{}' 已完成，Agent '{}': 成功={}, 延迟={}ms",
                 fullAction, agentId, response.success(), elapsedMs);
 
         // ── 喂狗 — 每次成功 syscall 执行后向 WatchdogDaemon 报告系统存活 ──
@@ -210,17 +219,17 @@ public final class SyscallDispatcher {
         // Strict type check: only LlmPayload is legal in the "llm" namespace
         if (!(payload instanceof LlmPayload llm)) {
             throw new SyscallException(request.fullAction(),
-                    "Kernel Panic: Invalid memory segment for payload — expected LlmPayload, got "
+                    "Kernel Panic: 无效的内存段 — 期望 LlmPayload，实际为 "
                     + payload.getClass().getSimpleName());
         }
 
         if (llmRouter == null) {
-            return SyscallResponse.fail("LLM router not configured");
+            return SyscallResponse.fail("LLM 路由器未配置");
         }
 
         String prompt = llm.prompt();
         if (prompt == null || prompt.isEmpty()) {
-            return SyscallResponse.fail("LlmPayload.prompt must not be empty");
+            return SyscallResponse.fail("LlmPayload.prompt 不能为空");
         }
 
         try {
@@ -236,7 +245,7 @@ public final class SyscallDispatcher {
                 default -> throw new SyscallException(request.fullAction());
             };
 
-            log.info("[Dispatcher] LLM namespace: action='{}', promptLen={}, temp={}, maxTokens={}",
+            log.info("[Dispatcher] LLM 命名空间: action='{}', promptLen={}, temp={}, maxTokens={}",
                     request.action(), prompt.length(), llm.temperature(), llm.maxTokens());
 
             return SyscallResponse.ok(result);
@@ -255,25 +264,25 @@ public final class SyscallDispatcher {
         // Strict type check: only StoragePayload is legal in the "storage" namespace
         if (!(payload instanceof StoragePayload storage)) {
             throw new SyscallException(request.fullAction(),
-                    "Kernel Panic: Invalid memory segment for payload — expected StoragePayload, got "
+                    "Kernel Panic: 无效的内存段 — 期望 StoragePayload，实际为 "
                     + payload.getClass().getSimpleName());
         }
 
         if (vfsManager == null) {
-            return SyscallResponse.fail("VFS manager not configured");
+            return SyscallResponse.fail("VFS 管理器未配置");
         }
 
         String path = storage.path();
         String mode = storage.mode();
 
-        log.info("[Dispatcher] Storage namespace: path='{}', mode='{}'", path, mode);
+        log.info("[Dispatcher] Storage 命名空间: path='{}', mode='{}'", path, mode);
 
         try {
             return switch (mode) {
                 case "read" -> {
                     var nodeOpt = vfsManager.resolve(path);
                     if (nodeOpt.isEmpty()) {
-                        yield SyscallResponse.fail("Path not found: " + path);
+                        yield SyscallResponse.fail("路径未找到: " + path);
                     }
                     String content = nodeOpt.get().read();
                     yield SyscallResponse.ok(content);
@@ -281,23 +290,27 @@ public final class SyscallDispatcher {
                 case "write" -> {
                     String data = storage.data();
                     if (data == null) {
-                        yield SyscallResponse.fail("Storage write requires non-null data");
+                        yield SyscallResponse.fail("Storage 写入需要非空数据");
                     }
                     var nodeOpt = vfsManager.resolve(path);
                     if (nodeOpt.isEmpty()) {
                         MutableFileNode newNode = new MutableFileNode(path);
                         newNode.write(data);
                         vfsManager.mount(extractDirPath(path), extractFileName(path), newNode);
-                        log.debug("[VFS] Auto-created file node: {}", path);
+                        log.debug("[VFS] 自动创建文件节点: {}", path);
                         yield SyscallResponse.ok();
                     }
                     boolean ok = nodeOpt.get().write(data);
-                    yield ok ? SyscallResponse.ok() : SyscallResponse.fail("Write rejected by node");
+                    yield ok ? SyscallResponse.ok() : SyscallResponse.fail("写入被节点拒绝");
+                }
+                case "exists" -> {
+                    var nodeOpt = vfsManager.resolve(path);
+                    yield SyscallResponse.ok(nodeOpt.isPresent() ? "true" : "false");
                 }
                 case "append" -> {
                     String data = storage.data();
                     if (data == null) {
-                        yield SyscallResponse.fail("Storage append requires non-null data");
+                        yield SyscallResponse.fail("Storage 追加需要非空数据");
                     }
                     var nodeOpt = vfsManager.resolve(path);
                     if (nodeOpt.isEmpty()) {
@@ -308,14 +321,14 @@ public final class SyscallDispatcher {
                     }
                     String existing = nodeOpt.get().read();
                     boolean ok = nodeOpt.get().write(existing != null ? existing + data : data);
-                    yield ok ? SyscallResponse.ok() : SyscallResponse.fail("Append rejected by node");
+                    yield ok ? SyscallResponse.ok() : SyscallResponse.fail("追加被节点拒绝");
                 }
-                default -> SyscallResponse.fail("Unknown storage mode: " + mode);
+                default -> SyscallResponse.fail("未知的存储模式: " + mode);
             };
         } catch (DeviceOfflineException e) {
-            log.warn("[Dispatcher] Device offline for Agent '{}': path={}, device={}", agentId, path, e.deviceId());
-            return SyscallResponse.fail("Device offline: " + e.deviceId() + " at " + e.devicePath()
-                    + ". The remote host has disconnected. Please retry later or use a different device.");
+            log.warn("[Dispatcher] Agent '{}' 的设备离线: path={}, device={}", agentId, path, e.deviceId());
+            return SyscallResponse.fail("设备离线: " + e.deviceId() + " at " + e.devicePath()
+                    + ". 远程主机已断开连接，请稍后重试或使用其他设备。");
         } catch (Exception e) {
             return SyscallResponse.fail(e);
         }
@@ -327,14 +340,14 @@ public final class SyscallDispatcher {
         // Strict type check: only ToolPayload is legal in the "tool" namespace
         if (!(payload instanceof ToolPayload tool)) {
             throw new SyscallException(request.fullAction(),
-                    "Kernel Panic: Invalid memory segment for payload — expected ToolPayload, got "
+                    "Kernel Panic: 无效的内存段 — 期望 ToolPayload，实际为 "
                     + payload.getClass().getSimpleName());
         }
 
         String toolName = tool.toolName();
         Map<String, Object> args = tool.arguments();
 
-        log.info("[Dispatcher] Tool namespace: toolName='{}', args={}", toolName, args.keySet());
+        log.info("[Dispatcher] Tool 命名空间: toolName='{}', args={}", toolName, args.keySet());
 
         try {
             // ── Dynamic Module Loading: sys_insmod / sys_rmmod ──
@@ -349,6 +362,14 @@ public final class SyscallDispatcher {
             }
             if ("kernel.modprobe".equals(toolName)) {
                 return executeModprobe(agentId, args);
+            }
+
+            // ── 动态工具锻造（借鉴 Agent Zero 运行时工具生成） ──
+            if ("kernel.register_tool".equals(toolName)) {
+                return executeRegisterTool(agentId, args);
+            }
+            if ("kernel.forge_tool".equals(toolName)) {
+                return executeForgeTool(agentId, args);
             }
 
             // MCP universal tool bus: external capabilities via Model Context Protocol
@@ -369,7 +390,7 @@ public final class SyscallDispatcher {
             // WASM plugin: delegate to PluginManager
             return executeWasmTool(agentId, toolName, args);
         } catch (Exception e) {
-            return SyscallResponse.fail("Tool execution failed: " + e.getMessage());
+            return SyscallResponse.fail("工具执行失败: " + e.getMessage());
         }
     }
 
@@ -397,27 +418,27 @@ public final class SyscallDispatcher {
         if (toolName != null && !toolName.isBlank()) {
             ToolDefinition def = pm.insmodByName(agentId, toolName);
             if (def != null) {
-                return SyscallResponse.ok("[insmod] Tool '" + def.name()
-                        + "' loaded. Schema: " + def.toFunctionSchema());
+                return SyscallResponse.ok("[insmod] 工具 '" + def.name()
+                        + "' 已加载。Schema: " + def.toFunctionSchema());
             }
-            return SyscallResponse.fail("[insmod] Tool '" + toolName + "' not found in catalog. Available: "
+            return SyscallResponse.fail("[insmod] 工具 '" + toolName + "' 未在目录中找到。可用: "
                     + pm.availableTools());
         }
 
         // Semantic search by natural language query
         String query = args.get("query") instanceof String s ? s : null;
         if (query == null || query.isBlank()) {
-            return SyscallResponse.fail("[insmod] Missing 'query' or 'tool_name' argument");
+            return SyscallResponse.fail("[insmod] 缺少 'query' 或 'tool_name' 参数");
         }
 
         ToolDefinition def = pm.insmod(agentId, query);
         if (def != null) {
-            return SyscallResponse.ok("[insmod] Tool '" + def.name() + "' loaded (matched by: '"
+            return SyscallResponse.ok("[insmod] 工具 '" + def.name() + "' 已加载 (匹配: '"
                     + query + "'). Schema: " + def.toFunctionSchema());
         }
 
-        return SyscallResponse.fail("[insmod] No tool found matching: '" + query
-                + "'. Available: " + pm.availableTools());
+        return SyscallResponse.fail("[insmod] 未找到匹配的工具: '" + query
+                + "'. 可用: " + pm.availableTools());
     }
 
     /**
@@ -431,15 +452,15 @@ public final class SyscallDispatcher {
     private SyscallResponse executeRmmod(String agentId, Map<String, Object> args) {
         String toolName = args.get("tool_name") instanceof String s ? s : null;
         if (toolName == null || toolName.isBlank()) {
-            return SyscallResponse.fail("[rmmod] Missing 'tool_name' argument");
+            return SyscallResponse.fail("[rmmod] 缺少 'tool_name' 参数");
         }
 
         PluginManager pm = PluginManager.getInstance();
         boolean removed = pm.rmmod(agentId, toolName);
         if (removed) {
-            return SyscallResponse.ok("[rmmod] Tool '" + toolName + "' unloaded. Token budget freed.");
+            return SyscallResponse.ok("[rmmod] 工具 '" + toolName + "' 已卸载。Token 预算已释放。");
         }
-        return SyscallResponse.fail("[rmmod] Tool '" + toolName + "' not found in active context.");
+        return SyscallResponse.fail("[rmmod] 工具 '" + toolName + "' 未在活跃上下文中找到。");
     }
 
     /**
@@ -450,10 +471,10 @@ public final class SyscallDispatcher {
         AgentToolContext ctx = pm.getAgentContext(agentId);
 
         if (ctx.toolCount() == 0) {
-            return SyscallResponse.ok("[lsmod] No tools loaded. Use kernel.insmod to load tools.");
+            return SyscallResponse.ok("[lsmod] 未加载任何工具。使用 kernel.insmod 加载工具。");
         }
 
-        return SyscallResponse.ok("[lsmod] " + ctx.toolCount() + " tools loaded ("
+        return SyscallResponse.ok("[lsmod] " + ctx.toolCount() + " 个工具已加载 ("
                 + ctx.tokenCostUsed() + "/" + ctx.tokenBudget() + " tokens):\n"
                 + ctx.toProcStatus());
     }
@@ -469,31 +490,90 @@ public final class SyscallDispatcher {
     private SyscallResponse executeModprobe(String agentId, Map<String, Object> args) {
         String query = args.get("query") instanceof String s ? s : null;
         if (query == null || query.isBlank()) {
-            return SyscallResponse.fail("[modprobe] Missing 'query' argument");
+            return SyscallResponse.fail("[modprobe] 缺少 'query' 参数");
         }
 
         PluginManager pm = PluginManager.getInstance();
         java.util.List<ToolDefinition> matches = pm.semanticSearch(query, 5);
 
         if (matches.isEmpty()) {
-            return SyscallResponse.ok("[modprobe] No tools found matching: '" + query + "'");
+            return SyscallResponse.ok("[modprobe] 未找到匹配的工具: '" + query + "'");
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("[modprobe] ").append(matches.size()).append(" tool(s) found for '").append(query).append("':\n");
+        sb.append("[modprobe] 为 '").append(query).append("' 找到 ").append(matches.size()).append(" 个工具:\n");
         for (int i = 0; i < matches.size(); i++) {
             ToolDefinition t = matches.get(i);
             sb.append(String.format("  %d. %-30s [%s] cost=%d — %s%n",
                     i + 1, t.name(), t.type(), t.tokenCost(),
                     t.description().length() > 60 ? t.description().substring(0, 60) + "..." : t.description()));
         }
-        sb.append("\nUse kernel.insmod with tool_name to load a specific tool.");
+        sb.append("\n使用 kernel.insmod 并指定 tool_name 加载特定工具。");
 
         return SyscallResponse.ok(sb.toString());
     }
 
     private boolean isMcpTool(String toolName) {
         return toolName.startsWith("mcp.");
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  动态工具锻造（借鉴 Agent Zero 运行时工具生成）
+    //  kernel.forge_tool / kernel.register_tool
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 执行动态工具锻造 — 借鉴 Agent Zero 的运行时工具生成。
+     * Agent 描述所需工具功能，LLM 生成代码，注册为可调用工具。
+     */
+    private SyscallResponse executeForgeTool(String agentId, Map<String, Object> args) {
+        String description = args.get("description") instanceof String s ? s : null;
+        if (description == null || description.isBlank()) {
+            return SyscallResponse.fail("Missing 'description' field for tool forging");
+        }
+
+        com.ouisani.aios.user.sdk.AiosSdk sdk = com.ouisani.aios.user.sdk.AiosSdk.getInstance();
+        String workingDir = System.getProperty("user.dir");
+
+        String toolName = com.ouisani.aios.core.tool.ToolForgeService.getInstance()
+                .forge(description, agentId, sdk, workingDir);
+        if (toolName != null) {
+            return SyscallResponse.ok("{\"toolName\":\"" + toolName + "\",\"status\":\"forged\"}");
+        } else {
+            return SyscallResponse.fail("Tool forging failed for: " + description);
+        }
+    }
+
+    /**
+     * 执行动态工具注册 — 将已生成的代码直接注册为工具。
+     */
+    private SyscallResponse executeRegisterTool(String agentId, Map<String, Object> args) {
+        String toolName = args.get("toolName") instanceof String s ? s : null;
+        String code = args.get("code") instanceof String s ? s : null;
+        String description = args.get("description") instanceof String s ? s : null;
+
+        if (toolName == null || code == null) {
+            return SyscallResponse.fail("Missing 'toolName' or 'code' field");
+        }
+
+        com.ouisani.aios.user.sdk.AiosSdk sdk = com.ouisani.aios.user.sdk.AiosSdk.getInstance();
+        String workingDir = System.getProperty("user.dir");
+
+        com.ouisani.aios.core.tool.DynamicForgedTool tool = new com.ouisani.aios.core.tool.DynamicForgedTool(
+                toolName,
+                description != null ? description : "Dynamically forged tool: " + toolName,
+                code,
+                "main",
+                null,
+                agentId,
+                sdk,
+                workingDir
+        );
+
+        com.ouisani.aios.core.tool.ToolRegistry.instance().register(tool);
+        com.ouisani.aios.core.tool.ToolForgeService.getInstance().registerForgedTool(tool, agentId);
+
+        return SyscallResponse.ok("{\"toolName\":\"" + toolName + "\",\"status\":\"registered\"}");
     }
 
     /**
@@ -512,7 +592,7 @@ public final class SyscallDispatcher {
         String[] parts = toolName.split("\\.", 3);
         if (parts.length < 3) {
             return SyscallResponse.fail(
-                    "MCP tool name format invalid: expected 'mcp.{serverName}.{toolName}', got '" + toolName + "'");
+                    "MCP 工具名格式无效: 期望 'mcp.{serverName}.{toolName}'，实际为 '" + toolName + "'");
         }
 
         String serverName = parts[1];
@@ -522,10 +602,10 @@ public final class SyscallDispatcher {
 
         if (!registry.hasServer(serverName)) {
             return SyscallResponse.fail(
-                    "MCP server '" + serverName + "' not registered. Available: " + registry.serverNames());
+                    "MCP 服务器 '" + serverName + "' 未注册。可用: " + registry.serverNames());
         }
 
-        log.info("[Dispatcher] MCP routing: agent='{}', server='{}', tool='{}', args={}",
+        log.info("[Dispatcher] MCP 路由: agent='{}', server='{}', tool='{}', args={}",
                 agentId, serverName, mcpToolName, args.keySet());
 
         try {
@@ -540,16 +620,16 @@ public final class SyscallDispatcher {
                 resultStr = result.toString();
             }
 
-            log.info("[Dispatcher] MCP tool '{}/{}' returned successfully for Agent '{}': resultLen={}",
+            log.info("[Dispatcher] MCP 工具 '{}/{}' 对 Agent '{}' 返回成功: resultLen={}",
                     serverName, mcpToolName, agentId, resultStr.length());
 
             return SyscallResponse.ok(resultStr);
         } catch (Exception e) {
-            log.warn("[Dispatcher] MCP tool '{}/{}' failed for Agent '{}': {}",
+            log.warn("[Dispatcher] MCP 工具 '{}/{}' 对 Agent '{}' 执行失败: {}",
                     serverName, mcpToolName, agentId, e.getMessage());
             // Return error as valid SyscallResponse — let the LLM self-repair
             return SyscallResponse.fail(
-                    "MCP tool '" + serverName + "/" + mcpToolName + "' call failed: " + e.getMessage());
+                    "MCP 工具 '" + serverName + "/" + mcpToolName + "' 调用失败: " + e.getMessage());
         }
     }
 
@@ -563,8 +643,8 @@ public final class SyscallDispatcher {
         // ── Security: HEADLESS mode check ──
         boolean headless = java.awt.GraphicsEnvironment.isHeadless();
         if (headless) {
-            log.error("[Kernel Security] RPA tool '{}' rejected: system is in HEADLESS mode", toolName);
-            return SyscallResponse.fail("RPA tools are not available in HEADLESS mode");
+            log.error("[Kernel Security] RPA 工具 '{}' 被拒绝: 系统处于 HEADLESS 模式", toolName);
+            return SyscallResponse.fail("RPA 工具在 HEADLESS 模式下不可用");
         }
 
         // ── Security: SYS_ADMIN Token 鉴权 ──
@@ -575,80 +655,80 @@ public final class SyscallDispatcher {
         try {
             rpa.requireSysAdmin(token);
         } catch (PermissionDeniedException e) {
-            log.error("[Kernel Security] RPA tool '{}' DENIED for Agent '{}': {}", toolName, agentId, e.getMessage());
-            return SyscallResponse.fail("Permission denied: " + e.getMessage());
+            log.error("[Kernel Security] RPA 工具 '{}' 对 Agent '{}' 被拒绝: {}", toolName, agentId, e.getMessage());
+            return SyscallResponse.fail("权限被拒绝: " + e.getMessage());
         }
 
-        log.warn("[Kernel Security] WARNING: Agent {} is manipulating the host physical pointer! (token={})",
+        log.warn("[Kernel Security] 警告: Agent {} 正在操控宿主机物理指针! (token={})",
                 agentId, token != null ? token.id() : "null");
-        System.out.println("[Kernel Security] WARNING: Agent " + agentId + " is manipulating the host physical pointer!");
+        System.out.println("[Kernel Security] 警告: Agent " + agentId + " 正在操控宿主机物理指针!");
 
         if (!rpa.isAvailable()) {
-            return SyscallResponse.fail("RPA subsystem not available — Robot initialization failed");
+            return SyscallResponse.fail("RPA 子系统不可用 — Robot 初始化失败");
         }
 
         return switch (toolName) {
             case "rpa.screenshot" -> {
                 String base64 = rpa.takeScreenshotBase64(token);
-                log.info("[Dispatcher] RPA screenshot captured for Agent '{}': base64Len={}", agentId, base64.length());
+                log.info("[Dispatcher] 已为 Agent '{}' 截取 RPA 截图: base64Len={}", agentId, base64.length());
                 yield SyscallResponse.ok(base64);
             }
             case "rpa.mouse_move" -> {
                 int x = toInt(args.get("x"), -1);
                 int y = toInt(args.get("y"), -1);
                 if (x < 0 || y < 0) {
-                    yield SyscallResponse.fail("rpa.mouse_move requires integer 'x' and 'y' arguments");
+                    yield SyscallResponse.fail("rpa.mouse_move 需要整数 'x' 和 'y' 参数");
                 }
                 rpa.mouseMove(token, x, y);
-                log.info("[Dispatcher] RPA mouse_move for Agent '{}': ({}, {})", agentId, x, y);
-                yield SyscallResponse.ok("Mouse moved to (" + x + ", " + y + ")");
+                log.info("[Dispatcher] Agent '{}' 的 RPA mouse_move: ({}, {})", agentId, x, y);
+                yield SyscallResponse.ok("鼠标已移动到 (" + x + ", " + y + ")");
             }
             case "rpa.click" -> {
                 rpa.mouseClick(token);
-                log.info("[Dispatcher] RPA click for Agent '{}'", agentId);
-                yield SyscallResponse.ok("Mouse clicked");
+                log.info("[Dispatcher] Agent '{}' 的 RPA click", agentId);
+                yield SyscallResponse.ok("鼠标已点击");
             }
             case "rpa.right_click" -> {
                 rpa.mouseRightClick(token);
-                log.info("[Dispatcher] RPA right_click for Agent '{}'", agentId);
-                yield SyscallResponse.ok("Right-clicked");
+                log.info("[Dispatcher] Agent '{}' 的 RPA right_click", agentId);
+                yield SyscallResponse.ok("已右键点击");
             }
             case "rpa.click_at" -> {
                 int x = toInt(args.get("x"), -1);
                 int y = toInt(args.get("y"), -1);
                 if (x < 0 || y < 0) {
-                    yield SyscallResponse.fail("rpa.click_at requires integer 'x' and 'y' arguments");
+                    yield SyscallResponse.fail("rpa.click_at 需要整数 'x' 和 'y' 参数");
                 }
                 rpa.mouseClickAt(token, x, y);
-                log.info("[Dispatcher] RPA click_at for Agent '{}': ({}, {})", agentId, x, y);
-                yield SyscallResponse.ok("Clicked at (" + x + ", " + y + ")");
+                log.info("[Dispatcher] Agent '{}' 的 RPA click_at: ({}, {})", agentId, x, y);
+                yield SyscallResponse.ok("已点击 (" + x + ", " + y + ")");
             }
             case "rpa.scroll" -> {
                 int amount = toInt(args.get("amount"), 1);
                 rpa.mouseScroll(token, amount);
-                log.info("[Dispatcher] RPA scroll for Agent '{}': amount={}", agentId, amount);
-                yield SyscallResponse.ok("Scrolled by " + amount);
+                log.info("[Dispatcher] Agent '{}' 的 RPA scroll: amount={}", agentId, amount);
+                yield SyscallResponse.ok("已滚动 " + amount);
             }
             case "rpa.type" -> {
                 String text = args.get("text") != null ? args.get("text").toString() : null;
                 if (text == null || text.isEmpty()) {
-                    yield SyscallResponse.fail("rpa.type requires a 'text' argument");
+                    yield SyscallResponse.fail("rpa.type 需要 'text' 参数");
                 }
                 rpa.keyboardType(token, text);
-                log.info("[Dispatcher] RPA type for Agent '{}': textLen={}", agentId, text.length());
-                yield SyscallResponse.ok("Typed " + text.length() + " characters");
+                log.info("[Dispatcher] Agent '{}' 的 RPA type: textLen={}", agentId, text.length());
+                yield SyscallResponse.ok("已输入 " + text.length() + " 个字符");
             }
             case "rpa.key_combo" -> {
                 int keyCode = toInt(args.get("keyCode"), -1);
                 int modifiers = toInt(args.get("modifiers"), 0);
                 if (keyCode < 0) {
-                    yield SyscallResponse.fail("rpa.key_combo requires a 'keyCode' argument");
+                    yield SyscallResponse.fail("rpa.key_combo 需要 'keyCode' 参数");
                 }
                 rpa.keyCombo(token, modifiers, keyCode);
-                log.info("[Dispatcher] RPA key_combo for Agent '{}': keyCode={}, modifiers={}", agentId, keyCode, modifiers);
-                yield SyscallResponse.ok("Key combo executed");
+                log.info("[Dispatcher] Agent '{}' 的 RPA key_combo: keyCode={}, modifiers={}", agentId, keyCode, modifiers);
+                yield SyscallResponse.ok("组合键已执行");
             }
-            default -> SyscallResponse.fail("Unknown RPA tool: " + toolName);
+            default -> SyscallResponse.fail("未知的 RPA 工具: " + toolName);
         };
     }
 
@@ -672,15 +752,15 @@ public final class SyscallDispatcher {
         String entrypoint = args.get("entrypoint") != null ? args.get("entrypoint").toString() : "main";
 
         if (script.isEmpty()) {
-            return SyscallResponse.fail("Docker tool requires a 'script' argument");
+            return SyscallResponse.fail("Docker 工具需要 'script' 参数");
         }
 
         try {
             String result = dockerSandbox.executeCode(script, entrypoint);
-            log.info("[Dispatcher] Docker tool '{}' executed for Agent '{}'", toolName, agentId);
+            log.info("[Dispatcher] Docker 工具 '{}' 已为 Agent '{}' 执行", toolName, agentId);
             return SyscallResponse.ok(result);
         } catch (Exception e) {
-            return SyscallResponse.fail("Docker execution failed: " + e.getMessage());
+            return SyscallResponse.fail("Docker 执行失败: " + e.getMessage());
         }
     }
 
@@ -689,17 +769,17 @@ public final class SyscallDispatcher {
         String pluginAction = "tool." + toolName;
 
         if (!pluginManager.hasPlugin(pluginAction)) {
-            return SyscallResponse.fail("Plugin not registered: " + pluginAction);
+            return SyscallResponse.fail("插件未注册: " + pluginAction);
         }
 
         String paramsJson = serializeParams(args);
 
         try {
             String result = pluginManager.executePlugin(pluginAction, paramsJson);
-            log.info("[Dispatcher] WASM plugin '{}' executed for Agent '{}'", pluginAction, agentId);
+            log.info("[Dispatcher] WASM 插件 '{}' 已为 Agent '{}' 执行", pluginAction, agentId);
             return SyscallResponse.ok(result);
         } catch (Exception e) {
-            return SyscallResponse.fail("WASM plugin execution failed: " + e.getMessage());
+            return SyscallResponse.fail("WASM 插件执行失败: " + e.getMessage());
         }
     }
 
@@ -711,11 +791,11 @@ public final class SyscallDispatcher {
         // Strict type check: only MemoryPayload is legal in the "memory" namespace
         if (!(payload instanceof MemoryPayload mem)) {
             throw new SyscallException(request.fullAction(),
-                    "Kernel Panic: Invalid memory segment for payload — expected MemoryPayload, got "
+                    "Kernel Panic: 无效的内存段 — 期望 MemoryPayload，实际为 "
                     + payload.getClass().getSimpleName());
         }
 
-        log.info("[Dispatcher] Routing to Memory Subsystem... operation='{}', queryLen={}",
+        log.info("[Dispatcher] 正在路由到 Memory 子系统... operation='{}', queryLen={}",
                 mem.operation(), mem.query() != null ? mem.query().length() : 0);
 
         // Delegate to the unified MemoryManager
@@ -757,18 +837,18 @@ public final class SyscallDispatcher {
 
     private SyscallResponse handleVfsRead(String agentId, SyscallRequest request) {
         if (vfsManager == null) {
-            return SyscallResponse.fail("VFS manager not configured");
+            return SyscallResponse.fail("VFS 管理器未配置");
         }
 
         String path = request.paramString("path");
         if (path == null || path.isEmpty()) {
-            return SyscallResponse.fail("Missing parameter: path");
+            return SyscallResponse.fail("缺少参数: path");
         }
 
         try {
             var nodeOpt = vfsManager.resolve(path);
             if (nodeOpt.isEmpty()) {
-                return SyscallResponse.fail("Path not found: " + path);
+                return SyscallResponse.fail("路径未找到: " + path);
             }
             String content = nodeOpt.get().read();
             return SyscallResponse.ok(content);
@@ -779,7 +859,7 @@ public final class SyscallDispatcher {
 
     private SyscallResponse handleVfsWrite(String agentId, SyscallRequest request) {
         if (vfsManager == null) {
-            return SyscallResponse.fail("VFS manager not configured");
+            return SyscallResponse.fail("VFS 管理器未配置");
         }
 
         String path = request.paramString("path");
@@ -788,10 +868,10 @@ public final class SyscallDispatcher {
             payload = request.paramString("payload");
         }
         if (path == null || path.isEmpty()) {
-            return SyscallResponse.fail("Missing parameter: path");
+            return SyscallResponse.fail("缺少参数: path");
         }
         if (payload == null) {
-            return SyscallResponse.fail("Missing parameter: data");
+            return SyscallResponse.fail("缺少参数: data");
         }
 
         try {
@@ -804,7 +884,7 @@ public final class SyscallDispatcher {
                 return SyscallResponse.ok();
             }
             boolean ok = nodeOpt.get().write(payload);
-            return ok ? SyscallResponse.ok() : SyscallResponse.fail("Write rejected by node");
+            return ok ? SyscallResponse.ok() : SyscallResponse.fail("写入被节点拒绝");
         } catch (Exception e) {
             return SyscallResponse.fail(e);
         }
@@ -814,24 +894,24 @@ public final class SyscallDispatcher {
 
     private SyscallResponse handleVfsSnapshot(String agentId, SyscallRequest request) {
         if (vfsManager == null) {
-            return SyscallResponse.fail("VFS manager not configured");
+            return SyscallResponse.fail("VFS 管理器未配置");
         }
 
         String path = request.paramString("path");
         String label = request.paramString("label");
         if (path == null || path.isEmpty()) {
-            return SyscallResponse.fail("Missing parameter: path");
+            return SyscallResponse.fail("缺少参数: path");
         }
 
         try {
             var nodeOpt = vfsManager.resolve(path);
             if (nodeOpt.isEmpty()) {
-                return SyscallResponse.fail("Path not found: " + path);
+                return SyscallResponse.fail("路径未找到: " + path);
             }
 
             if (nodeOpt.get() instanceof com.ouisani.aios.vfs.ShadowCopyNode shadow) {
                 long timestamp = shadow.createSnapshot(label);
-                return SyscallResponse.ok("Snapshot created: timestamp=" + timestamp
+                return SyscallResponse.ok("快照已创建: timestamp=" + timestamp
                         + " label=" + (label != null ? label : "auto")
                         + " cowPages=" + shadow.cowPageCount());
             } else {
@@ -841,7 +921,7 @@ public final class SyscallDispatcher {
                 long timestamp = shadowNode.createSnapshot(label);
                 // 替换 VFS 中的节点
                 vfsManager.mount(extractDirPath(path), extractFileName(path), shadowNode);
-                return SyscallResponse.ok("Snapshot created (auto-wrapped): timestamp=" + timestamp
+                return SyscallResponse.ok("快照已创建 (自动包装): timestamp=" + timestamp
                         + " cowPages=" + shadowNode.cowPageCount());
             }
         } catch (Exception e) {
@@ -851,24 +931,24 @@ public final class SyscallDispatcher {
 
     private SyscallResponse handleVfsRollback(String agentId, SyscallRequest request) {
         if (vfsManager == null) {
-            return SyscallResponse.fail("VFS manager not configured");
+            return SyscallResponse.fail("VFS 管理器未配置");
         }
 
         String path = request.paramString("path");
         String timestampStr = request.paramString("timestamp");
         String label = request.paramString("label");
         if (path == null || path.isEmpty()) {
-            return SyscallResponse.fail("Missing parameter: path");
+            return SyscallResponse.fail("缺少参数: path");
         }
 
         try {
             var nodeOpt = vfsManager.resolve(path);
             if (nodeOpt.isEmpty()) {
-                return SyscallResponse.fail("Path not found: " + path);
+                return SyscallResponse.fail("路径未找到: " + path);
             }
 
             if (!(nodeOpt.get() instanceof com.ouisani.aios.vfs.ShadowCopyNode shadow)) {
-                return SyscallResponse.fail("Path is not a ShadowCopyNode — create a snapshot first");
+                return SyscallResponse.fail("路径不是 ShadowCopyNode — 请先创建快照");
             }
 
             boolean success;
@@ -882,14 +962,14 @@ public final class SyscallDispatcher {
             }
 
             if (success) {
-                return SyscallResponse.ok("Rollback successful: path=" + path
+                return SyscallResponse.ok("回滚成功: path=" + path
                         + " cowPages=" + shadow.cowPageCount()
                         + " snapshots=" + shadow.snapshotCount());
             } else {
-                return SyscallResponse.fail("Rollback failed: no matching snapshot found");
+                return SyscallResponse.fail("回滚失败: 未找到匹配的快照");
             }
         } catch (NumberFormatException e) {
-            return SyscallResponse.fail("Invalid timestamp format");
+            return SyscallResponse.fail("无效的时间戳格式");
         } catch (Exception e) {
             return SyscallResponse.fail(e);
         }
@@ -914,17 +994,17 @@ public final class SyscallDispatcher {
         String action = request.fullAction();
 
         if (!pluginManager.hasPlugin(action)) {
-            return SyscallResponse.fail("Plugin not registered: " + action);
+            return SyscallResponse.fail("插件未注册: " + action);
         }
 
         String paramsJson = serializeParams(request.params());
 
         try {
             String result = pluginManager.executePlugin(action, paramsJson);
-            log.info("[Syscall Dispatcher] Plugin '{}' executed successfully for Agent '{}'", action, agentId);
+            log.info("[Syscall Dispatcher] 插件 '{}' 已为 Agent '{}' 成功执行", action, agentId);
             return SyscallResponse.ok(result);
         } catch (Exception e) {
-            return SyscallResponse.fail("Plugin execution failed: " + e.getMessage());
+            return SyscallResponse.fail("插件执行失败: " + e.getMessage());
         }
     }
 
@@ -936,7 +1016,7 @@ public final class SyscallDispatcher {
             String result = CoreUtils.dispatch(subAction, request.params());
             return SyscallResponse.ok(result);
         } catch (Exception e) {
-            return SyscallResponse.fail("CoreUtils error: " + e.getMessage());
+            return SyscallResponse.fail("CoreUtils 错误: " + e.getMessage());
         }
     }
 
@@ -948,22 +1028,22 @@ public final class SyscallDispatcher {
             String result = switch (subAction) {
                 case "install" -> {
                     String pkg = request.paramString("package");
-                    if (pkg == null || pkg.isEmpty()) yield "Missing parameter: package";
+                    if (pkg == null || pkg.isEmpty()) yield "缺少参数: package";
                     AiosApt.install(pkg);
-                    yield "Package '" + pkg + "' installed successfully";
+                    yield "包 '" + pkg + "' 安装成功";
                 }
                 case "remove" -> {
                     String pkg = request.paramString("package");
-                    if (pkg == null || pkg.isEmpty()) yield "Missing parameter: package";
+                    if (pkg == null || pkg.isEmpty()) yield "缺少参数: package";
                     AiosApt.remove(pkg);
-                    yield "Package '" + pkg + "' removed";
+                    yield "包 '" + pkg + "' 已卸载";
                 }
                 case "list" -> AiosApt.list();
-                default -> "Unknown apt command: " + subAction;
+                default -> "未知的 apt 命令: " + subAction;
             };
             return SyscallResponse.ok(result);
         } catch (Exception e) {
-            return SyscallResponse.fail("APT error: " + e.getMessage());
+            return SyscallResponse.fail("APT 错误: " + e.getMessage());
         }
     }
 
@@ -977,7 +1057,7 @@ public final class SyscallDispatcher {
                     String sourceCode = request.paramString("source");
                     String language = request.paramString("language");
                     if (sourceCode == null || sourceCode.isEmpty())
-                        yield "Missing parameter: source";
+                        yield "缺少参数: source";
                     if (language == null || language.isEmpty())
                         language = "java";
 
@@ -986,23 +1066,23 @@ public final class SyscallDispatcher {
                                     .compile(sourceCode, language);
 
                     if (compileResult.success()) {
-                        yield "JIT compilation successful: id=" + compileResult.compileId()
+                        yield "JIT 编译成功: id=" + compileResult.compileId()
                                 + " lang=" + compileResult.language()
                                 + " output=" + compileResult.outputPath()
                                 + (compileResult.isMock() ? " (MOCK: " + compileResult.mockReason() + ")" : "");
                     } else {
-                        yield "JIT compilation failed: " + compileResult.errorMessage();
+                        yield "JIT 编译失败: " + compileResult.errorMessage();
                     }
                 }
                 case "execute" -> {
                     String compileId = request.paramString("compile_id");
                     if (compileId == null || compileId.isEmpty())
-                        yield "Missing parameter: compile_id";
+                        yield "缺少参数: compile_id";
 
                     com.ouisani.aios.core.sandbox.CompilerBridge.CompilationResult compileResult =
                             com.ouisani.aios.core.sandbox.CompilerBridge.instance().getResult(compileId);
                     if (compileResult == null)
-                        yield "Compilation result not found: " + compileId;
+                        yield "编译结果未找到: " + compileId;
 
                     // 在 Ring 3 沙箱中执行
                     com.ouisani.aios.core.sandbox.GraalWasmSandbox sandbox =
@@ -1012,17 +1092,17 @@ public final class SyscallDispatcher {
                             sandbox.executeJitArtifact(compileResult);
 
                     if (execResult.success()) {
-                        yield "Execution result: " + execResult.result();
+                        yield "执行结果: " + execResult.result();
                     } else {
-                        yield "Execution failed: " + execResult.error();
+                        yield "执行失败: " + execResult.error();
                     }
                 }
                 case "stats" -> com.ouisani.aios.core.sandbox.CompilerBridge.instance().getStatsReport();
-                default -> "Unknown jit command: " + subAction;
+                default -> "未知的 jit 命令: " + subAction;
             };
             return SyscallResponse.ok(result);
         } catch (Exception e) {
-            return SyscallResponse.fail("JIT error: " + e.getMessage());
+            return SyscallResponse.fail("JIT 错误: " + e.getMessage());
         }
     }
 
@@ -1039,16 +1119,16 @@ public final class SyscallDispatcher {
                 case "free" -> CoreUtils.free();
                 case "install" -> {
                     String pkg = request.paramString("package");
-                    if (pkg == null || pkg.isEmpty()) yield "Missing parameter: package";
+                    if (pkg == null || pkg.isEmpty()) yield "缺少参数: package";
                     AiosApt.install(pkg);
-                    yield "Package '" + pkg + "' installed successfully";
+                    yield "包 '" + pkg + "' 安装成功";
                 }
-                default -> "Unknown bin command: " + subAction;
+                default -> "未知的 bin 命令: " + subAction;
             };
-            log.info("[User Space] Core utilities and package manager linked to Intent Router. bin.{} dispatched", subAction);
+            log.info("[用户空间] 核心工具和包管理器已链接到 Intent Router。bin.{} 已分发", subAction);
             return SyscallResponse.ok(result);
         } catch (Exception e) {
-            return SyscallResponse.fail("bin error: " + e.getMessage());
+            return SyscallResponse.fail("bin 错误: " + e.getMessage());
         }
     }
 
@@ -1056,12 +1136,12 @@ public final class SyscallDispatcher {
 
     private SyscallResponse handleOpen(String agentId, SyscallRequest request) {
         if (objectManager == null) {
-            return SyscallResponse.fail("Object manager not configured");
+            return SyscallResponse.fail("Object 管理器未配置");
         }
 
         String path = request.paramString("path");
         if (path == null || path.isEmpty()) {
-            return SyscallResponse.fail("Missing parameter: path");
+            return SyscallResponse.fail("缺少参数: path");
         }
 
         try {
@@ -1074,12 +1154,12 @@ public final class SyscallDispatcher {
 
     private SyscallResponse handleRead(String agentId, SyscallRequest request) {
         if (objectManager == null) {
-            return SyscallResponse.fail("Object manager not configured");
+            return SyscallResponse.fail("Object 管理器未配置");
         }
 
         Integer handle = request.paramInt("handle", -1);
         if (handle < 0) {
-            return SyscallResponse.fail("Missing or invalid parameter: handle");
+            return SyscallResponse.fail("缺少或无效的参数: handle");
         }
 
         try {
@@ -1093,17 +1173,17 @@ public final class SyscallDispatcher {
 
     private SyscallResponse handleClose(String agentId, SyscallRequest request) {
         if (objectManager == null) {
-            return SyscallResponse.fail("Object manager not configured");
+            return SyscallResponse.fail("Object 管理器未配置");
         }
 
         Integer handle = request.paramInt("handle", -1);
         if (handle < 0) {
-            return SyscallResponse.fail("Missing or invalid parameter: handle");
+            return SyscallResponse.fail("缺少或无效的参数: handle");
         }
 
         try {
             boolean closed = objectManager.closeHandle(handle);
-            return closed ? SyscallResponse.ok() : SyscallResponse.fail("Handle already closed or invalid");
+            return closed ? SyscallResponse.ok() : SyscallResponse.fail("句柄已关闭或无效");
         } catch (Exception e) {
             return SyscallResponse.fail(e);
         }

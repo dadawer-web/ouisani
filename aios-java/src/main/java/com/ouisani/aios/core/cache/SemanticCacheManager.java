@@ -147,11 +147,11 @@ public class SemanticCacheManager {
             try {
                 onTickDecay();
             } catch (Exception e) {
-                log.error("[Semantic Cache] Tick decay error: {}", e.getMessage(), e);
+                log.error("[Semantic Cache] Tick 衰减错误: {}", e.getMessage(), e);
             }
         });
 
-        log.info("[Semantic Cache] Subscribed to SIG_TICK — memory decay engine active");
+        log.info("[Semantic Cache] 已订阅 SIG_TICK — 记忆衰减引擎已激活");
     }
 
     /**
@@ -206,7 +206,7 @@ public class SemanticCacheManager {
             influxToSemanticNode(toForget);
             cache.removeAll(toForget);
             totalForgotten += toForget.size();
-            log.info("[Semantic Cache] Tick decay: {} entries forgotten (weight < {}), cacheSize={}",
+            log.info("[Semantic Cache] Tick 衰减: {} 个条目已遗忘 (权重 < {}), 缓存大小={}",
                     toForget.size(), FORGET_THRESHOLD, cache.size());
         }
 
@@ -220,7 +220,7 @@ public class SemanticCacheManager {
                     .average()
                     .orElse(0);
 
-            log.info("[Semantic Cache] Decay cycle #{}: cacheSize={}, swappable={}, avgWeight={:.4f}, decayFactor={:.4f}",
+            log.info("[Semantic Cache] 衰减周期 #{}: 缓存大小={}, 可交换={}, 平均权重={:.4f}, 衰减因子={:.4f}",
                     totalDecayCycles, cache.size(), swappable, avgWeight, decayFactor);
 
             SemanticEtw.getInstance().logEvent("CACHE", "DECAY_TICK",
@@ -241,7 +241,7 @@ public class SemanticCacheManager {
         double t = tickIntervalMs / 1000.0;
         double S = 3600.0;
         this.decayFactor = Math.exp(-t / S);
-        log.info("[Semantic Cache] Decay factor adapted: tickInterval={}ms → decayFactor={:.6f}",
+        log.info("[Semantic Cache] 衰减因子已适配: Tick 间隔={}ms → 衰减因子={:.6f}",
                 tickIntervalMs, decayFactor);
     }
 
@@ -251,7 +251,7 @@ public class SemanticCacheManager {
 
     public void configure(LlmProvider provider) {
         this.llmProvider = provider;
-        log.info("[Semantic Cache] Configured with LlmProvider: {}", provider.name());
+        log.info("[Semantic Cache] 已配置 LlmProvider: {}", provider.name());
     }
 
     /**
@@ -265,7 +265,7 @@ public class SemanticCacheManager {
         this.capacity = capacity;
         applyMode(mode);
 
-        log.info("[Semantic Cache] Eviction mode={}, capacity={}, activeStrategy={}",
+        log.info("[Semantic Cache] 淘汰模式={}, 容量={}, 活跃策略={}",
                 mode, capacity, activeStrategy.strategyName());
         System.out.println("  \u001B[36m[Semantic Cache] Eviction mode=" + mode
                 + ", capacity=" + capacity
@@ -280,7 +280,7 @@ public class SemanticCacheManager {
     public void configureHybrid(double hybridAlpha) {
         this.hybridAlpha = Math.max(0.0, Math.min(1.0, hybridAlpha));
         if (this.evictionMode == EvictionMode.HYBRID_MODE) {
-            log.info("[Semantic Cache] Hybrid alpha set to {:.2f} (strict={:.0f}%, bionic={:.0f}%)",
+            log.info("[Semantic Cache] 混合 Alpha 设为 {:.2f} (严格={:.0f}%, 仿生={:.0f}%)",
                     this.hybridAlpha, this.hybridAlpha * 100, (1 - this.hybridAlpha) * 100);
         }
     }
@@ -290,7 +290,7 @@ public class SemanticCacheManager {
      */
     public void setEvictionStrategy(MemoryEvictionStrategy strategy) {
         this.activeStrategy = strategy;
-        log.info("[Semantic Cache] Custom eviction strategy set: {}", strategy.strategyName());
+        log.info("[Semantic Cache] 自定义淘汰策略已设置: {}", strategy.strategyName());
     }
 
     /**
@@ -325,7 +325,7 @@ public class SemanticCacheManager {
         try {
             queryVector = llmProvider.embed(newQuery);
         } catch (Exception e) {
-            log.warn("[Semantic Cache] Embedding failed, skipping cache lookup: {}", e.getMessage());
+            log.warn("[Semantic Cache] Embedding 失败，跳过缓存查找: {}", e.getMessage());
             return null;
         }
 
@@ -345,14 +345,14 @@ public class SemanticCacheManager {
             bestEntry.recordAccess();
             activeStrategy.onAccess(bestEntry);
 
-            System.out.printf("  \u001B[32m[Semantic Cache] Cache hit with similarity %.4f > %.2f! Bypassing LLM...\u001B[0m%n",
+            System.out.printf("  \u001B[32m[Semantic Cache] 缓存命中！相似度 %.4f > %.2f，跳过 LLM 调用...\u001B[0m%n",
                     bestSimilarity, similarityThreshold);
-            log.info("[Semantic Cache] Cache HIT: similarity={}, cacheSize={}, mode={}",
+            log.info("[Semantic Cache] 缓存命中: 相似度={}, 缓存大小={}, 模式={}",
                     String.format("%.4f", bestSimilarity), cache.size(), evictionMode);
             return bestEntry.responseText();
         }
 
-        log.debug("[Semantic Cache] Cache MISS: bestSimilarity={}, threshold={}, cacheSize={}, mode={}",
+        log.debug("[Semantic Cache] 缓存未命中: 最高相似度={}, 阈值={}, 缓存大小={}, 模式={}",
                 String.format("%.4f", bestSimilarity), similarityThreshold, cache.size(), evictionMode);
         return null;
     }
@@ -385,9 +385,9 @@ public class SemanticCacheManager {
             evict();
         }
 
-        System.out.printf("  \u001B[32m[Semantic Cache] Cached response for query (%d entries total, mode=%s)\u001B[0m%n",
+        System.out.printf("  \u001B[32m[Semantic Cache] 已缓存查询响应 (共 %d 条, 模式=%s)\u001B[0m%n",
                 cache.size(), evictionMode);
-        log.info("[Semantic Cache] Put cache: queryLen={}, responseLen={}, cacheSize={}, mode={}",
+        log.info("[Semantic Cache] 写入缓存: 查询长度={}, 响应长度={}, 缓存大小={}, 模式={}",
                 query.length(), response.length(), cache.size(), evictionMode);
 
         // ── 集群记忆复制：高价值知识广播到全网 ──
@@ -412,7 +412,7 @@ public class SemanticCacheManager {
      */
     public void setRaftNode(SemanticRaftNode raftNode) {
         this.raftNode = raftNode;
-        log.info("[SemanticCache] Raft node configured: nodeId={}", raftNode.nodeId());
+        log.info("[SemanticCache] Raft 节点已配置: nodeId={}", raftNode.nodeId());
     }
 
     /**
@@ -444,7 +444,7 @@ public class SemanticCacheManager {
         // 如果没有情绪标签，默认复制（让集群决定是否接受）
         if (metadata == null || metadata.isEmpty() || isHighValue) {
             raftNode.replicateMemory(query, response, metadata);
-            log.debug("[SemanticCache] Memory replicated to cluster: query={}",
+            log.debug("[SemanticCache] 记忆已复制到集群: query={}",
                     query.length() > 50 ? query.substring(0, 50) + "..." : query);
         }
     }
@@ -465,7 +465,7 @@ public class SemanticCacheManager {
         if (!victims.isEmpty()) {
             // 冷热分层：驱逐数据流入 SemanticNode（L2 持久存储）
             influxToSemanticNode(victims);
-            log.info("[Semantic Cache] Evicted {} entries via {} (cacheSize={})",
+            log.info("[Semantic Cache] 已淘汰 {} 个条目，策略={} (缓存大小={})",
                     victims.size(), activeStrategy.strategyName(), cache.size());
         }
     }
@@ -512,7 +512,7 @@ public class SemanticCacheManager {
             influxToSemanticNode(victims);
         }
 
-        log.info("[Semantic Cache] Hybrid eviction: α={}, strictVictims={}, bionicVictims={}, finalEvicted={}, cacheSize={}",
+        log.info("[Semantic Cache] 混合淘汰: α={}, 严格受害者={}, 仿生受害者={}, 最终淘汰={}, 缓存大小={}",
                 String.format("%.2f", hybridAlpha), strictVictims.size(), bionicVictims.size(),
                 victims.size(), cache.size());
     }
@@ -534,10 +534,10 @@ public class SemanticCacheManager {
             Optional<com.ouisani.aios.core.VfsNode> nodeOpt = vfs.resolve("/dev/semantic");
             if (nodeOpt.isPresent() && nodeOpt.get() instanceof com.ouisani.aios.vfs.SemanticNode semanticNode) {
                 semanticNode.influxBatchFromCache(victims);
-                log.info("[Semantic Cache] Influx: {} evicted entries → /dev/semantic (L2)", victims.size());
+                log.info("[Semantic Cache] 流入: {} 个淘汰条目 → /dev/semantic (L2)", victims.size());
             }
         } catch (Exception e) {
-            log.warn("[Semantic Cache] Failed to influx evicted entries to SemanticNode: {}", e.getMessage());
+            log.warn("[Semantic Cache] 淘汰条目流入 SemanticNode 失败: {}", e.getMessage());
         }
     }
 
@@ -572,7 +572,7 @@ public class SemanticCacheManager {
 
     public void clear() {
         cache.clear();
-        log.info("[Semantic Cache] Cache cleared");
+        log.info("[Semantic Cache] 缓存已清空");
     }
 
     /**

@@ -57,7 +57,7 @@ public class TeamRegistry {
                     MailMessage.MessageType.POISON_PILL, "Shutdown"));
             log.info("[TeamRegistry] Agent {} clocked out. Team size: {}", agentId, agents.size());
         } else {
-            log.warn("[TeamRegistry] Agent {} not found for unregistration.", agentId);
+            log.warn("[TeamRegistry] Agent 未找到，无法注销: {}", agentId);
         }
     }
 
@@ -71,7 +71,7 @@ public class TeamRegistry {
             log.debug("[TeamRegistry] Routed: {} -> {} (Type: {})",
                     message.getSenderId(), message.getReceiverId(), message.getType());
         } else {
-            log.warn("[TeamRegistry] Delivery failed: Receiver {} not found or offline.", message.getReceiverId());
+            log.warn("[TeamRegistry] 投递失败: 接收者 {} 未找到或离线。", message.getReceiverId());
         }
     }
 

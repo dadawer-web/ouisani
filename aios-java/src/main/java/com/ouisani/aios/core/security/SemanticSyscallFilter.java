@@ -43,7 +43,7 @@ public class SemanticSyscallFilter implements SyscallFilter {
             return;
         }
 
-        log.debug("[Syscall Filter] High-risk call detected: {} from agent [{}]. Forwarding to Semantic Auditor...",
+        log.debug("[Syscall Filter] 检测到高危调用: {}，来自 Agent [{}]。正在转发至语义审核员...",
                 request.fullAction(), agentId);
 
         // 提取参数 JSON
@@ -63,7 +63,7 @@ public class SemanticSyscallFilter implements SyscallFilter {
             );
         }
 
-        log.debug("[Syscall Filter] Action [{}] cleared by Semantic Auditor for agent [{}].", action, agentId);
+        log.debug("[Syscall Filter] 动作 [{}] 已被语义审核员放行，Agent [{}].", action, agentId);
     }
 
     /**

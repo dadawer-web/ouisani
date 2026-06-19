@@ -72,14 +72,14 @@ public class AstGrepRunner {
             boolean exited = process.waitFor(TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
             if (exited && process.exitValue() == 0) {
                 sgAvailable = true;
-                log.info("[AST Grep] ast-grep (sg) detected and available.");
+                log.info("[AST Grep] ast-grep 已检测且可用。");
             } else {
                 sgAvailable = false;
-                log.warn("[AST Grep] sg command found but returned non-zero exit code.");
+                log.warn("[AST Grep] sg 命令已找到但返回非零退出码。");
             }
         } catch (Exception e) {
             sgAvailable = false;
-            log.warn("[AST Grep] sg command not found. AST-level operations disabled. Install: npm i -g @ast-grep/cli");
+            log.warn("[AST Grep] sg 命令未找到。AST 级操作已禁用。安装: npm i -g @ast-grep/cli");
         }
         return sgAvailable;
     }
@@ -131,11 +131,11 @@ public class AstGrepRunner {
                 }
                 log.info("[AST Grep] Search found {} matches in {}", results.size(), filePath);
             } else {
-                log.warn("[AST Grep] Search returned exit code {}. Output: {}", exitCode,
+                log.warn("[AST Grep] 搜索返回退出码 {}。输出: {}", exitCode,
                         output.length() > 200 ? output.substring(0, 200) + "..." : output);
             }
         } catch (Exception e) {
-            log.error("[AST Grep] Search execution failed.", e);
+            log.error("[AST Grep] 搜索执行失败。", e);
             throw new RuntimeException("AST search failed: " + e.getMessage());
         }
         return results;
@@ -183,13 +183,13 @@ public class AstGrepRunner {
             if (exitCode == 0) {
                 log.info("[AST Grep] Surgical rewrite applied successfully to: {}", filePath);
             } else {
-                log.error("[AST Grep] Rewrite failed (Code {}). Output: {}", exitCode, output);
+                log.error("[AST Grep] 重写失败 (Code {})。输出: {}", exitCode, output);
                 throw new RuntimeException("AST rewrite failed: " + output);
             }
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
-            log.error("[AST Grep] Rewrite execution failed.", e);
+            log.error("[AST Grep] 重写执行失败。", e);
             throw new RuntimeException("AST rewrite failed: " + e.getMessage());
         }
     }

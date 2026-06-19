@@ -1,0 +1,23 @@
+{
+  "status": "success",
+  "node": "create_cmake_project",
+  "project_name": "MyCppProject",
+  "project_dir": "/home/xmy/tryaios/aios-java/workspaces/20260618_103836_先找到我本地文件夹homexmyt/factory/cpp_project",
+  "cmake_file": "/home/xmy/tryaios/aios-java/workspaces/20260618_103836_先找到我本地文件夹homexmyt/factory/cpp_project/CMakeLists.txt",
+  "build_script": "/home/xmy/tryaios/aios-java/workspaces/20260618_103836_先找到我本地文件夹homexmyt/factory/cpp_project/build.sh",
+  "cpp_standard": 17,
+  "build_type": "Debug",
+  "executable_name": "my_app",
+  "detected_files": {
+    "cpp_count": 1,
+    "h_count": 0,
+    "cpp_files": [
+      "src/main.cpp"
+    ],
+    "h_files": [],
+    "header_dirs": [
+      "."
+    ]
+  },
+  "libraries": []
+}

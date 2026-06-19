@@ -91,17 +91,17 @@ public class DynamicToolBridge {
         // 1. 提取意图信号
         String intentSignal = extractIntentSignal(recentMessages);
         if (intentSignal == null || intentSignal.isBlank()) {
-            log.debug("[DynBridge] No clear intent signal detected for agent '{}'", agentId);
+            log.debug("[DynBridge] 未检测到 Agent '{}' 的明确意图信号", agentId);
             return List.of();
         }
 
-        log.debug("[DynBridge] Intent signal for agent '{}': '{}'", agentId,
+        log.debug("[DynBridge] Agent '{}' 的意图信号: '{}'", agentId,
                 intentSignal.length() > 80 ? intentSignal.substring(0, 80) + "..." : intentSignal);
 
         // 2. 语义搜索匹配工具
         List<ToolDefinition> candidates = pm.semanticSearch(intentSignal, MAX_AUTO_MOUNT);
         if (candidates.isEmpty()) {
-            log.debug("[DynBridge] No matching tools found for intent: '{}'", intentSignal);
+            log.debug("[DynBridge] 未找到匹配意图 '{}' 的工具", intentSignal);
             return List.of();
         }
 
@@ -112,13 +112,13 @@ public class DynamicToolBridge {
         for (ToolDefinition candidate : candidates) {
             // 跳过已加载的工具
             if (ctx.hasTool(candidate.name())) {
-                log.debug("[DynBridge] Tool '{}' already loaded, skipping", candidate.name());
+                log.debug("[DynBridge] 工具 '{}' 已加载，跳过", candidate.name());
                 continue;
             }
 
             // 检查语义匹配度（如果有嵌入向量）
             if (!passesSimilarityThreshold(intentSignal, candidate)) {
-                log.debug("[DynBridge] Tool '{}' below similarity threshold, skipping", candidate.name());
+                log.debug("[DynBridge] 工具 '{}' 低于相似度阈值，跳过", candidate.name());
                 continue;
             }
 
@@ -127,11 +127,11 @@ public class DynamicToolBridge {
                 mounted.add(candidate);
                 toolLastUsed.put(candidate.name(), System.currentTimeMillis());
                 toolUseCount.computeIfAbsent(candidate.name(), k -> new AtomicInteger()).incrementAndGet();
-                log.info("[DynBridge] Auto-mounted tool '{}' for agent '{}' (intent: '{}')",
+                log.info("[DynBridge] 工具已自动挂载 '{}'，Agent '{}' (意图: '{}')",
                         candidate.name(), agentId,
                         intentSignal.length() > 40 ? intentSignal.substring(0, 40) + "..." : intentSignal);
             } else {
-                log.warn("[DynBridge] Failed to auto-mount '{}' (budget exceeded?)", candidate.name());
+                log.warn("[DynBridge] 自动挂载 '{}' 失败 (预算超限?)", candidate.name());
             }
         }
 
@@ -294,7 +294,7 @@ public class DynamicToolBridge {
             double similarity = com.ouisani.aios.core.llm.VectorMath.cosineSimilarity(intentVec, toolVec);
             return similarity >= SIMILARITY_THRESHOLD;
         } catch (Exception e) {
-            log.debug("[DynBridge] Similarity check failed, defaulting to pass: {}", e.getMessage());
+            log.debug("[DynBridge] 相似度检查失败，默认放行: {}", e.getMessage());
             return true; // 出错时保守放行
         }
     }
@@ -328,12 +328,12 @@ public class DynamicToolBridge {
         for (String toolName : toEvict) {
             ctx.rmmod(toolName);
             toolLastUsed.remove(toolName);
-            log.info("[DynBridge] LRU evicted cold tool '{}' for agent '{}' (idle > {}ms)",
-                    toolName, agentId, TOOL_IDLE_TIMEOUT_MS);
+            log.info("[DynBridge] LRU 已驱逐冷工具 '{}'，Agent '{}' (空闲 > {}ms)",
+                        toolName, agentId, TOOL_IDLE_TIMEOUT_MS);
         }
 
         if (!toEvict.isEmpty()) {
-            log.info("[DynBridge] LRU eviction: {} cold tools evicted for agent '{}'", toEvict.size(), agentId);
+            log.info("[DynBridge] LRU 驱逐: 已为 Agent '{}' 驱逐 {} 个冷工具", agentId, toEvict.size());
         }
     }
 }

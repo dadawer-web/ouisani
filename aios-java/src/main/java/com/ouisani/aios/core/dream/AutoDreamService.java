@@ -61,7 +61,7 @@ public class AutoDreamService {
      */
     public static String consolidate(AiosSdk sdk, String agentId, String memoryDir) {
         log.info("[AutoDream] Starting consolidation for agent: {}", agentId);
-        System.out.println("[AutoDream] Starting consolidation...");
+        System.out.println("[AutoDream] 正在启动整合...");
 
         // 获取文件锁
         if (!acquireLock(memoryDir)) {

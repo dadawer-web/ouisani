@@ -1,0 +1,106 @@
+{
+  "scheduler_status": "completed",
+  "total_tasks": 8,
+  "scheduled_tasks": 8,
+  "processed_tasks": 8,
+  "failed_tasks": 0,
+  "retry_tasks": 0,
+  "task_history": {
+    "test_task_2": [
+      {
+        "timestamp": 1781749366.754498,
+        "status": "completed",
+        "retry_count": 0,
+        "error": ""
+      }
+    ],
+    "test_task_4": [
+      {
+        "timestamp": 1781749366.754504,
+        "status": "completed",
+        "retry_count": 0,
+        "error": ""
+      }
+    ],
+    "test_task_6": [
+      {
+        "timestamp": 1781749366.7545066,
+        "status": "completed",
+        "retry_count": 0,
+        "error": ""
+      }
+    ],
+    "test_task_1": [
+      {
+        "timestamp": 1781749366.7545083,
+        "status": "completed",
+        "retry_count": 0,
+        "error": ""
+      }
+    ],
+    "test_task_5": [
+      {
+        "timestamp": 1781749366.7545092,
+        "status": "completed",
+        "retry_count": 0,
+        "error": ""
+      }
+    ],
+    "test_task_3": [
+      {
+        "timestamp": 1781749366.754511,
+        "status": "completed",
+        "retry_count": 0,
+        "error": ""
+      }
+    ],
+    "test_task_0": [
+      {
+        "timestamp": 1781749366.754512,
+        "status": "completed",
+        "retry_count": 0,
+        "error": ""
+      }
+    ],
+    "test_task_7": [
+      {
+        "timestamp": 1781749366.7545133,
+        "status": "completed",
+        "retry_count": 0,
+        "error": ""
+      }
+    ]
+  },
+  "worker_status": [
+    {
+      "node_id": "worker_1",
+      "load": 0,
+      "capacity": 11,
+      "status": "active"
+    },
+    {
+      "node_id": "worker_2",
+      "load": 0,
+      "capacity": 14,
+      "status": "active"
+    },
+    {
+      "node_id": "worker_3",
+      "load": 0,
+      "capacity": 9,
+      "status": "active"
+    },
+    {
+      "node_id": "worker_4",
+      "load": 0,
+      "capacity": 11,
+      "status": "active"
+    },
+    {
+      "node_id": "worker_5",
+      "load": 0,
+      "capacity": 14,
+      "status": "active"
+    }
+  ]
+}

@@ -48,23 +48,23 @@ public class DaemonManager {
     public void registerService(String serviceName, AgentImageConfig config) {
         targetState.put(serviceName, config);
         restartCounts.putIfAbsent(serviceName, new AtomicInteger(0));
-        System.out.printf("  [Systemd] Registered daemon '%s' (baseImage=%s, tokenLimit=%d)%n",
+        System.out.printf("  [Systemd] 已注册守护进程 '%s' (baseImage=%s, tokenLimit=%d)%n",
                 serviceName, config.baseImage(), config.tokenLimit());
         runtime.run(serviceName, config);
-        System.out.printf("  [Systemd] Daemon '%s' started and under watch%n", serviceName);
+        System.out.printf("  [Systemd] 守护进程 '%s' 已启动并受监控%n", serviceName);
     }
 
     public void unregisterService(String serviceName) {
         targetState.remove(serviceName);
         restartCounts.remove(serviceName);
         runtime.stop(serviceName);
-        System.out.printf("  [Systemd] Daemon '%s' unregistered and stopped%n", serviceName);
+        System.out.printf("  [Systemd] 守护进程 '%s' 已注销并停止%n", serviceName);
     }
 
     public void startReconciler() {
         if (running.compareAndSet(false, true)) {
             reconciler.scheduleAtFixedRate(this::reconcile, 3, 3, TimeUnit.SECONDS);
-            System.out.println("  [Systemd] Reconciler started (scan interval: 3s)");
+            System.out.println("  [Systemd] 协调器已启动 (scan interval: 3s)");
             System.out.println("  [Systemd] Watching daemons: " + targetState.keySet());
         }
     }
@@ -72,7 +72,7 @@ public class DaemonManager {
     public void stopReconciler() {
         if (running.compareAndSet(true, false)) {
             reconciler.shutdown();
-            System.out.println("  [Systemd] Reconciler stopped");
+            System.out.println("  [Systemd] 协调器已停止");
         }
     }
 

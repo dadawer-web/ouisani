@@ -90,7 +90,7 @@ public class TeamTool implements Tool<TeamTool.Input> {
                 default -> ToolOutput.fail("Unknown team action: " + input.action());
             };
         } catch (Exception e) {
-            log.warn("[TeamTool] Action '{}' failed: {}", input.action(), e.getMessage());
+            log.warn("[TeamTool] 动作 '{}' 失败: {}", input.action(), e.getMessage());
             return ToolOutput.fail("Team operation failed: " + e.getMessage());
         }
     }

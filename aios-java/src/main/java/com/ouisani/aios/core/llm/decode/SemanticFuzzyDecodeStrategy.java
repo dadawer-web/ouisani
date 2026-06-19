@@ -90,35 +90,35 @@ public final class SemanticFuzzyDecodeStrategy implements DecodeStrategy {
             return null;
         }
 
-        log.info("[Fuzzy] Activating semantic fuzzy decoder for type={}", targetClass.getSimpleName());
-        System.out.println("  \u001B[33m[Fuzzy Decoder] Strict parse failed. Engaging semantic fuzzy pipeline...\u001B[0m");
+        log.info("[Fuzzy] 正在激活语义模糊解码器, type={}", targetClass.getSimpleName());
+        System.out.println("  \u001B[33m[Fuzzy Decoder] 严格解析失败。正在启动语义模糊管线...\u001B[0m");
 
         // 阶段 1：正则深度清洗
         T result = attemptDeepClean(llmOutput, targetClass);
         if (result != null) {
-            log.info("[Fuzzy] Stage 1 (deep clean) succeeded for type={}", targetClass.getSimpleName());
-            System.out.println("  \u001B[32m[Fuzzy Decoder] Stage 1 (deep clean) succeeded!\u001B[0m");
+            log.info("[Fuzzy] 阶段 1（深度清洗）成功, type={}", targetClass.getSimpleName());
+            System.out.println("  \u001B[32m[Fuzzy Decoder] 阶段 1（深度清洗）成功！\u001B[0m");
             return result;
         }
 
         // 阶段 2：字段名模糊匹配
         result = attemptFieldFuzzyMatch(llmOutput, targetClass);
         if (result != null) {
-            log.info("[Fuzzy] Stage 2 (field fuzzy match) succeeded for type={}", targetClass.getSimpleName());
-            System.out.println("  \u001B[32m[Fuzzy Decoder] Stage 2 (field fuzzy match) succeeded!\u001B[0m");
+            log.info("[Fuzzy] 阶段 2（字段模糊匹配）成功, type={}", targetClass.getSimpleName());
+            System.out.println("  \u001B[32m[Fuzzy Decoder] 阶段 2（字段模糊匹配）成功！\u001B[0m");
             return result;
         }
 
         // 阶段 3：片段组装
         result = attemptFragmentAssembly(llmOutput, targetClass);
         if (result != null) {
-            log.info("[Fuzzy] Stage 3 (fragment assembly) succeeded for type={}", targetClass.getSimpleName());
-            System.out.println("  \u001B[32m[Fuzzy Decoder] Stage 3 (fragment assembly) succeeded!\u001B[0m");
+            log.info("[Fuzzy] 阶段 3（片段组装）成功, type={}", targetClass.getSimpleName());
+            System.out.println("  \u001B[32m[Fuzzy Decoder] 阶段 3（片段组装）成功！\u001B[0m");
             return result;
         }
 
-        log.warn("[Fuzzy] All 3 fuzzy stages failed for type={}", targetClass.getSimpleName());
-        System.out.println("  \u001B[31m[Fuzzy Decoder] All fuzzy stages failed. Instruction unparseable.\u001B[0m");
+        log.warn("[Fuzzy] 全部 3 个模糊阶段失败, type={}", targetClass.getSimpleName());
+        System.out.println("  \u001B[31m[Fuzzy Decoder] 所有模糊阶段失败。指令无法解析。\u001B[0m");
         return null;
     }
 

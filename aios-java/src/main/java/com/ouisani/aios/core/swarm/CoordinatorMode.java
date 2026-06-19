@@ -71,8 +71,8 @@ public class CoordinatorMode {
      */
     public void activate() {
         this.active = true;
-        log.info("[CoordinatorMode] Activated. Ready to spawn workers.");
-        System.out.println("[CoordinatorMode] Activated. Ready to spawn workers.");
+        log.info("[CoordinatorMode] 已激活。准备生成 Worker。");
+        System.out.println("[CoordinatorMode] 已激活。准备生成 Worker。");
     }
 
     /**

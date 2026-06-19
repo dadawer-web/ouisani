@@ -261,7 +261,7 @@ public class DesktopGuiTool implements Tool<DesktopGuiTool.Input> {
             return new ElementLocation(true, x, y, 0, 0, null, "vlm_vision");
 
         } catch (Exception e) {
-            log.error("[DesktopGui] VLM vision failed: {}", e.getMessage());
+            log.error("[DesktopGui] VLM 视觉失败: {}", e.getMessage());
             return new ElementLocation(false, -1, -1, 0, 0, e.getMessage(), "vlm_vision");
         }
     }

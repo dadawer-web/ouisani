@@ -1,0 +1,116 @@
+{
+  "sample_task": {
+    "task_id": "task-001",
+    "task_name": "process-image-batch",
+    "task_type": "batch",
+    "queue_name": "image-processing",
+    "payload": {
+      "image_urls": [
+        "http://example.com/img1.jpg"
+      ],
+      "resize": "1024x768"
+    },
+    "priority": "HIGH",
+    "status": "PENDING",
+    "created_at": "",
+    "updated_at": "",
+    "timeout_ms": 30000,
+    "retry_policy": {
+      "max_retries": 3,
+      "backoff_type": "exponential",
+      "initial_delay_ms": 1000,
+      "max_delay_ms": 60000,
+      "backoff_multiplier": 2.0,
+      "retryable_errors": [
+        "TimeoutError",
+        "ConnectionError"
+      ]
+    },
+    "resource_requirement": {
+      "cpu_cores": 1.0,
+      "memory_mb": 512,
+      "gpu_count": 0,
+      "disk_mb": 1024,
+      "custom_resources": {}
+    },
+    "metadata": {},
+    "retry_count": 0,
+    "tags": [
+      "image",
+      "batch-processing"
+    ],
+    "version": 1
+  },
+  "sample_worker": {
+    "worker_id": "worker-gpu-01",
+    "worker_name": "GPU Worker Node 1",
+    "host": "10.0.1.101",
+    "port": 9090,
+    "status": "IDLE",
+    "capabilities": [
+      "gpu",
+      "image-processing",
+      "ml-inference"
+    ],
+    "max_concurrent_tasks": 3,
+    "current_task_count": 0,
+    "current_tasks": [],
+    "resource_capacity": {
+      "cpu_cores": 8.0,
+      "memory_mb": 32768,
+      "gpu_count": 2
+    },
+    "resource_used": {
+      "cpu_cores": 0.0,
+      "memory_mb": 0,
+      "gpu_count": 0
+    },
+    "registered_at": "",
+    "last_heartbeat": "",
+    "tags": [
+      "gpu",
+      "production"
+    ],
+    "metadata": {},
+    "completed_tasks": 0,
+    "failed_tasks": 0
+  },
+  "sample_queue": {
+    "queue_id": "q-001",
+    "queue_name": "image-processing",
+    "queue_type": "priority",
+    "max_size": 50000,
+    "current_size": 12500,
+    "pending_count": 0,
+    "processing_count": 0,
+    "completed_count": 0,
+    "failed_count": 0,
+    "dead_letter_count": 0,
+    "consumer_groups": [
+      "gpu-workers",
+      "cpu-workers"
+    ],
+    "priority_enabled": true,
+    "ttl_seconds": 172800,
+    "created_at": "",
+    "updated_at": "",
+    "metadata": {}
+  },
+  "sample_result": {
+    "task_id": "task-001",
+    "worker_id": "worker-gpu-01",
+    "status": "success",
+    "result_data": {
+      "output_url": "http://storage.example.com/output/001.jpg",
+      "dimensions": "1024x768"
+    },
+    "started_at": "",
+    "completed_at": "",
+    "duration_ms": 2350,
+    "metrics": {
+      "cpu_usage": 65.2,
+      "memory_peak_mb": 4096,
+      "gpu_utilization": 89.5
+    }
+  }
+}

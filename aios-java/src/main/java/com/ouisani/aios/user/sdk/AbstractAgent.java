@@ -4,6 +4,8 @@ import com.ouisani.aios.core.AgentTask;
 import com.ouisani.aios.core.ProcessPriority;
 import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.VfsManager;
+import com.ouisani.aios.core.lifecycle.AgentLifecycleManager;
+import com.ouisani.aios.core.lifecycle.AgentState;
 import com.ouisani.aios.core.network.EventBus;
 import com.ouisani.aios.core.team.AgentMailbox;
 import com.ouisani.aios.core.team.MailMessage;
@@ -82,6 +84,12 @@ public abstract class AbstractAgent implements Runnable {
         this.priority = priority != null ? priority : ProcessPriority.NORMAL;
         this.tokenBudget = tokenBudget;
         this.mailbox = new AgentMailbox(agentId);
+
+        // 注册到 AgentLifecycleManager（初始状态 PENDING_APPROVAL）
+        AgentLifecycleManager.instance().register(agentId, "agent", null,
+                Map.of("tokenBudget", tokenBudget, "priority", this.priority.name()));
+        // 自动审批通过 → IDLE
+        AgentLifecycleManager.instance().approve(agentId);
     }
 
     // ── Lifecycle (abstract) ──
@@ -98,11 +106,12 @@ public abstract class AbstractAgent implements Runnable {
      */
     protected abstract void onMessage(String msg);
 
-    /** 优雅停止此 Agent */
+    /** 优雅停止此 Agent — 状态转换到 TERMINATED */
     public void exit() {
         running = false;
-        log.info("[Agent:{}] Exiting", agentId);
-        System.out.printf("  ■ [Agent:%s] Exited%n", agentId);
+        AgentLifecycleManager.instance().unregister(agentId);
+        log.info("[Agent:{}] 正在退出", agentId);
+        System.out.printf("  ■ [Agent:%s] 已退出%n", agentId);
     }
 
     /** 获取 Agent 的私人信箱 */
@@ -127,8 +136,8 @@ public abstract class AbstractAgent implements Runnable {
      * </pre>
      */
     public void startEventLoop() {
-        log.info("[{}] Agent Event Loop started. Listening to mailbox...", this.agentId);
-        System.out.printf("  ▶ [Agent:%s] Event Loop started (Team Mode)%n", this.agentId);
+        log.info("[{}] Agent 事件循环已启动。正在监听邮箱...", this.agentId);
+        System.out.printf("  ▶ [Agent:%s] 事件循环已启动（团队模式）%n", this.agentId);
         boolean isAlive = true;
 
         while (isAlive) {
@@ -156,7 +165,7 @@ public abstract class AbstractAgent implements Runnable {
                         }
                         case POISON_PILL -> {
                             log.info("[{}] Received POISON_PILL. Terminating Agent.", this.agentId);
-                            System.out.printf("  ■ [Agent:%s] POISON_PILL received. Shutting down.%n", this.agentId);
+                            System.out.printf("  ■ [Agent:%s] 收到 POISON_PILL。正在关闭%n", this.agentId);
                             isAlive = false;
                         }
                     }
@@ -230,15 +239,18 @@ public abstract class AbstractAgent implements Runnable {
     @Override
     public void run() {
         this.running = true;
-        log.info("[Agent:{}] Starting (priority={}, budget={})", agentId, priority, tokenBudget);
-        System.out.printf("  ▶ [Agent:%s] Starting... (priority=%s, budget=%d)%n", agentId, priority, tokenBudget);
+        // 状态转换：IDLE → RUNNING
+        AgentLifecycleManager.instance().activate(agentId, "Direct run() invocation");
+        log.info("[Agent:{}] 正在启动 (priority={}, budget={})", agentId, priority, tokenBudget);
+        System.out.printf("  ▶ [Agent:%s] 正在启动... (priority=%s, budget=%d)%n", agentId, priority, tokenBudget);
 
         try {
             onStart();
-            log.info("[Agent:{}] onStart() completed", agentId);
+            log.info("[Agent:{}] onStart() 完成", agentId);
         } catch (Exception e) {
-            log.error("[Agent:{}] onStart() failed: {}", agentId, e.getMessage(), e);
-            System.err.printf("  🚨 [Agent:%s] onStart() failed: %s%n", agentId, e.getMessage());
+            log.error("[Agent:{}] onStart() 失败: {}", agentId, e.getMessage(), e);
+            System.err.printf("  🚨 [Agent:%s] onStart() 失败: %s%n", agentId, e.getMessage());
+            AgentLifecycleManager.instance().markError(agentId, "onStart() failed: " + e.getMessage());
         }
 
         // Message loop — process queued messages until stopped
@@ -248,7 +260,7 @@ public abstract class AbstractAgent implements Runnable {
                 try {
                     onMessage(msg);
                 } catch (Exception e) {
-                    log.error("[Agent:{}] onMessage() failed: {}", agentId, e.getMessage());
+                    log.error("[Agent:{}] onMessage() 失败: {}", agentId, e.getMessage());
                 }
             } else {
                 // No messages — sleep briefly to avoid busy-wait
@@ -261,6 +273,11 @@ public abstract class AbstractAgent implements Runnable {
             }
         }
 
+        // 状态转换：RUNNING → IDLE（正常退出）
+        AgentState state = AgentLifecycleManager.instance().getState(agentId);
+        if (state == AgentState.RUNNING) {
+            AgentLifecycleManager.instance().deactivate(agentId);
+        }
         log.info("[Agent:{}] Message loop ended", agentId);
     }
 
@@ -369,7 +386,7 @@ public abstract class AbstractAgent implements Runnable {
         GuiActionNode actionNode = resolveActionNode();
         if (actionNode != null) {
             actionNode.subscribe(agentId, callback);
-            log.info("[Agent:{}] Action handler registered", agentId);
+            log.info("[Agent:{}] Action 处理器已注册", agentId);
         }
     }
 

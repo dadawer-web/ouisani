@@ -95,7 +95,7 @@ public class SyscallServer {
                     client.send(payload);
                 } catch (Exception e) {
                     monitorClients.remove(client);
-                    log.warn("[WebSocket Monitor] Failed to send to client, removing: {}", e.getMessage());
+                    log.warn("[WebSocket Monitor] 发送到客户端失败，正在移除: {}", e.getMessage());
                 }
             }
         });
@@ -106,6 +106,13 @@ public class SyscallServer {
             config.jetty.modifyServer(server -> {
                 QueuedThreadPool threadPool = (QueuedThreadPool) server.getThreadPool();
                 threadPool.setVirtualThreadsExecutor(Executors.newVirtualThreadPerTaskExecutor());
+
+                // WebSocket idle timeout 设置为 5 分钟，防止 Dashboard/Workflow 控制通道因空闲被断开
+                for (var connector : server.getConnectors()) {
+                    if (connector instanceof org.eclipse.jetty.server.ServerConnector sc) {
+                        sc.setIdleTimeout(300000);
+                    }
+                }
             });
             // Static file hosting for web dashboard HTML
             config.staticFiles.add("src/main/resources/web", io.javalin.http.staticfiles.Location.EXTERNAL);
@@ -145,10 +152,10 @@ public class SyscallServer {
 
             // Verify token
             if (!authManager.verifyToken(token)) {
-                log.warn("[API Gateway] Connection rejected due to missing or invalid security token. path={}", path);
-                System.out.printf("  🚫 [API Gateway] Connection rejected due to missing or invalid security token. path=%s%n", path);
+                log.warn("[API Gateway] 连接被拒绝: 缺少或无效的安全 Token。path={}", path);
+                System.out.printf("  🚫 [API Gateway] 连接被拒绝: 缺少或无效的安全 Token。path=%s%n", path);
                 ctx.header("Access-Control-Allow-Origin", "*");
-                ctx.status(401).result("Unauthorized access to AIOS Kernel");
+                ctx.status(401).result("未授权访问 AIOS 内核");
             }
 
             // 为所有通过认证的请求添加 CORS 头
@@ -161,25 +168,28 @@ public class SyscallServer {
                 // Auth check for WebSocket: verify token from query param
                 String token = ctx.queryParam("token");
                 if (!authManager.verifyToken(token)) {
-                    log.warn("[API Gateway] WebSocket /ws/monitor rejected: invalid token");
-                    System.out.println("  🚫 [API Gateway] WebSocket /ws/monitor rejected: invalid token");
+                    log.warn("[API Gateway] WebSocket /ws/monitor 被拒绝: 无效 Token");
+                    System.out.println("  🚫 [API Gateway] WebSocket /ws/monitor 被拒绝: 无效 Token");
                     ctx.session.close();
                     return;
                 }
 
                 monitorClients.add(ctx);
-                log.info("[WebSocket] Dashboard connected. Total clients: {}", monitorClients.size());
-                System.out.printf("  📡 [WebSocket] Dashboard connected. Total clients: %d%n", monitorClients.size());
+                log.info("[WebSocket] Dashboard 已连接。客户端总数: {}", monitorClients.size());
+                System.out.printf("  📡 [WebSocket] Dashboard 已连接。客户端总数: %d%n", monitorClients.size());
             });
 
             ws.onClose(ctx -> {
                 monitorClients.remove(ctx);
-                log.info("[WebSocket] Dashboard disconnected. Total clients: {}", monitorClients.size());
+                log.info("[WebSocket] Dashboard 已断开。客户端总数: {}", monitorClients.size());
             });
 
             ws.onError(ctx -> {
                 monitorClients.remove(ctx);
-                log.warn("[WebSocket] Dashboard error: {}", ctx.error() != null ? ctx.error().getMessage() : "unknown");
+                Throwable err = ctx.error();
+                if (err != null) {
+                    log.warn("[WebSocket] Dashboard 错误: {}", err.getMessage());
+                }
             });
         });
 
@@ -238,7 +248,7 @@ public class SyscallServer {
                 ctx.result(objectMapper.writeValueAsString(response));
 
             } catch (Exception e) {
-                log.error("[Snapshot API] Create failed: {}", e.getMessage());
+                log.error("[Snapshot API] 创建失败: {}", e.getMessage());
                 ctx.status(500).result("{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
             }
         });
@@ -265,7 +275,7 @@ public class SyscallServer {
                 ctx.result(objectMapper.writeValueAsString(response));
 
             } catch (Exception e) {
-                log.error("[Snapshot API] Restore failed: {}", e.getMessage());
+                log.error("[Snapshot API] 恢复失败: {}", e.getMessage());
                 ctx.status(500).result("{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
             }
         });
@@ -305,11 +315,11 @@ public class SyscallServer {
                 ctx.header("X-Original-PID", String.valueOf(pid));
                 ctx.result(data);
 
-                log.info("[Migration API] Checkpoint prepared: PID={}, size={} bytes", pid, data.length);
+                log.info("[Migration API] Checkpoint 已准备: PID={}, size={} bytes", pid, data.length);
 
             } catch (Exception e) {
-                log.error("[Migration API] Checkpoint failed: {}", e.getMessage());
-                ctx.status(500).result("Checkpoint failed: " + e.getMessage());
+                log.error("[Migration API] Checkpoint 失败: {}", e.getMessage());
+                ctx.status(500).result("Checkpoint 失败: " + e.getMessage());
             }
         });
 
@@ -330,12 +340,12 @@ public class SyscallServer {
                 response.put("status", "RESTORED");
                 ctx.result(objectMapper.writeValueAsString(response));
 
-                log.info("[Migration API] Restored from remote: sourceNode={}, origPID={}, newPID={}",
+                log.info("[Migration API] 已从远程恢复: sourceNode={}, origPID={}, newPID={}",
                         snapshot.sourceNode(), snapshot.pid(), restored.pid());
 
             } catch (Exception e) {
-                log.error("[Migration API] Restore failed: {}", e.getMessage());
-                ctx.status(500).result("Restore failed: " + e.getMessage());
+                log.error("[Migration API] 恢复失败: {}", e.getMessage());
+                ctx.status(500).result("恢复失败: " + e.getMessage());
             }
         });
 
@@ -344,11 +354,11 @@ public class SyscallServer {
             ws.onConnect(ctx -> {
                 String token = ctx.queryParam("token");
                 if (!authManager.verifyToken(token)) {
-                    log.warn("[Migration WS] Rejected: invalid token");
+                    log.warn("[Migration WS] 被拒绝: 无效 Token");
                     ctx.session.close();
                     return;
                 }
-                log.info("[Migration WS] Client connected for live migration");
+                log.info("[Migration WS] 客户端已连接，准备热迁移");
             });
 
             ws.onMessage(ctx -> {
@@ -392,7 +402,7 @@ public class SyscallServer {
                     }
 
                 } catch (Exception e) {
-                    log.error("[Migration WS] Error: {}", e.getMessage());
+                    log.error("[Migration WS] 错误: {}", e.getMessage());
                     try {
                         ctx.send("{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
                     } catch (Exception ignored) {}
@@ -400,18 +410,21 @@ public class SyscallServer {
             });
 
             ws.onClose(ctx -> {
-                log.info("[Migration WS] Client disconnected");
+                log.info("[Migration WS] 客户端已断开");
             });
 
             ws.onError(ctx -> {
-                log.warn("[Migration WS] Error: {}", ctx.error() != null ? ctx.error().getMessage() : "unknown");
+                Throwable err = ctx.error();
+                if (err != null) {
+                    log.warn("[Migration WS] 错误: {}", err.getMessage());
+                }
             });
         });
 
         app.sse("/kernel/stream", client -> {
             client.keepAlive();
             EventBus.instance().register(client);
-            client.sendEvent("connected", "{\"status\":\"ok\",\"message\":\"AIOS kernel stream active\"}");
+            client.sendEvent("connected", "{\"status\":\"ok\",\"message\":\"AIOS 内核流已激活\"}");
         });
 
         app.ws("/ws/dev/{nodeName}", ws -> {
@@ -419,20 +432,20 @@ public class SyscallServer {
                 // Auth check for WebSocket
                 String token = ctx.queryParam("token");
                 if (!authManager.verifyToken(token)) {
-                    log.warn("[API Gateway] WebSocket /ws/dev rejected: invalid token");
-                    System.out.println("  🚫 [API Gateway] WebSocket /ws/dev rejected: invalid token");
+                    log.warn("[API Gateway] WebSocket /ws/dev 被拒绝: 无效 Token");
+                    System.out.println("  🚫 [API Gateway] WebSocket /ws/dev 被拒绝: 无效 Token");
                     ctx.session.close();
                     return;
                 }
 
                 String nodeName = ctx.pathParam("nodeName");
                 String vfsPath = "/dev/ws/" + nodeName;
-                log.info("[WS] Client connecting: nodeName={}, vfsPath={}", nodeName, vfsPath);
+                log.info("[WS] 客户端正在连接: nodeName={}, vfsPath={}", nodeName, vfsPath);
 
                 WebSocketNode node = wsNodes.computeIfAbsent(vfsPath, p -> {
                     WebSocketNode n = new WebSocketNode(p);
                     VfsManager.instance().mount("/dev/ws", nodeName, n);
-                    log.info("[WS] VFS mounted: {}", vfsPath);
+                    log.info("[WS] VFS 已挂载: {}", vfsPath);
                     return n;
                 });
 
@@ -448,20 +461,20 @@ public class SyscallServer {
                 if (node != null) {
                     String message = ctx.message();
                     node.onWsMessage(message);
-                    log.debug("[WS] Message received: nodeName={}, len={}", nodeName, message.length());
+                    log.debug("[WS] 收到消息: nodeName={}, len={}", nodeName, message.length());
                 }
             });
 
             ws.onClose(ctx -> {
                 String nodeName = ctx.pathParam("nodeName");
                 String vfsPath = "/dev/ws/" + nodeName;
-                log.info("[WS] Client disconnecting: nodeName={}", nodeName);
+                log.info("[WS] 客户端正在断开: nodeName={}", nodeName);
 
                 WebSocketNode node = wsNodes.remove(vfsPath);
                 if (node != null) {
                     node.detachWsContext();
                     VfsManager.instance().unmount(vfsPath);
-                    log.info("[WS] VFS unmounted: {}", vfsPath);
+                    log.info("[WS] VFS 已卸载: {}", vfsPath);
                 }
                 EventBus.instance().broadcast("ws_disconnect",
                         "{\"nodeName\":\"" + nodeName + "\",\"reason\":\"" + escapeJson(ctx.reason() != null ? ctx.reason() : "closed") + "\"}");
@@ -469,7 +482,10 @@ public class SyscallServer {
 
             ws.onError(ctx -> {
                 String nodeName = ctx.pathParam("nodeName");
-                log.error("[WS] Error on nodeName={}: {}", nodeName, ctx.error() != null ? ctx.error().getMessage() : "unknown");
+                Throwable err = ctx.error();
+                if (err != null) {
+                    log.error("[WS] nodeName={} 上发生错误: {}", nodeName, err.getMessage());
+                }
             });
         });
 
@@ -479,7 +495,7 @@ public class SyscallServer {
                 // Auth check
                 String token = ctx.queryParam("token");
                 if (!authManager.verifyToken(token)) {
-                    log.warn("[API Gateway] WebSocket /ws/remote rejected: invalid token");
+                    log.warn("[API Gateway] WebSocket /ws/remote 被拒绝: 无效 Token");
                     ctx.session.close();
                     return;
                 }
@@ -487,7 +503,7 @@ public class SyscallServer {
                 String deviceId = ctx.pathParam("deviceId");
                 String deviceType = ctx.queryParam("type") != null ? ctx.queryParam("type") : "generic";
 
-                log.info("[RemoteDevice] Device connecting: deviceId={}, type={}", deviceId, deviceType);
+                log.info("[RemoteDevice] 设备正在连接: deviceId={}, type={}", deviceId, deviceType);
 
                 // Mount or retrieve the RemoteDeviceMountNode from VFS
                 RemoteDeviceMountNode node = VfsManager.instance().mountRemoteDevice(deviceId, deviceType);
@@ -499,8 +515,8 @@ public class SyscallServer {
                         "{\"deviceId\":\"" + deviceId + "\",\"type\":\"" + deviceType
                                 + "\",\"path\":\"/dev/remote/" + deviceId + "\"}");
 
-                log.info("[RemoteDevice] Device mounted: deviceId={} → /dev/remote/{}", deviceId, deviceId);
-                System.out.println("  \u001B[32m[RemoteDevice] Device '" + deviceId + "' connected and mounted at /dev/remote/" + deviceId + "\u001B[0m");
+                log.info("[RemoteDevice] 设备已挂载: deviceId={} → /dev/remote/{}", deviceId, deviceId);
+                System.out.println("  \u001B[32m[RemoteDevice] 设备 '" + deviceId + "' 已连接并挂载到 /dev/remote/" + deviceId + "\u001B[0m");
             });
 
             ws.onMessage(ctx -> {
@@ -509,13 +525,13 @@ public class SyscallServer {
                 if (node != null) {
                     String message = ctx.message();
                     node.onWsMessage(message);
-                    log.debug("[RemoteDevice] Message received: deviceId={}, len={}", deviceId, message.length());
+                    log.debug("[RemoteDevice] 收到消息: deviceId={}, len={}", deviceId, message.length());
                 }
             });
 
             ws.onClose(ctx -> {
                 String deviceId = ctx.pathParam("deviceId");
-                log.info("[RemoteDevice] Device disconnecting: deviceId={}", deviceId);
+                log.info("[RemoteDevice] 设备正在断开: deviceId={}", deviceId);
 
                 RemoteDeviceMountNode node = remoteDevices.remove(deviceId);
                 if (node != null) {
@@ -524,7 +540,7 @@ public class SyscallServer {
                     // Unmount from VFS — the device is gone
                     VfsManager.instance().unmountRemoteDevice(deviceId);
 
-                    log.info("[RemoteDevice] Device unmounted: deviceId={}", deviceId);
+                    log.info("[RemoteDevice] 设备已卸载: deviceId={}", deviceId);
                 }
 
                 EventBus.instance().broadcast("device_unmount",
@@ -534,8 +550,10 @@ public class SyscallServer {
 
             ws.onError(ctx -> {
                 String deviceId = ctx.pathParam("deviceId");
-                log.error("[RemoteDevice] Error on deviceId={}: {}", deviceId,
-                        ctx.error() != null ? ctx.error().getMessage() : "unknown");
+                Throwable err = ctx.error();
+                if (err != null) {
+                    log.error("[RemoteDevice] deviceId={} 上发生错误: {}", deviceId, err.getMessage());
+                }
 
                 RemoteDeviceMountNode node = remoteDevices.remove(deviceId);
                 if (node != null) {
@@ -565,12 +583,12 @@ public class SyscallServer {
             ws.onConnect(ctx -> {
                 String token = ctx.queryParam("token");
                 if (!authManager.verifyToken(token)) {
-                    log.warn("[Display Server] WebSocket /ws/display rejected: invalid token");
+                    log.warn("[Display Server] WebSocket /ws/display 被拒绝: 无效 Token");
                     ctx.session.close();
                     return;
                 }
                 displayClients.add(ctx);
-                log.info("[Display Server] Client connected: total={}", displayClients.size());
+                log.info("[Display Server] 客户端已连接: total={}", displayClients.size());
 
                 // Send current DOM state on connect (like loading the current framebuffer)
                 try {
@@ -581,13 +599,13 @@ public class SyscallServer {
                         ctx.send("{\"type\":\"init\",\"dom\":" + currentDom + "}");
                     }
                 } catch (Exception e) {
-                    log.warn("[Display Server] Failed to send initial DOM state: {}", e.getMessage());
+                    log.warn("[Display Server] 发送初始 DOM 状态失败: {}", e.getMessage());
                 }
             });
 
             ws.onClose(ctx -> {
                 displayClients.remove(ctx);
-                log.info("[Display Server] Client disconnected: total={}", displayClients.size());
+                log.info("[Display Server] 客户端已断开: total={}", displayClients.size());
             });
 
             ws.onError(ctx -> {
@@ -603,16 +621,16 @@ public class SyscallServer {
             ws.onConnect(ctx -> {
                 String token = ctx.queryParam("token");
                 if (!authManager.verifyToken(token)) {
-                    log.warn("[Display Server] WebSocket /ws/gui/action rejected: invalid token");
+                    log.warn("[Display Server] WebSocket /ws/gui/action 被拒绝: 无效 Token");
                     ctx.session.close();
                     return;
                 }
-                log.info("[Display Server] Action client connected");
+                log.info("[Display Server] 操作客户端已连接");
             });
 
             ws.onMessage(ctx -> {
                 String actionPayload = ctx.message();
-                log.debug("[Display Server] Action event received: len={}", actionPayload.length());
+                log.debug("[Display Server] 收到操作事件: len={}", actionPayload.length());
 
                 // Route the action to GuiActionNode
                 try {
@@ -622,16 +640,16 @@ public class SyscallServer {
                         actionNode.get().write(actionPayload);
                     }
                 } catch (Exception e) {
-                    log.error("[Display Server] Action routing failed: {}", e.getMessage());
+                    log.error("[Display Server] 操作路由失败: {}", e.getMessage());
                 }
             });
 
             ws.onClose(ctx -> {
-                log.info("[Display Server] Action client disconnected");
+                log.info("[Display Server] 操作客户端已断开");
             });
 
             ws.onError(ctx -> {
-                log.warn("[Display Server] Action WebSocket error");
+                log.warn("[Display Server] 操作 WebSocket 错误");
             });
         });
 
@@ -642,11 +660,11 @@ public class SyscallServer {
 
             String endpointUrl = "/mcp/message?sessionId=" + sessionId;
             client.sendEvent("endpoint", endpointUrl);
-            log.info("[MCP/SSE] Session connected: id={}, endpoint={}", sessionId, endpointUrl);
+            log.info("[MCP/SSE] 会话已连接: id={}, endpoint={}", sessionId, endpointUrl);
 
             client.onClose(() -> {
                 mcpSessions.remove(sessionId);
-                log.info("[MCP/SSE] Session disconnected: id={}", sessionId);
+                log.info("[MCP/SSE] 会话已断开: id={}", sessionId);
             });
         });
 
@@ -672,20 +690,20 @@ public class SyscallServer {
             }
 
             String requestBody = ctx.body();
-            log.debug("[MCP/POST] Received: sessionId={}, bodyLen={}", sessionId, requestBody.length());
+            log.debug("[MCP/POST] 已收到: sessionId={}, bodyLen={}", sessionId, requestBody.length());
 
             try {
                 String jsonResponse = mcpServer.handleRawJson(requestBody);
 
                 sseClient.sendEvent("message", jsonResponse);
-                log.debug("[MCP/SSE] Pushed response: sessionId={}, responseLen={}", sessionId, jsonResponse.length());
+                log.debug("[MCP/SSE] 已推送响应: sessionId={}, responseLen={}", sessionId, jsonResponse.length());
 
                 ctx.status(202);
                 ctx.result("{\"status\":\"accepted\"}");
             } catch (Exception e) {
-                log.error("[MCP/POST] Processing error: sessionId={}, error={}", sessionId, e.getMessage());
+                log.error("[MCP/POST] 处理错误: sessionId={}, error={}", sessionId, e.getMessage());
                 ctx.status(500);
-                ctx.result("{\"error\":\"Internal MCP error\"}");
+                ctx.result("{\"error\":\"内部 MCP 错误\"}");
             }
         });
 
@@ -758,7 +776,7 @@ public class SyscallServer {
 
                 ctx.result(objectMapper.writeValueAsString(status));
             } catch (Exception e) {
-                log.error("[Kernel Status] Failed to serialize: {}", e.getMessage());
+                log.error("[Kernel Status] 序列化失败: {}", e.getMessage());
                 ctx.result("{\"error\":\"" + e.getMessage() + "\"}");
             }
         });
@@ -773,7 +791,7 @@ public class SyscallServer {
             ws.onConnect(ctx -> {
                 String token = ctx.queryParam("token");
                 if (!authManager.verifyToken(token)) {
-                    log.warn("[System Stream] Unauthorized connection rejected");
+                    log.warn("[System Stream] 未授权连接被拒绝");
                     ctx.session.close();
                     return;
                 }
@@ -791,7 +809,7 @@ public class SyscallServer {
                             ctx.send(payload);
                         }
                     } catch (Exception e) {
-                        log.debug("[System Stream] Failed to push SYS_METRICS: {}", e.getMessage());
+                        log.debug("[System Stream] 推送 SYS_METRICS 失败: {}", e.getMessage());
                     }
                 };
                 EventBus.instance().subscribe("sys.telemetry.metrics", metricsHandler);
@@ -804,18 +822,31 @@ public class SyscallServer {
                             ctx.send(payload);
                         }
                     } catch (Exception e) {
-                        log.debug("[System Stream] Failed to push EVENT_BUS_LOG: {}", e.getMessage());
+                        log.debug("[System Stream] 推送 EVENT_BUS_LOG 失败: {}", e.getMessage());
                     }
                 };
                 EventBus.instance().subscribe("sys.eventbus.logs", logsHandler);
                 handlers.add(logsHandler);
 
+                // 订阅 sys.dag.events → 推送 DAG_EVENT（节点状态变更等）
+                Consumer<String> dagHandler = payload -> {
+                    try {
+                        if (ctx.session.isOpen()) {
+                            ctx.send(payload);
+                        }
+                    } catch (Exception e) {
+                        log.debug("[System Stream] 推送 DAG_EVENT 失败: {}", e.getMessage());
+                    }
+                };
+                EventBus.instance().subscribe("sys.dag.events", dagHandler);
+                handlers.add(dagHandler);
+
                 // 保存此连接的所有 handler，断开时批量注销
                 systemStreamSubscriptions.put(sessionId, handlers);
 
-                log.info("[System Stream] Client connected with EventBus listeners. Total: {}, sessionId: {}",
+                log.info("[System Stream] 客户端已连接并注册 EventBus 监听器。总数: {}, sessionId: {}",
                         systemStreamClients.size(), sessionId);
-                System.out.printf("  📡 [System Stream] Client connected with EventBus listeners. Total: %d%n",
+                System.out.printf("  📡 [System Stream] 客户端已连接并注册 EventBus 监听器。总数: %d%n",
                         systemStreamClients.size());
             });
 
@@ -826,16 +857,16 @@ public class SyscallServer {
                 // ── 注销此连接的所有 EventBus 监听器，防止内存泄漏 ──
                 List<Consumer<String>> handlers = systemStreamSubscriptions.remove(sessionId);
                 if (handlers != null) {
-                    String[] channels = {"sys.telemetry.metrics", "sys.eventbus.logs"};
+                    String[] channels = {"sys.telemetry.metrics", "sys.eventbus.logs", "sys.dag.events"};
                     for (int i = 0; i < handlers.size() && i < channels.length; i++) {
                         EventBus.instance().unsubscribe(channels[i], handlers.get(i));
                     }
-                    log.info("[System Stream] Unsubscribed {} EventBus handlers for session: {}",
+                    log.info("[System Stream] 已注销 {} 个 EventBus 处理器，会话: {}",
                             handlers.size(), sessionId);
                 }
 
-                log.info("[System Stream] Client disconnected. Total: {}", systemStreamClients.size());
-                System.out.printf("  📡 [System Stream] Client disconnected. Total: %d%n",
+                log.info("[System Stream] 客户端已断开。总数: {}", systemStreamClients.size());
+                System.out.printf("  📡 [System Stream] 客户端已断开。总数: %d%n",
                         systemStreamClients.size());
             });
 
@@ -846,15 +877,15 @@ public class SyscallServer {
                 // 连接异常时也要注销监听器
                 List<Consumer<String>> handlers = systemStreamSubscriptions.remove(sessionId);
                 if (handlers != null) {
-                    String[] channels = {"sys.telemetry.metrics", "sys.eventbus.logs"};
+                    String[] channels = {"sys.telemetry.metrics", "sys.eventbus.logs", "sys.dag.events"};
                     for (int i = 0; i < handlers.size() && i < channels.length; i++) {
                         EventBus.instance().unsubscribe(channels[i], handlers.get(i));
                     }
-                    log.info("[System Stream] Unsubscribed {} EventBus handlers after error for session: {}",
+                    log.info("[System Stream] 错误后已注销 {} 个 EventBus 处理器，会话: {}",
                             handlers.size(), sessionId);
                 }
 
-                log.warn("[System Stream] Error: {}", ctx.error() != null ? ctx.error().getMessage() : "unknown");
+                log.warn("[System Stream] 错误: {}", ctx.error() != null ? ctx.error().getMessage() : "unknown");
             });
 
             // ── 处理前端心跳 PING，回复 PONG 防止 Idle Timeout ──
@@ -870,7 +901,8 @@ public class SyscallServer {
         // 前端订阅 sys.eventbus.logs 即可收到所有 EVENT_BUS_LOG 格式的事件
         String[] logChannels = {"sig_tick", "emergency_halt", "sys.human_intervention_required",
                 "sys.kernel.panic", "agent_spawn", "agent_log", "device_mount", "device_unmount",
-                "ws_connect", "ws_disconnect", "spontaneous_idea", "ui_render", "ui_action"};
+                "ws_connect", "ws_disconnect", "spontaneous_idea", "ui_render", "ui_action",
+                "sys.dag.events"};
         for (String channel : logChannels) {
             EventBus.instance().subscribe(channel, payload -> {
                 String logJson = "{\"type\":\"EVENT_BUS_LOG\",\"timestamp\":" + System.currentTimeMillis()
@@ -891,26 +923,26 @@ public class SyscallServer {
 
         System.out.println();
         System.out.println("  ╔══════════════════════════════════════════════════════════╗");
-        System.out.printf("  ║     ⚡ [Syscall Gateway] Listening on port %-4d         ║%n", port);
-        System.out.println("  ║           with Java 21 Virtual Threads                  ║");
+        System.out.printf("  ║     ⚡ [Syscall Gateway] 正在监听端口 %-4d         ║%n", port);
+        System.out.println("  ║           使用 Java 21 Virtual Threads                  ║");
         System.out.println("  ║                                                          ║");
-        System.out.println("  ║   POST /syscall/spawn   → Agent spawn endpoint           ║");
-        System.out.println("  ║   SSE  /kernel/stream   → Real-time kernel event bus     ║");
-        System.out.println("  ║   WS   /ws/monitor      → Dashboard metrics WebSocket    ║");
-        System.out.println("  ║   WS   /ws/dev/{name}   → Full-duplex VFS bridge         ║");
-        System.out.println("  ║   WS   /ws/remote/{id}  → Remote device auto-mount       ║");
-        System.out.println("  ║   SSE  /mcp/sse         → MCP protocol SSE channel       ║");
-        System.out.println("  ║   POST /mcp/message     → MCP JSON-RPC message endpoint  ║");
-        System.out.println("  ║   WS   /api/app/{name}/stream → App stdin/stdout gateway ║");
-        System.out.println("  ║   POST /snapshot/create → Freeze agent (checkpoint)      ║");
-        System.out.println("  ║   POST /snapshot/restore→ Restore agent from snapshot    ║");
-        System.out.println("  ║   POST /migration/checkpoint → Prepare live migration    ║");
-        System.out.println("  ║   POST /migration/restore    → Receive migrated agent    ║");
-        System.out.println("  ║   WS   /ws/migration    → Live migration WebSocket       ║");
+        System.out.println("  ║   POST /syscall/spawn   → Agent 生成端点                  ║");
+        System.out.println("  ║   SSE  /kernel/stream   → 实时内核事件总线                ║");
+        System.out.println("  ║   WS   /ws/monitor      → Dashboard 指标 WebSocket        ║");
+        System.out.println("  ║   WS   /ws/dev/{name}   → 全双工 VFS 桥接                ║");
+        System.out.println("  ║   WS   /ws/remote/{id}  → 远程设备自动挂载               ║");
+        System.out.println("  ║   SSE  /mcp/sse         → MCP 协议 SSE 通道              ║");
+        System.out.println("  ║   POST /mcp/message     → MCP JSON-RPC 消息端点          ║");
+        System.out.println("  ║   WS   /api/app/{name}/stream → App 标准输入/输出网关    ║");
+        System.out.println("  ║   POST /snapshot/create → 冻结 Agent (checkpoint)        ║");
+        System.out.println("  ║   POST /snapshot/restore→ 从快照恢复 Agent               ║");
+        System.out.println("  ║   POST /migration/checkpoint → 准备热迁移                ║");
+        System.out.println("  ║   POST /migration/restore    → 接收迁移的 Agent          ║");
+        System.out.println("  ║   WS   /ws/migration    → 热迁移 WebSocket               ║");
         System.out.println("  ╚══════════════════════════════════════════════════════════╝");
         System.out.println();
 
-        log.info("[Syscall Gateway] Listening on port {} with Virtual Threads", port);
+        log.info("[Syscall Gateway] 正在监听端口 {}，使用 Virtual Threads", port);
     }
 
     private static String formatUptime(long uptimeMs) {
@@ -966,14 +998,14 @@ public class SyscallServer {
 
             String capturedPrompt = prompt;
             scheduler.spawn(task, () -> {
-                log.info("[Agent#{}] Executing with prompt: {}", pid,
+                log.info("[Agent#{}] 正在执行，prompt: {}", pid,
                         capturedPrompt.length() > 80 ? capturedPrompt.substring(0, 80) + "..." : capturedPrompt);
                 EventBus.instance().broadcast("agent_log",
-                        "{\"pid\":" + pid + ",\"message\":\"Agent executing\",\"prompt\":\""
+                        "{\"pid\":" + pid + ",\"message\":\"Agent 正在执行\",\"prompt\":\""
                                 + escapeJson(capturedPrompt.length() > 60 ? capturedPrompt.substring(0, 60) + "..." : capturedPrompt) + "\"}");
             });
 
-            log.info("[Syscall Gateway] Spawned agent_id={}", pid);
+            log.info("[Syscall Gateway] 已生成 agent_id={}", pid);
 
             EventBus.instance().broadcast("agent_spawn",
                     "{\"pid\":" + pid + ",\"type\":\"" + typeStr + "\",\"cgroup\":\"" + cgroup + "\"}");
@@ -986,7 +1018,7 @@ public class SyscallServer {
             ctx.result(objectMapper.writeValueAsString(response));
 
         } catch (IllegalArgumentException e) {
-            log.error("[Syscall Gateway] Bad request: {}", e.getMessage());
+            log.error("[Syscall Gateway] 错误请求: {}", e.getMessage());
             ctx.status(400);
             ctx.contentType("application/json");
             try {
@@ -994,19 +1026,19 @@ public class SyscallServer {
                 err.put("error", e.getMessage());
                 ctx.result(objectMapper.writeValueAsString(err));
             } catch (Exception ignored) {
-                ctx.result("{\"error\":\"Bad request\"}");
+                ctx.result("{\"error\":\"错误请求\"}");
             }
 
         } catch (Exception e) {
-            log.error("[Syscall Gateway] Internal error: {}", e.getMessage(), e);
+            log.error("[Syscall Gateway] 内部错误: {}", e.getMessage(), e);
             ctx.status(500);
             ctx.contentType("application/json");
             try {
                 Map<String, String> err = new LinkedHashMap<>();
-                err.put("error", "Internal server error");
+                err.put("error", "内部服务器错误");
                 ctx.result(objectMapper.writeValueAsString(err));
             } catch (Exception ignored) {
-                ctx.result("{\"error\":\"Internal server error\"}");
+                ctx.result("{\"error\":\"内部服务器错误\"}");
             }
         }
     }
@@ -1014,7 +1046,7 @@ public class SyscallServer {
     public void stop() {
         if (app != null) {
             app.stop();
-            log.info("[Syscall Gateway] Server stopped");
+            log.info("[Syscall Gateway] 服务器已停止");
         }
     }
 

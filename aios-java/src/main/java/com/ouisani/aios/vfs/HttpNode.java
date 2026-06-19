@@ -132,9 +132,9 @@ public non-sealed class HttpNode implements VfsNode {
             }});
 
             responseQueue.add(result);
-            System.out.printf("  🌐 [HttpNode] Response: status=%d, body=%d chars%n",
+            System.out.printf("  🌐 [HttpNode] 响应: 状态码=%d, 正文 %d 字符%n",
                     httpResponse.statusCode(), httpResponse.body().length());
-            log.info("[HttpNode] Response received: status={}, bodyLen={}", httpResponse.statusCode(), httpResponse.body().length());
+            log.info("[HttpNode] 响应: 状态码={}, 正文 {} 字符", httpResponse.statusCode(), httpResponse.body().length());
             return true;
 
         } catch (Exception e) {

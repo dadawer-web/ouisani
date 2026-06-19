@@ -32,17 +32,17 @@ public class AuthManager {
     }
 
     private AuthManager() {
-        // 从环境变量读取密钥 — 绝不硬编码
+        // 从环境变量读取密钥
         String secret = System.getenv("AIOS_GATEWAY_SECRET");
         if (secret == null || secret.isEmpty()) {
-            // 未配置密钥 — 生成随机密钥（生产环境必须配置环境变量！）
-            secret = generateRandomSecret();
-            System.out.println("  ⚠ [AuthManager] AIOS_GATEWAY_SECRET not set! Using auto-generated secret.");
-            System.out.println("  ⚠ [AuthManager] Set AIOS_GATEWAY_SECRET env var for production use.");
-            System.out.println("  🔑 [AuthManager] Generated secret: " + secret.substring(0, 8) + "...");
+            // 未配置密钥 — 使用固定默认值（与前端一致）
+            // 生产环境必须配置 AIOS_GATEWAY_SECRET 环境变量！
+            secret = "AIOS-SUPER-SECRET-KEY";
+            System.out.println("  ⚠ [AuthManager] AIOS_GATEWAY_SECRET 未设置! 正在使用默认开发密钥。");
+            System.out.println("  ⚠ [AuthManager] 生产环境请设置 AIOS_GATEWAY_SECRET 环境变量。");
         }
         this.gatewaySecret = secret;
-        log.info("[AuthManager] Gateway secret configured (length={}).", gatewaySecret.length());
+        log.info("[AuthManager] Gateway 密钥已配置 (length={}).", gatewaySecret.length());
     }
 
     /**
@@ -73,7 +73,7 @@ public class AuthManager {
 
         boolean valid = gatewaySecret.equals(cleaned);
         if (!valid) {
-            log.warn("[API Gateway] Token verification failed: invalid token");
+            log.warn("[API Gateway] Token 验证失败: 无效 Token");
         }
         return valid;
     }

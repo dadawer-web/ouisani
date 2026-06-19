@@ -278,7 +278,7 @@ public final class TaskScheduler {
             WatchdogDaemon.instance().stop();
             CognitiveDreamDaemon.instance().stop();
 
-            log.info("TaskScheduler shutting down, interrupting {} active agents", agentThreads.size());
+            log.info("TaskScheduler 正在关闭，中断 {} 个活跃 Agent", agentThreads.size());
 
             for (Map.Entry<Integer, Thread> entry : agentThreads.entrySet()) {
                 AgentTask task = pcb.get(entry.getKey());

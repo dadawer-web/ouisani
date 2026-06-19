@@ -92,7 +92,7 @@ public class McpConfigManager {
             String name = entry.getKey();
             if (deniedServers.contains(name)) {
                 it.remove();
-                log.info("[McpConfig] Removed by policy (denied): {}", name);
+                log.info("[McpConfig] 已被策略移除（拒绝）: {}", name);
             } else if (!allowedServers.isEmpty() && !allowedServers.contains(name)) {
                 it.remove();
                 log.info("[McpConfig] Removed by policy (not in allowlist): {}", name);

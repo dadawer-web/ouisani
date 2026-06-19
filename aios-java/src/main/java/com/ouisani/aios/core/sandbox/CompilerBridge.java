@@ -106,7 +106,7 @@ public final class CompilerBridge {
         totalCompilations.incrementAndGet();
 
         log.info("[CompilerBridge] ╔══════════════════════════════════════════════════╗");
-        log.info("[CompilerBridge] ║  JIT COMPILE: id={}, lang={}              ║", compileId, language);
+        log.info("[CompilerBridge] ║  JIT 编译: id={}, lang={}              ║", compileId, language);
         log.info("[CompilerBridge] ╚══════════════════════════════════════════════════╝");
 
         SemanticEtw.getInstance().logEvent("JIT", "COMPILE_START",
@@ -131,11 +131,11 @@ public final class CompilerBridge {
             if (result.success()) {
                 totalSuccesses.incrementAndGet();
                 compilationIndex.put(compileId, result);
-                log.info("[CompilerBridge] ✓ Compiled: id={}, lang={}, output={}, elapsed={}ms",
+                log.info("[CompilerBridge] ✓ 编译完成: id={}, lang={}, output={}, elapsed={}ms",
                         compileId, language, result.outputPath(), elapsed);
             } else {
                 totalFailures.incrementAndGet();
-                log.warn("[CompilerBridge] ✗ Compilation failed: id={}, lang={}, error={}",
+                log.warn("[CompilerBridge] ✗ 编译失败: id={}, lang={}, error={}",
                         compileId, language, result.errorMessage());
             }
 
@@ -146,7 +146,7 @@ public final class CompilerBridge {
 
         } catch (Exception e) {
             totalFailures.incrementAndGet();
-            log.error("[CompilerBridge] Compilation error: id={}, error={}", compileId, e.getMessage());
+            log.error("[CompilerBridge] 编译错误: id={}, error={}", compileId, e.getMessage());
             return CompilationResult.failed(compileId, language, e.getMessage());
         }
     }
@@ -248,13 +248,13 @@ public final class CompilerBridge {
                             wasmFile.toString(), wasmBytes, "main");
                 } else {
                     // clang 或 wasi-sysroot 不可用，回退到模拟编译
-                    log.warn("[CompilerBridge] clang wasm32-wasi not available, using mock WASM");
+                    log.warn("[CompilerBridge] clang wasm32-wasi 不可用，使用模拟 WASM");
                     return createMockWasmResult(compileId, "c",
                             "clang not available: " + output);
                 }
             } catch (IOException e) {
                 // clang 不存在
-                log.warn("[CompilerBridge] clang not found, using mock WASM");
+                log.warn("[CompilerBridge] clang 未找到，使用模拟 WASM");
                 return createMockWasmResult(compileId, "c",
                         "clang not installed");
             }
@@ -300,12 +300,12 @@ public final class CompilerBridge {
                     return CompilationResult.success(compileId, "rust",
                             wasmFile.toString(), wasmBytes, "main");
                 } else {
-                    log.warn("[CompilerBridge] rustc wasm32-wasi not available, using mock WASM");
+                    log.warn("[CompilerBridge] rustc wasm32-wasi 不可用，使用模拟 WASM");
                     return createMockWasmResult(compileId, "rust",
                             "rustc not available: " + output);
                 }
             } catch (IOException e) {
-                log.warn("[CompilerBridge] rustc not found, using mock WASM");
+                log.warn("[CompilerBridge] rustc 未找到，使用模拟 WASM");
                 return createMockWasmResult(compileId, "rust",
                         "rustc not installed");
             }

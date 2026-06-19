@@ -1,16 +1,21 @@
 package com.ouisani.aios.core.tool;
 
 import com.ouisani.aios.core.hook.HookManager;
+import com.ouisani.aios.core.network.AiosEventSchema;
+import com.ouisani.aios.core.network.AiosEventSchema.AiosEvent;
+import com.ouisani.aios.core.network.EventBus;
 import com.ouisani.aios.core.permission.PermissionChecker;
 import com.ouisani.aios.core.permission.PermissionDecision;
 import com.ouisani.aios.core.plugin.DynamicToolBridge;
 import com.ouisani.aios.core.plugin.ToolDefinition;
 import com.ouisani.aios.core.telemetry.TelemetryService;
 import com.ouisani.aios.user.sdk.AiosSdk;
+import com.google.gson.Gson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import java.util.UUID;
 
 /**
  * 查询引擎 — AIOS 的核心推理循环，对标 Claude Code 的 query.ts。
@@ -27,12 +32,13 @@ import java.util.*;
 public class QueryEngine {
 
     private static final Logger log = LoggerFactory.getLogger(QueryEngine.class);
+    private static final Gson GSON = new Gson();
 
     private static final int MAX_TOOL_ROUNDS = 60;
 
     static {
-        log.info("[InstructionDecoder] Enhanced robust string pointer parsing active.");
-        System.out.println("  \u001B[36m[InstructionDecoder] Enhanced robust string pointer parsing active.\u001B[0m");
+        log.info("[InstructionDecoder] 增强型鲁棒字符串指针解析已激活。");
+        System.out.println("  \u001B[36m[InstructionDecoder] 增强型鲁棒字符串指针解析已激活。\u001B[0m");
     }
 
     private final AiosSdk sdk;
@@ -40,6 +46,12 @@ public class QueryEngine {
     private final String workingDir;
     private final List<Tool<? extends ToolInput>> availableTools;
     private final PermissionChecker permissionChecker;
+
+    /** 当前运行 ID（每次 query() 调用生成一个新的） */
+    private String currentRunId;
+
+    // ── 三层历史压缩（借鉴 Agent Zero bulks/topics/current） ──
+    private HistoryCompressor historyCompressor;
 
     /**
      * 创建查询引擎（仅使用内核全局工具）。
@@ -71,6 +83,7 @@ public class QueryEngine {
         this.availableTools = new ArrayList<>(ToolRegistry.instance().all());
         this.availableTools.addAll(extraTools);
         this.permissionChecker = new PermissionChecker();
+        this.historyCompressor = new HistoryCompressor(8000, this::generateSummary);
     }
 
     /**
@@ -91,13 +104,17 @@ public class QueryEngine {
      * @return 最终的文本回复
      */
     public String query(String userMessage, String systemContext) {
-        log.info("[QueryEngine] Starting query loop for agent={}, message length={}", agentId, userMessage.length());
+        // ── 标准化事件协议：RUN_STARTED ──
+        currentRunId = UUID.randomUUID().toString();
+        AiosEventSchema.emit(AiosEventSchema.runStarted(agentId, currentRunId, userMessage));
+
+        log.info("[QueryEngine] 正在启动查询循环，agent={}，消息长度={}", agentId, userMessage.length());
 
         // ── DynamicToolBridge: 根据用户消息自动挂载相关工具 ──
         List<ToolDefinition> autoMounted = DynamicToolBridge.getInstance()
                 .autoMountByQuery(agentId, userMessage);
         if (!autoMounted.isEmpty()) {
-            log.info("[QueryEngine] DynamicToolBridge auto-mounted {} tool(s) for agent '{}': {}",
+            log.info("[QueryEngine] DynamicToolBridge 自动挂载了 {} 个工具，agent='{}': {}",
                     autoMounted.size(), agentId,
                     autoMounted.stream().map(ToolDefinition::name).toList());
         }
@@ -105,30 +122,54 @@ public class QueryEngine {
         // 构建系统提示词
         String systemPrompt = buildSystemPrompt(systemContext);
 
-        // 构建完整 prompt（包含工具描述）
-        String fullPrompt = systemPrompt + "\n\n" + userMessage;
+        // ── 三层历史压缩（借鉴 Agent Zero bulks/topics/current） ──
+        // 初始化历史压缩器，将初始用户消息加入历史
+        historyCompressor.clear();
+        historyCompressor.addMessage("user", userMessage);
+
+        // 构建完整 prompt（包含工具描述）— 通过历史压缩器管理
+        String fullPrompt = systemPrompt + "\n\n" + historyCompressor.buildHistoryText();
 
         // Agent Loop — 最多 MAX_TOOL_ROUNDS 轮
         int consecutiveErrors = 0;
         final int MAX_CONSECUTIVE_ERRORS = 3;
+        String lastLlmResponse = null;
 
         for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
-            log.info("[QueryEngine] Round {}/{}", round + 1, MAX_TOOL_ROUNDS);
+            log.info("[QueryEngine] 第 {}/{} 轮", round + 1, MAX_TOOL_ROUNDS);
+
+            // ── 标准化事件协议：STEP_STARTED ──
+            int stepNum = round + 1;
+            AiosEventSchema.emit(AiosEventSchema.stepStarted(agentId, currentRunId, stepNum));
 
             // 调用 LLM（含异常防御）
             String llmResponse;
             try {
-                llmResponse = sdk.think(agentId, fullPrompt);
-                consecutiveErrors = 0; // 成功则重置错误计数
+                // ── 流式渲染 + 标准化事件 ──
+                // 借鉴 CopilotKit：LLM 响应逐 token 推送到前端
+                StringBuilder streamingResponse = new StringBuilder();
+                AiosEventSchema.emit(AiosEventSchema.textMessageStart(agentId, currentRunId, stepNum));
+
+                final int currentRound = round + 1;
+                llmResponse = sdk.thinkStream(agentId, fullPrompt, delta -> {
+                    streamingResponse.append(delta);
+                    // 每个 delta 都广播 TEXT_MESSAGE_CONTENT 事件
+                    AiosEventSchema.emit(AiosEventSchema.textMessageContent(agentId, currentRunId, currentRound, delta));
+                });
+
+                AiosEventSchema.emit(AiosEventSchema.textMessageEnd(agentId, currentRunId, stepNum,
+                        streamingResponse.toString()));
+                consecutiveErrors = 0;
+                lastLlmResponse = llmResponse;
             } catch (Exception e) {
                 consecutiveErrors++;
-                String errMsg = "System Error during LLM inference: " + e.getMessage();
-                log.error("\u001B[31m[QueryEngine] Caught exception. Feeding error back to LLM context. ({}/{})\u001B[0m",
+                String errMsg = "LLM 推理期间系统错误: " + e.getMessage();
+                log.error("\u001B[31m[QueryEngine] 捕获异常。将错误反馈到 LLM 上下文。({}/{})\u001B[0m",
                         consecutiveErrors, MAX_CONSECUTIVE_ERRORS, e);
 
                 if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-                    log.error("[QueryEngine] {} consecutive errors — aborting query loop", consecutiveErrors);
-                    return "Query aborted after " + consecutiveErrors + " consecutive system errors. Last error: " + errMsg;
+                    log.error("[QueryEngine] {} 次连续错误 — 中止查询循环", consecutiveErrors);
+                    return "查询已中止，连续 " + consecutiveErrors + " 次系统错误。最后错误: " + errMsg;
                 }
 
                 // 将错误注入对话历史，让 LLM 自主判断是否换方式重试
@@ -142,56 +183,177 @@ public class QueryEngine {
 
             if (toolCalls.isEmpty()) {
                 // 没有工具调用，返回纯文本回复
-                log.info("[QueryEngine] No tool calls detected, returning final response");
+                log.info("[QueryEngine] 未检测到工具调用，返回最终响应");
+                // ── 标准化事件协议：RUN_FINISHED ──
+                AiosEventSchema.emit(AiosEventSchema.runFinished(agentId, currentRunId, llmResponse));
                 return llmResponse;
             }
 
-            // 执行工具调用（含异常防御）
+            // 执行工具调用（并行执行 — 多个工具同时运行，大幅提升吞吐）
             StringBuilder toolResults = new StringBuilder();
-            for (ToolCall tc : toolCalls) {
-                log.info("[QueryEngine] Executing tool: {} (round {})", tc.toolName, round + 1);
-                System.out.printf("[QueryEngine] ├─ Tool call: %s%n", tc.toolName);
+            if (toolCalls.size() == 1) {
+                // 单工具调用 — 直接执行，无需并行开销
+                ToolCall tc = toolCalls.get(0);
+                log.info("[QueryEngine] 正在执行工具: {}（第 {} 轮）", tc.toolName, round + 1);
+                System.out.printf("[QueryEngine] ├─ 工具调用: %s%n", tc.toolName);
 
                 String result;
                 try {
+                    // ── 标准化事件协议：TOOL_CALL_STARTED ──
+                    AiosEventSchema.emit(AiosEventSchema.toolCallStarted(agentId, currentRunId, round + 1, tc.toolName, tc.paramsJson));
                     result = executeTool(tc);
-                    consecutiveErrors = 0; // 成功则重置错误计数
-                    // ── DynamicToolBridge: 标记工具被使用（用于 LRU 驱逐） ──
+                    consecutiveErrors = 0;
                     DynamicToolBridge.getInstance().markToolUsed(tc.toolName);
                 } catch (Exception e) {
                     consecutiveErrors++;
-                    result = "System Error during tool '" + tc.toolName + "' execution: " + e.getMessage();
-                    log.error("\u001B[31m[QueryEngine] Tool '{}' threw exception. Feeding error back to LLM context. ({}/{})\u001B[0m",
+                    result = "工具 '" + tc.toolName + "' 执行期间系统错误: " + e.getMessage();
+                    log.error("[QueryEngine] 工具 '{}' 抛出异常。({}/{})",
                             tc.toolName, consecutiveErrors, MAX_CONSECUTIVE_ERRORS, e);
 
                     if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-                        log.error("[QueryEngine] {} consecutive errors — aborting query loop", consecutiveErrors);
-                        return "Query aborted after " + consecutiveErrors + " consecutive system errors. Last error: " + result;
+                        log.error("[QueryEngine] {} 次连续错误 — 中止查询循环", consecutiveErrors);
+                        return "查询已中止，连续 " + consecutiveErrors + " 次系统错误。最后错误: " + result;
                     }
                 }
 
                 toolResults.append("<tool_result name=\"").append(tc.toolName).append("\">\n");
-                // ── 上下文瘦身：防止工具输出过长导致 Prompt 膨胀 → API 超时 ──
-                String compactedResult = result;
-                if (result != null && result.length() > 1000) {
-                    compactedResult = result.substring(0, 1000)
-                            + "\n... [AIOS Kernel: 截断过多重复上下文以防止脑死亡, 原始长度="
-                            + result.length() + "] ...";
-                    log.info("[QueryEngine] Context memory compacted. Oversized tool outputs sliding-windowed. "
-                            + "Tool '{}': {} → {} chars", tc.toolName, result.length(), compactedResult.length());
-                }
+                String compactedResult = compactToolOutput(tc.toolName, result);
                 toolResults.append(compactedResult).append("\n");
                 toolResults.append("</tool_result>\n\n");
+                // ── 标准化事件协议：TOOL_CALL_COMPLETED ──
+                AiosEventSchema.emit(AiosEventSchema.toolCallCompleted(agentId, currentRunId, round + 1, tc.toolName, result, true));
+            } else {
+                // 多工具调用 — 并行执行（CompletableFuture + 虚拟线程）
+                log.info("[QueryEngine] 正在并行执行 {} 个工具（第 {} 轮）", toolCalls.size(), round + 1);
+                System.out.printf("[QueryEngine] ├─ 并行工具调用: %d%n", toolCalls.size());
+
+                java.util.List<java.util.concurrent.CompletableFuture<ToolResult>> futures = new java.util.ArrayList<>();
+                for (ToolCall tc : toolCalls) {
+                    java.util.concurrent.CompletableFuture<ToolResult> future = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                        try {
+                            String result = executeTool(tc);
+                            DynamicToolBridge.getInstance().markToolUsed(tc.toolName);
+                            return new ToolResult(tc.toolName, result, null);
+                        } catch (Exception e) {
+                            return new ToolResult(tc.toolName, null, e);
+                        }
+                    });
+                    futures.add(future);
+                }
+
+                // 等待所有工具完成
+                try {
+                    java.util.concurrent.CompletableFuture.allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0]))
+                            .get(120, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (java.util.concurrent.TimeoutException e) {
+                    log.warn("[QueryEngine] 部分并行工具调用超时（120秒）");
+                } catch (Exception e) {
+                    log.warn("[QueryEngine] 并行工具执行被中断: {}", e.getMessage());
+                }
+
+                // 收集结果
+                for (int i = 0; i < futures.size(); i++) {
+                    ToolCall tc = toolCalls.get(i);
+                    ToolResult tr;
+                    try {
+                        tr = futures.get(i).getNow(new ToolResult(tc.toolName, "Timed out", null));
+                    } catch (Exception e) {
+                        tr = new ToolResult(tc.toolName, null, e);
+                    }
+
+                    if (tr.error != null) {
+                        consecutiveErrors++;
+                        String errMsg = "工具 '" + tr.toolName + "' 执行期间系统错误: " + tr.error.getMessage();
+                        toolResults.append("<tool_result name=\"").append(tr.toolName).append("\">\n");
+                        toolResults.append(errMsg).append("\n");
+                        toolResults.append("</tool_result>\n\n");
+
+                        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                            log.error("[QueryEngine] {} 次连续错误 — 中止查询循环", consecutiveErrors);
+                            return "查询已中止，连续 " + consecutiveErrors + " 次系统错误。";
+                        }
+                    } else {
+                        consecutiveErrors = 0;
+                        toolResults.append("<tool_result name=\"").append(tr.toolName).append("\">\n");
+                        String compactedResult = compactToolOutput(tr.toolName, tr.result);
+                        toolResults.append(compactedResult).append("\n");
+                        toolResults.append("</tool_result>\n\n");
+                    }
+                }
             }
 
-            // 将工具结果追加到对话上下文，继续循环
-            fullPrompt = fullPrompt + "\n\nAssistant: " + llmResponse
-                    + "\n\nTool Results:\n" + toolResults
+            // ── 三层历史压缩（借鉴 Agent Zero bulks/topics/current） ──
+            // 不再无限追加 fullPrompt，而是通过 HistoryCompressor 管理历史
+            historyCompressor.addMessage("assistant", llmResponse);
+            historyCompressor.addMessage("tool", toolResults.toString());
+
+            // 重建 fullPrompt：系统提示 + 压缩后的历史 + 继续指令
+            fullPrompt = systemPrompt + "\n\n" + historyCompressor.buildHistoryText()
                     + "\n\nPlease continue based on the tool results above.";
+
+            // ── 标准化事件协议：STEP_FINISHED ──
+            AiosEventSchema.emit(AiosEventSchema.stepFinished(agentId, currentRunId, stepNum));
         }
 
-        log.warn("[QueryEngine] Max tool rounds ({}) reached", MAX_TOOL_ROUNDS);
-        return "Query reached maximum tool execution rounds (" + MAX_TOOL_ROUNDS + ").";
+        log.warn("[QueryEngine] 已达到最大工具轮次 ({})", MAX_TOOL_ROUNDS);
+        // ── 标准化事件协议：RUN_FINISHED ──
+        AiosEventSchema.emit(AiosEventSchema.runFinished(agentId, currentRunId, lastLlmResponse));
+        return "查询已达到最大工具执行轮次 (" + MAX_TOOL_ROUNDS + ")。";
+    }
+
+    /**
+     * 带扩展点的查询 — 借鉴 Agent Zero 的 @extensible 机制。
+     * <p>
+     * 包装 {@link #query(String, String)}，支持 before/after 钩子。
+     * <ul>
+     *   <li>before 钩子可短路：返回非 null 时直接作为最终结果</li>
+     *   <li>after 钩子可修改返回值</li>
+     * </ul>
+     * 不替换原始 query 方法，仅提供带扩展点的入口。
+     *
+     * @param userMessage   用户输入
+     * @param systemContext 额外的系统上下文
+     * @return 最终的文本回复（经过 after 钩子处理）
+     */
+    @com.ouisani.aios.core.plugin.Extensible("query")
+    public String queryWithExtensions(String userMessage, String systemContext) {
+        // before 钩子
+        Map<String, Object> hookArgs = new HashMap<>();
+        hookArgs.put("userMessage", userMessage);
+        hookArgs.put("systemContext", systemContext);
+        Object shortCircuit = com.ouisani.aios.core.plugin.ExtensibleHookRegistry.before("query", this, hookArgs);
+        if (shortCircuit != null) {
+            String result = (String) shortCircuit;
+            return (String) com.ouisani.aios.core.plugin.ExtensibleHookRegistry.after("query", this, result, hookArgs);
+        }
+
+        // 执行原始逻辑
+        String result = query(userMessage, systemContext);
+
+        // after 钩子
+        return (String) com.ouisani.aios.core.plugin.ExtensibleHookRegistry.after("query", this, result, hookArgs);
+    }
+
+    /**
+     * 使用 LLM 生成对话摘要 — 借鉴 Agent Zero 的 utility model 摘要。
+     */
+    private String generateSummary(List<HistoryCompressor.Message> messages, String hint) {
+        try {
+            StringBuilder input = new StringBuilder();
+            for (HistoryCompressor.Message m : messages) {
+                input.append("[").append(m.role()).append("]: ").append(m.content()).append("\n");
+            }
+            String prompt = hint + "\n\n" + input + "\n\nSummary (max 200 chars):";
+            String summary = sdk.think(agentId, prompt);
+            // 截断摘要，防止 LLM 返回过长
+            return summary.length() > 300 ? summary.substring(0, 300) : summary;
+        } catch (Exception e) {
+            log.debug("[QueryEngine] 摘要生成失败，使用截断回退: {}", e.getMessage());
+            // 回退：简单截断第一条消息
+            if (messages.isEmpty()) return "";
+            String content = messages.get(0).content();
+            return content.length() > 200 ? content.substring(0, 200) : content;
+        }
     }
 
     /**
@@ -595,8 +757,8 @@ public class QueryEngine {
         }
 
         if (opt.isEmpty()) {
-            String msg = "Unknown tool: " + tc.toolName + ". Available tools: "
-                    + availableTools.stream().map(Tool::name).reduce((a, b) -> a + ", " + b).orElse("none");
+            String msg = "未知工具: " + tc.toolName + "。可用工具: "
+                    + availableTools.stream().map(Tool::name).reduce((a, b) -> a + ", " + b).orElse("无");
             log.warn("[QueryEngine] {}", msg);
             return msg;
         }
@@ -610,11 +772,11 @@ public class QueryEngine {
             // ── 权限检查 ──
             PermissionDecision decision = permissionChecker.checkPermission(tool, input, context);
             if (decision.isDenied()) {
-                log.warn("[QueryEngine] Tool '{}' denied: {}", tc.toolName, decision.message());
-                return "Permission denied: " + decision.message();
+                log.warn("[QueryEngine] 工具 '{}' 被拒绝: {}", tc.toolName, decision.message());
+                return "权限被拒绝: " + decision.message();
             }
             if (decision.needsPrompt()) {
-                log.info("[QueryEngine] Tool '{}' requires confirmation (auto-allowing in agent mode)", tc.toolName);
+                log.info("[QueryEngine] 工具 '{}' 需要确认（Agent 模式下自动允许）", tc.toolName);
             }
 
             // ── PreToolUse Hook ──
@@ -642,11 +804,11 @@ public class QueryEngine {
             // ── 遥测记录 ──
             TelemetryService.instance().recordToolUsage(tc.toolName, duration);
 
-            log.info("[QueryEngine] Tool '{}' completed: success={} ({}ms)", tc.toolName, output.success(), duration);
+            log.info("[QueryEngine] 工具 '{}' 完成：success={} ({}ms)", tc.toolName, output.success(), duration);
             return output.toText();
         } catch (Exception e) {
-            log.error("[QueryEngine] Tool '{}' execution failed: {}", tc.toolName, e.getMessage());
-            return "Tool execution error: " + e.getMessage();
+            log.error("[QueryEngine] 工具 '{}' 执行失败: {}", tc.toolName, e.getMessage());
+            return "工具执行错误: " + e.getMessage();
         }
     }
 
@@ -688,6 +850,8 @@ public class QueryEngine {
             case "plan_mode" -> new com.ouisani.aios.user.apps.omnifactory.tools.PlanModeTool.Input(
                     extractJsonString(paramsJson, "action", "enter"),
                     extractJsonString(paramsJson, "plan", ""));
+            case "human_response" -> GSON.fromJson(paramsJson, HumanResponseTool.HumanResponseInput.class);
+            case "frontend_tool" -> GSON.fromJson(paramsJson, FrontendTool.FrontendToolInput.class);
             default -> throw new IllegalArgumentException("Unknown tool for input parsing: " + toolName);
         };
     }
@@ -783,4 +947,25 @@ public class QueryEngine {
      * 工具调用记录。
      */
     private record ToolCall(String toolName, String paramsJson) {}
+
+    /**
+     * 并行工具执行结果记录。
+     */
+    private record ToolResult(String toolName, String result, Exception error) {}
+
+    /**
+     * 上下文瘦身：防止工具输出过长导致 Prompt 膨胀 → API 超时。
+     */
+    private String compactToolOutput(String toolName, String result) {
+        if (result == null) return "";
+        if (result.length() > 1000) {
+            String compacted = result.substring(0, 1000)
+                    + "\n... [AIOS Kernel: 截断过多重复上下文以防止脑死亡, 原始长度="
+                    + result.length() + "] ...";
+            log.info("[QueryEngine] 上下文已压缩：工具 '{}' {} → {} 字符",
+                    toolName, result.length(), compacted.length());
+            return compacted;
+        }
+        return result;
+    }
 }

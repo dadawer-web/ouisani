@@ -65,7 +65,7 @@ public final class AgentToolContext {
 
         // Check if already loaded
         if (activeTools.containsKey(tool.name())) {
-            log.debug("[ToolCtx] Agent {}: tool '{}' already loaded", agentId, tool.name());
+            log.debug("[ToolCtx] Agent {}: 工具已加载 '{}'", agentId, tool.name());
             return true; // idempotent
         }
 
@@ -81,7 +81,7 @@ public final class AgentToolContext {
 
         log.info("[ToolCtx] Agent {}: insmod '{}' [type={}, cost={}, total={}/{}]",
                 agentId, tool.name(), tool.type(), tool.tokenCost(), tokenCostUsed, tokenBudget);
-        System.out.printf("  \u001B[36m[insmod] Agent %s ← tool '%s' loaded (cost=%d, total=%d/%d)\u001B[0m%n",
+        System.out.printf("  \u001B[36m[insmod] Agent %s ← 工具 '%s' 已加载 (cost=%d, total=%d/%d)\u001B[0m%n",
                 agentId, tool.name(), tool.tokenCost(), tokenCostUsed, tokenBudget);
 
         return true;
@@ -107,7 +107,7 @@ public final class AgentToolContext {
                     agentId, toolName, removed.tokenCost(), tokenCostUsed, tokenBudget);
             return true;
         }
-        log.debug("[ToolCtx] Agent {}: rmmod '{}' — tool not found in active context", agentId, toolName);
+        log.debug("[ToolCtx] Agent {}: rmmod '{}' — 工具在活跃上下文中未找到", agentId, toolName);
         return false;
     }
 

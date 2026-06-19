@@ -37,17 +37,17 @@ public class TokenOomKiller {
             return history; // 内存健康，直接放行
         }
 
-        log.warn("[OOM Killer] Memory High Watermark breached! Current: {} tokens. Initiating compaction sequence...", currentTokens);
+        log.warn("[OOM Killer] 内存高水位线已突破！当前: {} Token。正在启动压缩序列...", currentTokens);
         List<AgentMessage> compressedHistory = new ArrayList<>(history);
 
         for (OomCompressionLevel level : OomCompressionLevel.values()) {
-            log.info("[OOM Killer] Engaging Level: {}", level.name());
+            log.info("[OOM Killer] 正在启动压缩级别: {}", level.name());
 
             compressedHistory = applyCompression(level, compressedHistory, cheapModel);
             currentTokens = estimateTokens(compressedHistory);
 
             if (currentTokens < HIGH_WATERMARK) {
-                log.info("[OOM Killer] Memory stabilized at Level {}! New token count: {}", level.name(), currentTokens);
+                log.info("[OOM Killer] 内存已在级别 {} 稳定！新 Token 数: {}", level.name(), currentTokens);
                 return compressedHistory;
             }
         }
@@ -104,7 +104,7 @@ public class TokenOomKiller {
                 result.add(msg);
             }
         }
-        log.debug("[OOM Killer] L1 Tool output truncation: {} -> {} messages", history.size(), result.size());
+        log.debug("[OOM Killer] L1 工具输出截断: {} -> {} 条消息", history.size(), result.size());
         return result;
     }
 
@@ -121,7 +121,7 @@ public class TokenOomKiller {
                 result.add(msg);
             }
         }
-        log.debug("[OOM Killer] L2 Remove AI slops: {} -> {} messages", history.size(), result.size());
+        log.debug("[OOM Killer] L2 移除 AI 废话: {} -> {} 条消息", history.size(), result.size());
         return result;
     }
 
@@ -146,7 +146,7 @@ public class TokenOomKiller {
         result.add(AgentMessage.compactionSummary(swapped.toString()));
         result.addAll(history.subList(cutPoint, history.size()));
 
-        log.debug("[OOM Killer] L3 Swap out: folded {} messages into 1 placeholder", cutPoint);
+        log.debug("[OOM Killer] L3 历史换出: 已将 {} 条消息折叠为 1 个占位符", cutPoint);
         return result;
     }
 
@@ -180,11 +180,11 @@ public class TokenOomKiller {
             List<AgentMessage> result = new ArrayList<>();
             result.add(AgentMessage.compactionSummary(summary));
             result.addAll(history.subList(cutPoint, history.size()));
-            log.debug("[OOM Killer] L4 Semantic compress: {} messages -> 1 summary ({} chars)",
+            log.debug("[OOM Killer] L4 语义压缩: {} 条消息 -> 1 条摘要 ({} 字符)",
                     cutPoint, summary.length());
             return result;
         } catch (Exception e) {
-            log.warn("[OOM Killer] L4 Semantic compress failed (cheap model unavailable), falling through: {}", e.getMessage());
+            log.warn("[OOM Killer] L4 语义压缩失败（廉价模型不可用），跳过: {}", e.getMessage());
             return history;
         }
     }
@@ -198,7 +198,7 @@ public class TokenOomKiller {
         survival.add(history.get(0)); // 保留系统设定
         survival.add(history.get(history.size() - 2));
         survival.add(history.get(history.size() - 1));
-        log.debug("[OOM Killer] L5 Aggressive truncate: {} -> 3 messages", history.size());
+        log.debug("[OOM Killer] L5 激进截断: {} -> 3 条消息", history.size());
         return survival;
     }
 
@@ -224,9 +224,9 @@ public class TokenOomKiller {
                             new String[]{"oom", "emergency-extract"}
                     )
             );
-            log.info("[OOM Killer] L6 Extract to long-term: {} chars saved to MemoryDir", allContext.length());
+            log.info("[OOM Killer] L6 提取至长期记忆: {} 字符已保存至 MemoryDir", allContext.length());
         } catch (Exception e) {
-            log.warn("[OOM Killer] L6 Extract failed: {}", e.getMessage());
+            log.warn("[OOM Killer] L6 提取失败: {}", e.getMessage());
         }
 
         // 只保留第一条消息（通常是系统提示词）

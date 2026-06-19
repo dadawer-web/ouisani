@@ -58,25 +58,25 @@ public class AiosAppManager {
         System.out.println("[App Manager] Installing generic application: " + appName);
 
         // 2. 构建集装箱目录结构 — 所有物理文件收敛到单一容器下
-        //    workspaces/{appName}/root      — 应用根目录（对应 VFS /）
-        //    workspaces/{appName}/factory   — 工厂目录（对应 VFS /factory）
-        //    workspaces/{appName}/shared    — 共享目录（对应 VFS /shared）
-        //    workspaces/{appName}/outputs   — 出货区（对应 VFS /shared/outputs）
-        String safeAppName = appName.replaceAll("[\\\\/:*?\"<>|]", "_");
-        java.nio.file.Path containerDir = java.nio.file.Paths.get(
-                com.ouisani.aios.core.config.AiosPaths.workspaces(), safeAppName);
-        java.nio.file.Path physicalRoot = containerDir.resolve("root");
+        //    workspaces/{timestamp}_{任务名}/task.meta  — 任务元信息（由 workspaceForWorkflow 自动生成）
+        //    workspaces/{timestamp}_{任务名}/factory   — 工厂目录（对应 VFS /factory）
+        //    workspaces/{timestamp}_{任务名}/outputs   — 出货区（对应 VFS /shared/outputs）
+        //    workspaces/{timestamp}_{任务名}/shared    — 共享目录（对应 VFS /shared）
+        //
+        //    使用 AiosPaths.workspaceForWorkflow() 生成规范化的目录名（保留中文任务名）
+        String workflowId = String.valueOf(System.currentTimeMillis()); // 旧模式无显式 ID，用时间戳
+        String containerBase = com.ouisani.aios.core.config.AiosPaths.workspaceForWorkflow(workflowId, appName);
+        java.nio.file.Path containerDir = java.nio.file.Paths.get(containerBase);
         java.nio.file.Path physicalFactory = containerDir.resolve("factory");
         java.nio.file.Path physicalShared = containerDir.resolve("shared");
         java.nio.file.Path physicalOutputs = containerDir.resolve("outputs");
 
         try {
-            java.nio.file.Files.createDirectories(containerDir);
-            java.nio.file.Files.createDirectories(physicalRoot);
+            // workspaceForWorkflow 已创建根目录和 task.meta，只需创建子目录
             java.nio.file.Files.createDirectories(physicalFactory);
             java.nio.file.Files.createDirectories(physicalShared);
             java.nio.file.Files.createDirectories(physicalOutputs);
-            System.out.println("[App Manager] Container directory created: " + containerDir);
+            System.out.println("[App Manager] 容器目录已创建: " + containerDir);
         } catch (java.io.IOException e) {
             throw new RuntimeException("[App Manager] Failed to create container directories: " + e.getMessage(), e);
         }
@@ -85,9 +85,9 @@ public class AiosAppManager {
         for (Map.Entry<String, String> mount : manifest.mounts().entrySet()) {
             String hostPath = mount.getKey();
             String containerPath = mount.getValue();
-            // 将 VFS 路径挂载到集装箱内的 root 子目录
+            // 将 VFS 路径挂载到集装箱内的对应子目录
             String relativeDir = containerPath.replace("/", "_");
-            java.nio.file.Path physicalSubDir = physicalRoot.resolve(relativeDir);
+            java.nio.file.Path physicalSubDir = containerDir.resolve(relativeDir);
             try {
                 java.nio.file.Files.createDirectories(physicalSubDir);
             } catch (java.io.IOException e) {
@@ -111,10 +111,10 @@ public class AiosAppManager {
         }
         HostSourceNode skillsHostNode = new HostSourceNode("/shared/skills", globalSkillsDir);
         VfsManager.instance().mount("/shared/skills", "/shared/skills", skillsHostNode);
-        System.out.printf("  ├─ [App Manager] Skills Registry mounted: /shared/skills → %s%n", globalSkillsDir);
+        System.out.printf("  ├─ [App Manager] Skills Registry 已挂载: /shared/skills → %s%n", globalSkillsDir);
 
         // 4. Spawn virtual threads
-        System.out.printf("[App Manager] Allocated %d virtual threads with Cgroup budget %d%n", spawnCount, tokenBudget);
+        System.out.printf("[App Manager] 已分配 %d 虚拟线程，Cgroup 预算 %d%n", spawnCount, tokenBudget);
 
         for (int i = 0; i < spawnCount; i++) {
             String workerId = appName + "_worker_" + (i + 1);
@@ -124,7 +124,7 @@ public class AiosAppManager {
             agent.spawn(scheduler);
         }
 
-        System.out.println("[App Manager] Application successfully launched into User Space.");
+        System.out.println("[App Manager] 应用已启动。");
         log.info("[App Manager] Application '{}' launched: spawnCount={}, budget={}, entrypoint='{}', container={}",
                 appName, spawnCount, tokenBudget, entrypoint, containerDir);
     }
@@ -158,7 +158,7 @@ public class AiosAppManager {
         @Override
         protected void onStart() {
             System.out.printf("  ▶ [%s] Booting... entrypoint='%s'%n", agentId, entrypoint);
-            System.out.println("[AppManager] Strict runtime assertion enabled. Ready to trigger AutoMedic on failure.");
+            System.out.println("[AppManager] 严格运行时断言已启用。");
 
             if (entrypoint == null || entrypoint.isBlank()) {
                 System.out.printf("  ■ [%s] No entrypoint defined, idle exit.%n", agentId);
@@ -192,9 +192,9 @@ public class AiosAppManager {
                     }
                     if (!VfsManager.instance().exists("/shared/skills")) {
                         VfsManager.instance().mountHostFile("/shared/skills", physicalSkillsPath);
-                        log.info("[AppManager] Global Skills Registry mounted to /shared/skills (Physical: {})", physicalSkillsPath);
+                        log.info("[AppManager] 全局 Skills Registry 已挂载至 /shared/skills (Physical: {})", physicalSkillsPath);
                     } else {
-                        log.debug("[AppManager] /shared/skills already mounted, skipping (shared global resource)");
+                        log.debug("[AppManager] /shared/skills 已挂载，跳过 (shared global resource)");
                     }
                 } catch (Exception e) {
                     System.err.println("[GenericAppAgent] Skills Registry VFS mount failed (non-fatal): " + e.getMessage());
@@ -212,9 +212,9 @@ public class AiosAppManager {
                     }
                     if (!VfsManager.instance().exists("/shared/roles")) {
                         VfsManager.instance().mountHostFile("/shared/roles", physicalRolesPath);
-                        log.info("[AppManager] Global Roles Registry mounted to /shared/roles (Physical: {})", physicalRolesPath);
+                        log.info("[AppManager] 全局 Roles Registry 已挂载至 /shared/roles (Physical: {})", physicalRolesPath);
                     } else {
-                        log.debug("[AppManager] /shared/roles already mounted, skipping (shared global resource)");
+                        log.debug("[AppManager] /shared/roles 已挂载，跳过 (shared global resource)");
                     }
                 } catch (Exception e) {
                     System.err.println("[GenericAppAgent] Roles Registry VFS mount failed (non-fatal): " + e.getMessage());
@@ -229,7 +229,7 @@ public class AiosAppManager {
                         System.out.println("[GenericAppAgent] App Outputs directory created: " + effectiveOutputsDir);
                     }
                     VfsManager.instance().mountHostFile("/shared/outputs", effectiveOutputsDir);
-                    log.info("[AppManager] App Outputs directory mounted to /shared/outputs (Physical: {})", effectiveOutputsDir);
+                    log.info("[AppManager] 应用输出目录已挂载至 /shared/outputs (Physical: {})", effectiveOutputsDir);
                 } catch (Exception e) {
                     System.err.println("[GenericAppAgent] App Outputs VFS mount failed (non-fatal): " + e.getMessage());
                 }
@@ -244,7 +244,7 @@ public class AiosAppManager {
                     java.nio.file.Files.writeString(rolesFilePath, activeRolesContent);
                     // 同步到 VFS（供大模型 file_read 访问）
                     VfsManager.instance().writeText("/factory/ACTIVE_ROLES.md", activeRolesContent);
-                    log.info("[AppManager] ACTIVE_ROLES.md written (physical: {}, enabledRoles={})", rolesFilePath, enabledRoles);
+                    log.info("[AppManager] ACTIVE_ROLES.md 已写入 (physical: {}, enabledRoles={})", rolesFilePath, enabledRoles);
                 } catch (Exception e) {
                     System.err.println("[GenericAppAgent] ACTIVE_ROLES.md generation failed (non-fatal): " + e.getMessage());
                 }
@@ -259,7 +259,7 @@ public class AiosAppManager {
                     java.nio.file.Files.writeString(skillsFilePath, activeSkillsContent);
                     // 同步到 VFS（供大模型 file_read 访问）
                     VfsManager.instance().writeText("/factory/ACTIVE_SKILLS.md", activeSkillsContent);
-                    log.info("[AppManager] ACTIVE_SKILLS.md written (physical: {}, enabledSkills={})", skillsFilePath, enabledSkills);
+                    log.info("[AppManager] ACTIVE_SKILLS.md 已写入 (physical: {}, enabledSkills={})", skillsFilePath, enabledSkills);
                 } catch (Exception e) {
                     System.err.println("[GenericAppAgent] ACTIVE_SKILLS.md generation failed (non-fatal): " + e.getMessage());
                 }
@@ -370,8 +370,8 @@ public class AiosAppManager {
                 throw new RuntimeException("App Crash in User Space: " + e.getMessage(), e);
             }
 
-            System.out.println("[AppManager] GenericAppAgent execution routed to Sandbox instead of LLM.");
-            System.out.printf("  ■ [%s] Task completed. Exiting.%n", agentId);
+            System.out.println("[AppManager] GenericAppAgent 执行路由至 Sandbox。");
+            System.out.printf("  ■ [%s] 任务完成。正在退出%n", agentId);
             exit();
         }
 
@@ -389,7 +389,7 @@ public class AiosAppManager {
         private void flushVfsToPhysicalWorkspace(String physicalWorkDir) {
             java.util.List<String> vfsFiles = VfsManager.instance().listFilesUnder("/factory");
             if (vfsFiles.isEmpty()) {
-                System.out.println("[GenericAppAgent] No VFS files found under /factory, skipping flush.");
+                System.out.println("[GenericAppAgent] /factory 下未找到 VFS 文件，跳过刷新。");
                 return;
             }
 
@@ -425,7 +425,7 @@ public class AiosAppManager {
                 }
             }
 
-            System.out.println("[AppManager] VFS matrix fully flushed to physical workspace: " + physicalWorkDir
+            System.out.println("[AppManager] VFS 矩阵已完全刷新至物理工作空间: " + physicalWorkDir
                     + " (" + flushed + " files)");
         }
 
@@ -445,7 +445,7 @@ public class AiosAppManager {
                 String defaultRolePath = com.ouisani.aios.core.config.AiosPaths.rolesDir() + "/System_Architect.yaml";
                 try {
                     String architectContent = java.nio.file.Files.readString(java.nio.file.Path.of(defaultRolePath));
-                    log.info("[AppManager] enabledRoles is empty, force-injecting System_Architect as default role");
+                    log.info("[AppManager] enabledRoles 为空，强制注入 System_Architect 作为默认角色");
                     return "# 当前任务角色配置（默认兜底）\n\n" +
                             "本次任务未指定按需装载角色，强制注入系统架构师角色：\n\n" +
                             "---\n# Role: System_Architect (Default)\n" +
@@ -509,7 +509,7 @@ public class AiosAppManager {
 
             // 如果 enabledSkills 为空，默认开放所有本地技能（写入全量 MANIFEST.md）
             if (enabledSkills == null || enabledSkills.isEmpty()) {
-                log.info("[AppManager] enabledSkills is empty, writing full MANIFEST.md as ACTIVE_SKILLS.md (default open all)");
+                log.info("[AppManager] enabledSkills 为空，写入完整 MANIFEST.md 作为 ACTIVE_SKILLS.md (默认全量开放)");
                 return "# 当前任务技能配置（全量开放）\n\n" +
                         "本次任务未指定按需装载列表，默认开放所有本地技能：\n\n" +
                         fullManifest;
@@ -622,7 +622,7 @@ public class AiosAppManager {
 
         @Override
         protected void onMessage(String msg) {
-            log.debug("[{}] Message ignored: {}", agentId, msg.substring(0, Math.min(msg.length(), 60)));
+            log.debug("[{}] 消息已忽略: {}", agentId, msg.substring(0, Math.min(msg.length(), 60)));
         }
 
         /**
@@ -664,8 +664,8 @@ public class AiosAppManager {
             scriptContent = scriptContent.replace("pip ", "pip3 ");
             scriptContent = scriptContent.replace("\u0000PIP3\u0000 ", "pip3 ");
 
-            System.out.println("[AppManager] Applied Kernel-level path translation and ABI bridging to script.");
-            System.out.println("[AppManager] Python unbuffered mode (-u) enforced globally via command injection.");
+            System.out.println("[AppManager] 已应用内核级路径转换和 ABI 桥接。");
+            System.out.println("[AppManager] Python 无缓冲模式已全局强制执行。");
             return scriptContent;
         }
 

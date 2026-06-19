@@ -50,7 +50,7 @@ public class OutputSchemaValidator {
             try {
                 return mapper.readTree(cleanText);
             } catch (Exception e) {
-                log.warn("[ABI Firewall] Direct parse failed, falling back to heuristic extraction.");
+                log.warn("[ABI Firewall] 直接解析失败，回退到启发式提取。");
             }
         }
 
@@ -60,23 +60,23 @@ public class OutputSchemaValidator {
             String extractedJson = matcher.group(1);
             try {
                 JsonNode result = mapper.readTree(extractedJson);
-                log.info("[ABI Firewall] Successfully extracted and purified JSON from Markdown wrapper.");
+                log.info("[ABI Firewall] 成功从 Markdown 包装中提取并净化 JSON。");
                 return result;
             } catch (Exception e) {
-                throw new RuntimeException("Malformed JSON inside markdown block: " + e.getMessage());
+                throw new RuntimeException("Markdown 代码块中的 JSON 格式错误: " + e.getMessage());
             }
         }
 
         // 3. 尝试从文本中提取第一个 JSON 对象/数组（宽松模式）
         JsonNode extracted = extractFirstJson(cleanText);
         if (extracted != null) {
-            log.info("[ABI Firewall] Extracted embedded JSON from mixed text output.");
+            log.info("[ABI Firewall] 已从混合文本输出中提取嵌入的 JSON。");
             return extracted;
         }
 
         // 4. 如果大模型完全失控，输出了无法解析的文本
-        log.error("[ABI Firewall] LLM Hallucination detected! Output does not contain parsable JSON.");
-        log.debug("Raw Bad Output:\n{}", rawLlmOutput);
+        log.error("[ABI Firewall] 检测到 LLM 幻觉！输出不包含可解析的 JSON。");
+        log.debug("原始错误输出:\n{}", rawLlmOutput);
 
         // 这个特定的异常信息，将被你系统中的 JsonParseErrorRecovery 钩子精准捕获！
         throw new IllegalArgumentException(
@@ -123,7 +123,7 @@ public class OutputSchemaValidator {
         List<String> errors = validateSchema(data, schema);
         if (!errors.isEmpty()) {
             String errorSummary = String.join("; ", errors);
-            log.error("[ABI Firewall] Schema validation failed: {}", errorSummary);
+            log.error("[ABI Firewall] Schema 校验失败: {}", errorSummary);
             throw new IllegalArgumentException(
                 "ABI_VIOLATION_SCHEMA_MISMATCH: " + errorSummary +
                 ". You must output JSON strictly matching the required schema."
@@ -140,7 +140,7 @@ public class OutputSchemaValidator {
         try {
             return enforceJsonStructure(rawLlmOutput);
         } catch (Exception e) {
-            log.debug("[ABI Firewall] Lenient mode: JSON extraction failed, returning null.");
+            log.debug("[ABI Firewall] 宽松模式: JSON 提取失败，返回 null。");
             return null;
         }
     }

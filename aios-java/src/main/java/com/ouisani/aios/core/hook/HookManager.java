@@ -131,7 +131,7 @@ public class HookManager {
             try {
                 HookResult result = entry.handler.handle(event, currentData);
                 if (!result.proceed()) {
-                    log.info("[HookManager] Hook {} denied by handler: {}", event, result.message());
+                    log.info("[HookManager] Hook {} 被处理器拒绝: {}", event, result.message());
                     return result;
                 }
                 // 合并修改的数据
@@ -139,7 +139,7 @@ public class HookManager {
                     currentData.putAll(result.modifiedData());
                 }
             } catch (Exception e) {
-                log.warn("[HookManager] Hook {} handler failed: {}", event, e.getMessage());
+                log.warn("[HookManager] Hook {} 处理器失败: {}", event, e.getMessage());
             }
         }
 

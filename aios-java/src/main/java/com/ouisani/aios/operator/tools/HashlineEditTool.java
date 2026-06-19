@@ -99,7 +99,7 @@ public class HashlineEditTool implements Tool<HashlineEditTool.Input> {
 
         } catch (RuntimeException e) {
             // 哈希不匹配 — 这个异常会被 OmniMotherAgent 的自愈循环捕获！
-            log.warn("[HashlineEdit] Edit failed: {}", e.getMessage());
+            log.warn("[HashlineEdit] 编辑失败: {}", e.getMessage());
             throw e; // 重新抛出，让自愈引擎处理
         } catch (IOException e) {
             return ToolOutput.fail("I/O error: " + e.getMessage());

@@ -89,7 +89,7 @@ public final class SomWindowController {
      */
     public void configure(LlmProvider llmProvider) {
         this.llmProvider = llmProvider;
-        log.info("[SomWindow] Configured with LlmProvider");
+        log.info("[SomWindow] 已配置 LlmProvider");
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -158,10 +158,10 @@ public final class SomWindowController {
         long needToSave = consumed - targetConsumed;
 
         log.info("[SomWindow] ╔══════════════════════════════════════════════════╗");
-        log.info("[SomWindow] ║  SEMANTIC FOLDING TRIGGERED                     ║");
+        log.info("[SomWindow] ║  语义折叠已触发                                  ║");
         log.info("[SomWindow] ║  PID={}, usage={:.1f}%, target={:.1f}%            ║",
                 pid, usageRatio * 100, TARGET_RATIO * 100);
-        log.info("[SomWindow] ║  Need to save ~{} tokens                        ║", needToSave);
+        log.info("[SomWindow] ║  需节省约 {} tokens                             ║", needToSave);
         log.info("[SomWindow] ╚══════════════════════════════════════════════════╝");
 
         SemanticEtw.getInstance().logEvent("SOM", "FOLDING_TRIGGERED",
@@ -175,7 +175,7 @@ public final class SomWindowController {
         candidates.sort((a, b) -> Double.compare(b.foldingPriority(), a.foldingPriority()));
 
         if (candidates.isEmpty()) {
-            log.warn("[SomWindow] No foldable objects for PID={}", pid);
+            log.warn("[SomWindow] 无可折叠对象 PID={}", pid);
             return 0;
         }
 
@@ -199,7 +199,7 @@ public final class SomWindowController {
             long refunded = cgroup.refundTokens(totalSaved);
             totalTokensSaved.addAndGet(totalSaved);
 
-            log.info("[SomWindow] Folding complete: PID={}, folded={}, saved={} tokens, refunded={}",
+            log.info("[SomWindow] 折叠完成: PID={}, folded={}, saved={} tokens, refunded={}",
                     pid, foldedCount, totalSaved, refunded);
         }
 
@@ -248,7 +248,7 @@ public final class SomWindowController {
 
         long savedTokens = originalTokens - obj.foldedTokens();
 
-        log.info("[SomWindow] Folded: obj={}, type={}, saved={} tokens, zram={}",
+        log.info("[SomWindow] 已折叠: obj={}, type={}, saved={} tokens, zram={}",
                 obj.objectId(), obj.type(), savedTokens, zramHandle);
 
         return savedTokens;
@@ -270,7 +270,7 @@ public final class SomWindowController {
                         "请用一句话概括以下对话的核心内容，不超过50字：\n" + content,
                         "你是 AIOS 语义摘要引擎。");
             } catch (Exception e) {
-                log.debug("[SomWindow] LLM summary failed, using heuristic: {}", e.getMessage());
+                log.debug("[SomWindow] LLM 摘要失败，使用启发式: {}", e.getMessage());
             }
         }
 
@@ -341,7 +341,7 @@ public final class SomWindowController {
                 // 重建 contextHistory
                 rebuildContextHistory(task, task.pid());
 
-                log.info("[SomWindow] Expanded: obj={}, tokens={}", objectId, neededTokens);
+                log.info("[SomWindow] 已展开: obj={}, tokens={}", objectId, neededTokens);
                 return true;
             }
         }
@@ -356,12 +356,12 @@ public final class SomWindowController {
                 totalExpansions.incrementAndGet();
                 cgroup.consumeTokens(neededTokens);
                 rebuildContextHistory(task, task.pid());
-                log.info("[SomWindow] Swapped in: obj={}, tokens={}", objectId, neededTokens);
+                log.info("[SomWindow] 已换入: obj={}, tokens={}", objectId, neededTokens);
                 return true;
             }
         }
 
-        log.warn("[SomWindow] Failed to expand: obj={}", objectId);
+        log.warn("[SomWindow] 展开失败: obj={}", objectId);
         return false;
     }
 

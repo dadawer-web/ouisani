@@ -62,7 +62,7 @@ public class ToolCircuitBreaker {
         CircuitState state = circuits.computeIfAbsent(key, k -> new CircuitState());
 
         int failures = state.consecutiveFailures.incrementAndGet();
-        log.warn("[ToolCircuitBreaker] Tool '{}' failed for agent '{}' ({}/{} consecutive failures): {}",
+        log.warn("[ToolCircuitBreaker] 工具 '{}' 对 Agent '{}' 失败 ({}/{} 连续失败): {}",
                 toolName, agentId, failures, FAILURE_THRESHOLD, errorMsg);
 
         if (failures >= FAILURE_THRESHOLD && !state.tripped) {
@@ -83,7 +83,7 @@ public class ToolCircuitBreaker {
             state.consecutiveFailures.set(0);
             if (state.tripped) {
                 state.tripped = false;
-                log.info("[ToolCircuitBreaker] Circuit RESET for tool '{}' / agent '{}'", toolName, agentId);
+                log.info("[ToolCircuitBreaker] 工具 '{}' / Agent '{}' 的熔断器已重置", toolName, agentId);
             }
         }
     }
@@ -109,7 +109,7 @@ public class ToolCircuitBreaker {
             // 冷却期已过 — 半开状态，允许一次尝试
             state.tripped = false;
             state.consecutiveFailures.set(0);
-            log.info("[ToolCircuitBreaker] Circuit HALF-OPEN for tool '{}' / agent '{}' — allowing one attempt",
+            log.info("[ToolCircuitBreaker] 工具 '{}' / Agent '{}' 的熔断器半开 — 允许一次尝试",
                     toolName, agentId);
             return false;
         }
@@ -141,7 +141,7 @@ public class ToolCircuitBreaker {
                 entry.getValue().consecutiveFailures.set(0);
             }
         }
-        log.info("[ToolCircuitBreaker] All circuits reset for agent '{}'", agentId);
+        log.info("[ToolCircuitBreaker] Agent '{}' 的所有熔断器已重置", agentId);
     }
 
     // ── 熔断触发 ──
@@ -152,10 +152,10 @@ public class ToolCircuitBreaker {
         state.trippedAt = System.currentTimeMillis();
 
         log.error("  ╔══════════════════════════════════════════════════════════════╗");
-        log.error("  ║  [TOOL CIRCUIT BREAKER] TRIPPED!                           ║");
-        log.error("  ║  Agent: {}   Tool: {}              ", agentId, toolName);
-        log.error("  ║  Consecutive failures: {}                                  ║", failures);
-        log.error("  ║  Tool access REVOKED for {}ms                             ║", COOLDOWN_MS);
+        log.error("  ║  [工具熔断器] 已触发！                                      ║");
+        log.error("  ║  Agent: {}   工具: {}              ", agentId, toolName);
+        log.error("  ║  连续失败次数: {}                                  ║", failures);
+        log.error("  ║  工具访问权限已撤销 {}ms                             ║", COOLDOWN_MS);
         log.error("  ╚══════════════════════════════════════════════════════════════╝");
 
         // 广播遥测事件

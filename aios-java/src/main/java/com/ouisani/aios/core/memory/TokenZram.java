@@ -83,7 +83,7 @@ public class TokenZram {
     public void compressMemory(AgentTask task, CgroupNode cgroup) {
         List<String> history = task.contextHistory();
         if (history.size() < 2) {
-            log.info("[Token ZRAM] Agent#{} has insufficient history ({} entries), skip compression",
+            log.info("[Token ZRAM] Agent#{} 历史记录不足（{} 条），跳过压缩",
                     task.pid(), history.size());
             return;
         }
@@ -102,18 +102,18 @@ public class TokenZram {
 
         String compressed;
         if (llmProvider != null && llmProvider.isAvailable()) {
-            log.info("[Token ZRAM] Compressing Agent#{} cold memory ({} entries, ~{} tokens)...",
+            log.info("[Token ZRAM] 正在压缩 Agent#{} 冷内存（{} 条，~{} tokens）...",
                     task.pid(), splitPoint, coldTokens);
             try {
                 compressed = llmProvider.think(
                         "Please summarize the following context compactly, preserving all key information:\n" + coldData,
                         "System: Compression Engine");
             } catch (Exception e) {
-                log.warn("[Token ZRAM] LLM compression failed, using truncation: {}", e.getMessage());
+                log.warn("[Token ZRAM] LLM 压缩失败，使用截断: {}", e.getMessage());
                 compressed = truncateCompress(coldData.toString());
             }
         } else {
-            log.info("[Token ZRAM] No LLM available, using truncation compression for Agent#{}", task.pid());
+            log.info("[Token ZRAM] 无可用 LLM，使用截断压缩 Agent#{}", task.pid());
             compressed = truncateCompress(coldData.toString());
         }
 
@@ -125,10 +125,10 @@ public class TokenZram {
 
         if (savedTokens > 0 && cgroup != null) {
             long refunded = cgroup.refundTokens(savedTokens);
-            log.info("[Token ZRAM] Compressed Agent#{}: cold={} entries (~{} tokens), compressed=~{} tokens, refunded={} to cgroup '{}'",
+            log.info("[Token ZRAM] Agent#{} 已压缩: cold={} 条（~{} tokens），compressed=~{} tokens，refunded={} 至 cgroup '{}'",
                     task.pid(), splitPoint, coldTokens, compressedTokens, refunded, cgroup.name());
         } else {
-            log.info("[Token ZRAM] Agent#{} compressed but no tokens saved (cold={}, compressed={})",
+            log.info("[Token ZRAM] Agent#{} 已压缩但未节省 Token (cold={}, compressed={})",
                     task.pid(), coldTokens, compressedTokens);
         }
 
@@ -148,7 +148,7 @@ public class TokenZram {
         long swapThreshold = (long) (quota * SWAP_THRESHOLD_RATIO);
         boolean over = consumed > swapThreshold;
         if (over) {
-            log.warn("[Token ZRAM] Cgroup '{}' still at {}/{} ({}%) after compression, triggering kswapd swap-out",
+            log.warn("[Token ZRAM] Cgroup '{}' 压缩后仍为 {}/{}（{}%），触发 kswapd 换出",
                     cgroup.name(), consumed, quota, (consumed * 100 / quota));
         }
         return over;
@@ -173,7 +173,7 @@ public class TokenZram {
         }
 
         if (swappable.isEmpty()) {
-            log.warn("[Token ZRAM] kswapd: Agent#{} has no swappable entries, cannot swap out", task.pid());
+            log.warn("[Token ZRAM] kswapd：Agent#{} 无可换出条目，无法换出", task.pid());
             return;
         }
 
@@ -184,7 +184,7 @@ public class TokenZram {
         String pointer = SwapManager.instance().swapOut(String.valueOf(task.pid()), toSwap);
 
         if (pointer.isEmpty()) {
-            log.error("[Token ZRAM] kswapd: swapOut failed for Agent#{}", task.pid());
+            log.error("[Token ZRAM] kswapd：Agent#{} swapOut 失败", task.pid());
             return;
         }
 
@@ -206,10 +206,10 @@ public class TokenZram {
 
         if (netSaved > 0) {
             long refunded = cgroup.refundTokens(netSaved);
-            log.info("[Token ZRAM] kswapd: Agent#{} swapped {} entries to disk, pointer='{}', freed={} tokens, refunded={} to cgroup '{}'",
+            log.info("[Token ZRAM] kswapd：Agent#{} 已换出 {} 条至磁盘，pointer='{}'，释放={} tokens，refunded={} 至 cgroup '{}'",
                     task.pid(), swapCount, pointer, netSaved, refunded, cgroup.name());
         } else {
-            log.info("[Token ZRAM] kswapd: Agent#{} swapped {} entries to disk, pointer='{}'",
+            log.info("[Token ZRAM] kswapd：Agent#{} 已换出 {} 条至磁盘，pointer='{}'",
                     task.pid(), swapCount, pointer);
         }
     }
@@ -257,13 +257,13 @@ public class TokenZram {
             ));
 
             double ratio = (double) compressed.length / rawBytes.length * 100;
-            log.info("[TokenZram] Compressed: handle={}, original={}B, compressed={}B, ratio={:.1f}%",
+            log.info("[TokenZram] 已压缩：handle={}, original={}B, compressed={}B, ratio={:.1f}%",
                     handle, rawBytes.length, compressed.length, ratio);
 
             return handle;
 
         } catch (IOException e) {
-            log.error("[TokenZram] Compression failed: {}", e.getMessage());
+            log.error("[TokenZram] 压缩失败: {}", e.getMessage());
             // 回退：直接存储未压缩数据
             byte[] rawBytes = content.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             zramStore.put(handle, rawBytes);
@@ -285,7 +285,7 @@ public class TokenZram {
     public String decompressFromZram(String handle) {
         byte[] compressed = zramStore.get(handle);
         if (compressed == null) {
-            log.warn("[TokenZram] Handle not found: {}", handle);
+            log.warn("[TokenZram] Handle 未找到: {}", handle);
             return null;
         }
 

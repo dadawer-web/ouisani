@@ -141,7 +141,7 @@ public final class SnapshotManager {
 
         try {
             log.info("[Snapshot] ╔══════════════════════════════════════════════════╗");
-            log.info("[Snapshot] ║  FREEZE START: PID={}                           ║", pid);
+            log.info("[Snapshot] ║  冻结开始: PID={}                           ║", pid);
             log.info("[Snapshot] ╚══════════════════════════════════════════════════╝");
 
             SemanticEtw.getInstance().logEvent("SNAPSHOT", "FREEZE_START", "pid=" + pid);
@@ -155,7 +155,7 @@ public final class SnapshotManager {
             }
 
             task.setStatus(AgentTask.TaskStatus.BLOCKED);
-            log.info("[Snapshot] PID {} frozen: {} → BLOCKED", pid, prevStatus);
+            log.info("[Snapshot] PID {} 已冻结: {} → BLOCKED", pid, prevStatus);
 
             // ── Step 2: 序列化进程寄存器 ──
             RegisterCapture registers = captureRegisters(task);
@@ -212,7 +212,7 @@ public final class SnapshotManager {
             totalSnapshots.incrementAndGet();
 
             log.info("[Snapshot] ╔══════════════════════════════════════════════════╗");
-            log.info("[Snapshot] ║  FREEZE COMPLETE: PID={}, snapId={}    ║", pid, snapshotId);
+            log.info("[Snapshot] ║  冻结完成: PID={}, snapId={}    ║", pid, snapshotId);
             log.info("[Snapshot] ║  Pages={}, Handles={}, Journal={}, Signals={} ║",
                     cachedPages.size(), openHandles.size(), journalTail.size(), pendingSignals.size());
             log.info("[Snapshot] ╚══════════════════════════════════════════════════╝");
@@ -228,7 +228,7 @@ public final class SnapshotManager {
             totalFailedFreezes.incrementAndGet();
             // 冻结失败，恢复进程状态
             task.setStatus(AgentTask.TaskStatus.READY);
-            log.error("[Snapshot] FREEZE FAILED: PID={}, error={}", pid, e.getMessage(), e);
+            log.error("[Snapshot] 冻结失败: PID={}, error={}", pid, e.getMessage(), e);
             throw e;
         } finally {
             freezingPids.remove(pid);
@@ -260,7 +260,7 @@ public final class SnapshotManager {
      */
     public AgentTask restore(ProcessSnapshot snapshot) {
         log.info("[Snapshot] ╔══════════════════════════════════════════════════╗");
-        log.info("[Snapshot] ║  RESTORE START: snapId={}, origPID={}     ║",
+        log.info("[Snapshot] ║  恢复开始: snapId={}, origPID={}     ║",
                 snapshot.snapshotId(), snapshot.pid());
         log.info("[Snapshot] ╚══════════════════════════════════════════════════╝");
 
@@ -313,7 +313,7 @@ public final class SnapshotManager {
             totalRestores.incrementAndGet();
 
             log.info("[Snapshot] ╔══════════════════════════════════════════════════╗");
-            log.info("[Snapshot] ║  RESTORE COMPLETE: newPID={}, snapId={}  ║",
+            log.info("[Snapshot] ║  恢复完成: newPID={}, snapId={}  ║",
                     newPid, snapshot.snapshotId());
             log.info("[Snapshot] ╚══════════════════════════════════════════════════╝");
 
@@ -325,7 +325,7 @@ public final class SnapshotManager {
 
         } catch (Exception e) {
             totalFailedRestores.incrementAndGet();
-            log.error("[Snapshot] RESTORE FAILED: snapId={}, error={}",
+            log.error("[Snapshot] 恢复失败: snapId={}, error={}",
                     snapshot.snapshotId(), e.getMessage(), e);
             throw new RuntimeException("Restore failed: " + e.getMessage(), e);
         }
@@ -347,7 +347,7 @@ public final class SnapshotManager {
         TaskScheduler scheduler = getTaskScheduler();
         if (scheduler != null) {
             scheduler.spawn(task, agentLogic);
-            log.info("[Snapshot] Restored PID {} scheduled on TaskScheduler", task.pid());
+            log.info("[Snapshot] 已恢复的 PID {} 已调度至 TaskScheduler", task.pid());
         }
 
         return task;
@@ -376,7 +376,7 @@ public final class SnapshotManager {
             gzip.finish();
 
             byte[] data = baos.toByteArray();
-            log.info("[Snapshot] Serialized: snapId={}, size={} bytes (compressed)",
+            log.info("[Snapshot] 已序列化: snapId={}, size={} bytes (compressed)",
                     snapshot.snapshotId(), data.length);
 
             return data;
@@ -398,7 +398,7 @@ public final class SnapshotManager {
              ObjectInputStream ois = new ObjectInputStream(gzip)) {
 
             ProcessSnapshot snapshot = (ProcessSnapshot) ois.readObject();
-            log.info("[Snapshot] Deserialized: snapId={}, origPID={}",
+            log.info("[Snapshot] 已反序列化: snapId={}, origPID={}",
                     snapshot.snapshotId(), snapshot.pid());
 
             // 注册到本地索引
@@ -433,7 +433,7 @@ public final class SnapshotManager {
         byte[] data = serializeForTransfer(snapshot);
         totalMigrations.incrementAndGet();
 
-        log.info("[Snapshot] Migration prepared: PID={}, snapId={}, size={} bytes",
+        log.info("[Snapshot] 迁移已准备: PID={}, snapId={}, size={} bytes",
                 task.pid(), snapshot.snapshotId(), data.length);
 
         SemanticEtw.getInstance().logEvent("SNAPSHOT", "MIGRATION_PREPARED",
@@ -488,7 +488,7 @@ public final class SnapshotManager {
             ));
         }
 
-        log.debug("[Snapshot] Captured {} memory pages from SemanticCacheManager", pages.size());
+        log.debug("[Snapshot] 从 SemanticCacheManager 捕获了 {} 个内存页", pages.size());
         return pages;
     }
 
@@ -534,11 +534,11 @@ public final class SnapshotManager {
                     ));
                 }
             } catch (Exception e) {
-                log.warn("[Snapshot] Failed to capture handle for {}: {}", vfsPath, e.getMessage());
+                log.warn("[Snapshot] 捕获句柄失败 {}: {}", vfsPath, e.getMessage());
             }
         }
 
-        log.debug("[Snapshot] Captured {} VFS handles", handles.size());
+        log.debug("[Snapshot] 捕获了 {} 个 VFS 句柄", handles.size());
         return handles;
     }
 
@@ -579,10 +579,10 @@ public final class SnapshotManager {
                 }
             }
 
-            log.debug("[Snapshot] Captured {} journal entries", tail.size());
+            log.debug("[Snapshot] 捕获了 {} 条日志条目", tail.size());
 
         } catch (Exception e) {
-            log.warn("[Snapshot] Failed to capture journal tail: {}", e.getMessage());
+            log.warn("[Snapshot] 捕获日志尾部失败: {}", e.getMessage());
         }
 
         return tail;
@@ -620,11 +620,11 @@ public final class SnapshotManager {
                     replayed++;
                 }
             } catch (Exception e) {
-                log.warn("[Snapshot] Journal replay error for {}: {}", entry.nodePath(), e.getMessage());
+                log.warn("[Snapshot] 日志重放错误 {}: {}", entry.nodePath(), e.getMessage());
             }
         }
 
-        log.info("[Snapshot] Journal tail replayed: {}/{} entries", replayed, journalTail.size());
+        log.info("[Snapshot] 日志尾部已重放: {}/{} 条", replayed, journalTail.size());
     }
 
     /**
@@ -643,7 +643,7 @@ public final class SnapshotManager {
         task.setToolCode(snapshot.toolCode());
         task.setDeadlineMs(snapshot.deadlineMs());
 
-        log.debug("[Snapshot] Registers restored for new PID {}", task.pid());
+        log.debug("[Snapshot] 新 PID {} 的寄存器已恢复", task.pid());
     }
 
     /**
@@ -667,10 +667,10 @@ public final class SnapshotManager {
                     float[] mockVector = new float[1536]; // 占位向量
                     semanticNode.influxFromCache(page.text(), mockVector, page.metadata());
                 }
-                log.info("[Snapshot] Restored {} pages → /dev/semantic (L2)", pages.size());
+                log.info("[Snapshot] 已恢复 {} 页 → /dev/semantic (L2)", pages.size());
             }
         } catch (Exception e) {
-            log.warn("[Snapshot] Failed to restore pages to SemanticNode: {}", e.getMessage());
+            log.warn("[Snapshot] 恢复页面至 SemanticNode 失败: {}", e.getMessage());
         }
     }
 
@@ -684,7 +684,7 @@ public final class SnapshotManager {
                 SignalType signal = SignalType.valueOf(signalName);
                 task.sendSignal(signal);
             } catch (IllegalArgumentException e) {
-                log.warn("[Snapshot] Unknown signal: {}", signalName);
+                log.warn("[Snapshot] 未知信号: {}", signalName);
             }
         }
     }
@@ -710,11 +710,11 @@ public final class SnapshotManager {
                     // SemanticNode 的双写机制会自动处理
                 }
             } catch (Exception e) {
-                log.warn("[Snapshot] Failed to restore handle {}: {}", handle.vfsPath(), e.getMessage());
+                log.warn("[Snapshot] 恢复句柄失败 {}: {}", handle.vfsPath(), e.getMessage());
             }
         }
 
-        log.debug("[Snapshot] Restored {} VFS handles", handles.size());
+        log.debug("[Snapshot] 已恢复 {} 个 VFS 句柄", handles.size());
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -735,10 +735,10 @@ public final class SnapshotManager {
             byte[] data = serializeForTransfer(snapshot);
             Files.write(filePath, data);
 
-            log.info("[Snapshot] Persisted: {} ({} bytes)", filePath, data.length);
+            log.info("[Snapshot] 已持久化: {} ({} bytes)", filePath, data.length);
 
         } catch (Exception e) {
-            log.error("[Snapshot] Failed to persist snapshot: {}", e.getMessage());
+            log.error("[Snapshot] 持久化快照失败: {}", e.getMessage());
         }
     }
 
@@ -789,7 +789,7 @@ public final class SnapshotManager {
             try {
                 Files.deleteIfExists(Path.of(SNAPSHOT_DIR, snapshotId + ".snapshot"));
             } catch (IOException e) {
-                log.warn("[Snapshot] Failed to delete snapshot file: {}", e.getMessage());
+                log.warn("[Snapshot] 删除快照文件失败: {}", e.getMessage());
             }
         }
         return removed != null;

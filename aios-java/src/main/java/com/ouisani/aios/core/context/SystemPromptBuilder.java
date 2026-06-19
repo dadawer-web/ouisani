@@ -115,7 +115,7 @@ public class SystemPromptBuilder {
                     ? output.substring(0, MAX_GIT_STATUS_LENGTH) + "..."
                     : output;
         } catch (Exception e) {
-            log.debug("[SystemPromptBuilder] Git status unavailable: {}", e.getMessage());
+            log.debug("[SystemPromptBuilder] Git 状态不可用: {}", e.getMessage());
             return null;
         }
     }

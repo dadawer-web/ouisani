@@ -49,7 +49,7 @@ public final class SecretVault {
     }
 
     private SecretVault() {
-        log.info("[SecretVault] Initialized. All API keys will be handle-only from now on.");
+        log.info("[SecretVault] 已初始化，所有 API Key 将仅通过句柄访问");
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -69,7 +69,7 @@ public final class SecretVault {
      */
     public String registerSecret(String category, String keyId, String secretValue) {
         if (secretValue == null || secretValue.isEmpty()) {
-            log.warn("[SecretVault] Empty secret ignored: {}/{}", category, keyId);
+            log.warn("[SecretVault] 空密钥已忽略: {}/{}", category, keyId);
             return "hdl_empty";
         }
 
@@ -95,7 +95,7 @@ public final class SecretVault {
         // 立即清除传入的 String 引用（尽力而为，String 不可变无法真正擦除）
         accessLog.put(handleId, new AccessRecord(category, keyId, System.currentTimeMillis()));
 
-        log.info("[SecretVault] Secret registered: {}/{} → handle={} (vault size={})",
+        log.info("[SecretVault] 密钥已注册: {}/{} → 句柄={} (保险库大小={})",
                 category, keyId, handleId, secrets.size());
 
         return handleId;
@@ -120,7 +120,7 @@ public final class SecretVault {
         String logicalRef = category + ":" + keyId;
         String handleId = handleRegistry.get(logicalRef);
         if (handleId == null) {
-            log.warn("[SecretVault] No secret registered for: {}", logicalRef);
+            log.warn("[SecretVault] 未注册的密钥: {}", logicalRef);
             return "handle:NOT_FOUND:" + logicalRef;
         }
         return "handle:" + logicalRef;
@@ -161,13 +161,13 @@ public final class SecretVault {
         String logicalRef = handleRef.substring("handle:".length());
         String handleId = handleRegistry.get(logicalRef);
         if (handleId == null) {
-            log.warn("[SecretVault] Handle resolution failed: {}", handleRef);
+            log.warn("[SecretVault] 句柄解析失败: {}", handleRef);
             return "";
         }
 
         char[] secretChars = secrets.get(handleId);
         if (secretChars == null) {
-            log.warn("[SecretVault] Secret data not found for handle: {}", handleId);
+            log.warn("[SecretVault] 句柄对应的密钥数据未找到: {}", handleId);
             return "";
         }
 
@@ -194,7 +194,7 @@ public final class SecretVault {
     public String registerFromEnv(String category, String keyId, String envVarName) {
         String value = System.getenv(envVarName);
         if (value == null || value.isEmpty()) {
-            log.info("[SecretVault] Env var '{}' not set, skipping {}/{}", envVarName, category, keyId);
+            log.info("[SecretVault] 环境变量 '{}' 未设置，跳过 {}/{}", envVarName, category, keyId);
             return getHandle(category, keyId);
         }
         return registerSecret(category, keyId, value);
@@ -206,7 +206,7 @@ public final class SecretVault {
     public String registerFromMap(String category, String keyId, Map<String, String> envMap, String envKey) {
         String value = envMap.get(envKey);
         if (value == null || value.isEmpty()) {
-            log.info("[SecretVault] Key '{}' not found in env map, skipping {}/{}", envKey, category, keyId);
+            log.info("[SecretVault] 环境映射中未找到键 '{}'，跳过 {}/{}", envKey, category, keyId);
             return getHandle(category, keyId);
         }
         return registerSecret(category, keyId, value);
@@ -225,21 +225,21 @@ public final class SecretVault {
         }
         secrets.clear();
         handleRegistry.clear();
-        log.info("[SecretVault] All secrets cleared.");
+        log.info("[SecretVault] 所有密钥已清除");
     }
 
     /**
      * 获取保险库状态（不含密钥值）。
      */
     public String getVaultStatus() {
-        StringBuilder sb = new StringBuilder("SecretVault Status:\n");
+        StringBuilder sb = new StringBuilder("SecretVault 状态:\n");
         for (Map.Entry<String, AccessRecord> entry : accessLog.entrySet()) {
             AccessRecord r = entry.getValue();
             sb.append("  ").append(r.category).append("/").append(r.keyId)
                     .append(" → ").append(entry.getKey())
-                    .append(" (accessed ").append(r.accessCount).append(" times)\n");
+                    .append(" (访问 ").append(r.accessCount).append(" 次)\n");
         }
-        sb.append("Total secrets: ").append(secrets.size());
+        sb.append("密钥总数: ").append(secrets.size());
         return sb.toString();
     }
 

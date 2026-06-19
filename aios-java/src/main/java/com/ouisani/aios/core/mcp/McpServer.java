@@ -89,7 +89,7 @@ public class McpServer {
                 )
         ));
 
-        log.info("[McpServer] Registered {} builtin tools", registeredTools.size());
+        log.info("[McpServer] 已注册 {} 个内置工具", registeredTools.size());
     }
 
     public McpResponse handleRequest(McpRequest req) {
@@ -266,7 +266,7 @@ public class McpServer {
             return McpResponse.error(req.getId(), McpError.INVALID_PARAMS,
                     "Invalid base64 WASM data: " + e.getMessage());
         } catch (Exception e) {
-            log.error("[McpServer] WASM execution failed: {}", e.getMessage());
+            log.error("[McpServer] WASM 执行失败: {}", e.getMessage());
             Map<String, Object> errorContent = Map.of(
                     "type", "text",
                     "text", "WASM execution error: " + e.getMessage()
@@ -347,7 +347,7 @@ public class McpServer {
             McpResponse response = handleRequest(request);
             return objectMapper.writeValueAsString(response);
         } catch (Exception e) {
-            log.error("[McpServer] Failed to parse request: {}", e.getMessage());
+            log.error("[McpServer] 解析请求失败: {}", e.getMessage());
             try {
                 return objectMapper.writeValueAsString(
                         McpResponse.error(null, McpError.PARSE_ERROR, "Parse error: " + e.getMessage()));
@@ -364,7 +364,7 @@ public class McpServer {
             field.setAccessible(true);
             return (Map<String, VfsNode>) field.get(VfsManager.instance());
         } catch (Exception e) {
-            log.warn("[McpServer] Cannot access VfsManager pathTree: {}", e.getMessage());
+            log.warn("[McpServer] 无法访问 VfsManager pathTree: {}", e.getMessage());
             return Map.of();
         }
     }

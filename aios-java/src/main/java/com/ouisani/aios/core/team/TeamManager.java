@@ -93,7 +93,7 @@ public class TeamManager {
                 "memberCount", spec.memberIds().size()
         ));
 
-        log.info("[TeamManager] Team '{}' created. Lead: {}, Members: {}",
+        log.info("[TeamManager] 团队已创建 '{}'。Lead: {}, Members: {}",
                 spec.name(), spec.leadAgentId(), spec.memberIds());
 
         return team;
@@ -202,7 +202,7 @@ public class TeamManager {
         broadcastTeamEvent("TASK_CREATED", teamName, creatorId,
                 "Task '" + task.taskId() + "' created: " + description);
 
-        log.info("[TeamManager] Task '{}' created in team '{}' by {}", task.taskId(), teamName, creatorId);
+        log.info("[TeamManager] 任务已在团队中创建 '{}' in team '{}' by {}", task.taskId(), teamName, creatorId);
         return task;
     }
 

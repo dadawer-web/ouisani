@@ -71,7 +71,7 @@ public final class SharedMemoryManager {
     public boolean destroySegment(String segmentId) {
         ConcurrentHashMap<String, String> removed = shmSegments.remove(segmentId);
         if (removed != null) {
-            log.info("[SHM] Segment destroyed: {} (had {} keys)", segmentId, removed.size());
+            log.info("[SHM] 段已销毁: {} (原有 {} 个键)", segmentId, removed.size());
             return true;
         }
         return false;
@@ -131,7 +131,7 @@ public final class SharedMemoryManager {
         return semanticBlocks.computeIfAbsent(blockId, id -> {
             SemanticMemoryBlock block = new SemanticMemoryBlock(id);
             log.info("[SHM] Semantic block created: {} (supports vectors + context pointers)", id);
-            System.out.println("  \u001B[36m[SHM] Semantic block '" + id + "' allocated (vectors + context pointers enabled)\u001B[0m");
+            System.out.println("  \u001B[36m[SHM] 语义块 '" + id + "' 已分配 (向量 + 上下文指针已启用)\u001B[0m");
             return block;
         });
     }

@@ -83,12 +83,12 @@ public final class PluginManager {
 
     public void configure(GraalWasmSandbox sandbox) {
         this.sandbox = sandbox;
-        log.info("[PluginManager] Configured with GraalWasmSandbox");
+        log.info("[PluginManager] 已配置 GraalWasmSandbox");
     }
 
     public void configureLlm(LlmProvider llmProvider) {
         this.llmProvider = llmProvider;
-        log.info("[PluginManager] Configured with LlmProvider: {}", llmProvider.name());
+        log.info("[PluginManager] 已配置 LlmProvider: {}", llmProvider.name());
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -98,7 +98,7 @@ public final class PluginManager {
     public void scanAndLoadPlugins(String pluginDir) {
         Path dir = Path.of(pluginDir);
         if (!Files.isDirectory(dir)) {
-            log.warn("[PluginManager] Plugin directory does not exist: {}", pluginDir);
+            log.warn("[PluginManager] 插件目录不存在: {}", pluginDir);
             return;
         }
 
@@ -124,18 +124,18 @@ public final class PluginManager {
                     registerToolDefinition(def);
                     discovered++;
 
-                    log.info("[PluginManager] Auto-discovered: {} ({} bytes)", toolName, bytecode.length);
+                    log.info("[PluginManager] 自动发现: {} ({} 字节)", toolName, bytecode.length);
                 } catch (IOException e) {
-                    log.error("[PluginManager] Failed to read plugin: {} — {}", wasmFile, e.getMessage());
+                    log.error("[PluginManager] 读取插件失败: {} — {}", wasmFile, e.getMessage());
                 }
             }
         } catch (IOException e) {
-            log.error("[PluginManager] Failed to scan plugin directory: {}", e.getMessage());
+            log.error("[PluginManager] 扫描插件目录失败: {}", e.getMessage());
             return;
         }
 
-        log.info("[PluginManager] Plugin scan complete: {} plugin(s) from '{}'", discovered, pluginDir);
-        System.out.printf("  \u001B[36m[PluginManager] Scan complete: %d WASM plugin(s) registered + indexed%n\u001B[0m", discovered);
+        log.info("[PluginManager] 插件扫描完成: 从 '{}' 发现 {} 个插件", pluginDir, discovered);
+        System.out.printf("  \u001B[36m[PluginManager] 扫描完成: %d 个 WASM 插件已注册并索引%n\u001B[0m", discovered);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -160,11 +160,11 @@ public final class PluginManager {
                     toolEmbeddings.put(def.name(), embedding);
                 }
             } catch (Exception e) {
-                log.debug("[PluginManager] Embedding failed for tool '{}': {}", def.name(), e.getMessage());
+                log.debug("[PluginManager] 工具 '{}' 嵌入失败: {}", def.name(), e.getMessage());
             }
         }
 
-        log.debug("[PluginManager] Tool catalog entry: {} [{}]", def.name(), def.type());
+        log.debug("[PluginManager] 工具目录条目: {} [{}]", def.name(), def.type());
     }
 
     /**
@@ -235,11 +235,11 @@ public final class PluginManager {
                         results.add(scored.get(i).getKey());
                     }
 
-                    log.info("[PluginManager] Semantic search: query='{}', results={}", query, results.size());
+                    log.info("[PluginManager] 语义搜索: query='{}', 结果数={}", query, results.size());
                     return results;
                 }
             } catch (Exception e) {
-                log.warn("[PluginManager] Semantic search failed, falling back to keyword: {}", e.getMessage());
+                log.warn("[PluginManager] 语义搜索失败，回退到关键词搜索: {}", e.getMessage());
             }
         }
 
@@ -302,7 +302,7 @@ public final class PluginManager {
     public void syncMcpTools(String serverName) {
         McpClientRegistry mcp = McpClientRegistry.getInstance();
         if (!mcp.hasServer(serverName)) {
-            log.warn("[PluginManager] MCP server '{}' not registered", serverName);
+            log.warn("[PluginManager] MCP 服务器 '{}' 未注册", serverName);
             return;
         }
 
@@ -331,13 +331,13 @@ public final class PluginManager {
                                     "mcp:" + serverName
                             );
                             registerToolDefinition(def);
-                            log.info("[PluginManager] MCP tool synced: {} [{}]", toolName, serverName);
+                            log.info("[PluginManager] MCP 工具已同步: {} [{}]", toolName, serverName);
                         }
                     }
                 }
             }
         } catch (Exception e) {
-            log.warn("[PluginManager] Failed to sync MCP tools from '{}': {}", serverName, e.getMessage());
+            log.warn("[PluginManager] 从 '{}' 同步 MCP 工具失败: {}", serverName, e.getMessage());
         }
     }
 
@@ -379,7 +379,7 @@ public final class PluginManager {
         List<ToolDefinition> matches = semanticSearch(query, 3);
 
         if (matches.isEmpty()) {
-            log.warn("[PluginManager] insmod: no tools found for query '{}' (agent={})", query, agentId);
+            log.warn("[PluginManager] insmod: 未找到匹配查询 '{}' 的工具 (agent={})", query, agentId);
             return null;
         }
 
@@ -387,11 +387,11 @@ public final class PluginManager {
         ToolDefinition best = matches.get(0);
 
         if (ctx.insmod(best)) {
-            log.info("[PluginManager] insmod: agent={} loaded '{}' [type={}, source={}]",
+            log.info("[PluginManager] insmod: agent={} 已加载 '{}' [type={}, source={}]",
                     agentId, best.name(), best.type(), best.source());
             return best;
         } else {
-            log.warn("[PluginManager] insmod: agent={} failed to load '{}' (budget exceeded?)",
+            log.warn("[PluginManager] insmod: agent={} 加载 '{}' 失败 (预算超限?)",
                     agentId, best.name());
             return null;
         }
@@ -406,7 +406,7 @@ public final class PluginManager {
 
         ToolDefinition def = toolCatalog.get(toolName);
         if (def == null) {
-            log.warn("[PluginManager] insmod: tool '{}' not found in catalog", toolName);
+            log.warn("[PluginManager] insmod: 工具 '{}' 在目录中未找到", toolName);
             return null;
         }
 
@@ -429,7 +429,7 @@ public final class PluginManager {
 
         boolean removed = ctx.rmmod(toolName);
         if (removed) {
-            log.info("[PluginManager] rmmod: agent={} unloaded '{}'", agentId, toolName);
+            log.info("[PluginManager] rmmod: agent={} 已卸载 '{}'", agentId, toolName);
         }
         return removed;
     }
@@ -470,7 +470,7 @@ public final class PluginManager {
             throw new IllegalStateException("GraalWasmSandbox not configured in PluginManager");
         }
 
-        log.info("[PluginManager] Executing plugin '{}' ({} bytes)", action, bytecode.length);
+        log.info("[PluginManager] 正在执行插件 '{}' ({} 字节)", action, bytecode.length);
         return sandbox.executeCode(bytesToHex(bytecode), "main");
     }
 
@@ -492,7 +492,7 @@ public final class PluginManager {
                 ToolDefinition.ToolType.WASM, 0, "wasm:" + toolName
         );
         registerToolDefinition(def);
-        log.info("[PluginManager] Manually registered: {} ({} bytes)", toolName, bytecode.length);
+        log.info("[PluginManager] 手动注册: {} ({} 字节)", toolName, bytecode.length);
     }
 
     /**
@@ -501,7 +501,7 @@ public final class PluginManager {
     public void unregisterPlugin(String action) {
         pluginRegistry.remove(action);
         unregisterToolDefinition(action);
-        log.info("[PluginManager] Unregistered plugin: {}", action);
+        log.info("[PluginManager] 已注销插件: {}", action);
     }
 
     private static String bytesToHex(byte[] bytes) {

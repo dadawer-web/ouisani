@@ -36,12 +36,12 @@ public class RuntimeFallbackRecovery implements RecoveryStrategy {
 
     @Override
     public RecoveryResult apply(RecoveryContext context) {
-        log.info("[RuntimeFallbackRecovery] Attempting model fallback for agent {}", context.agentId());
+        log.info("[RuntimeFallbackRecovery] 正在为 Agent 尝试模型回退 {}", context.agentId());
 
         // 将当前模型加入冷却
         String currentModel = (String) context.metadata().getOrDefault("currentModel", "unknown");
         modelCooldowns.put(currentModel, System.currentTimeMillis() + COOLDOWN_MS);
-        log.info("[RuntimeFallbackRecovery] Model '{}' put in cooldown for {}ms", currentModel, COOLDOWN_MS);
+        log.info("[RuntimeFallbackRecovery] 模型 '{}' 已进入冷却，时长 {}ms", currentModel, COOLDOWN_MS);
 
         // 尝试获取 E_CORE 提供者 — 降级到经济模型
         try {
@@ -54,7 +54,7 @@ public class RuntimeFallbackRecovery implements RecoveryStrategy {
                 return RecoveryResult.ok("Runtime fallback: LLM router will auto-downgrade to E_CORE", modifier);
             }
         } catch (Exception e) {
-            log.warn("[RuntimeFallbackRecovery] Model fallback check failed: {}", e.getMessage());
+            log.warn("[RuntimeFallbackRecovery] 模型回退检查失败: {}", e.getMessage());
         }
 
         // 无法切换模型 — 建议退避重试

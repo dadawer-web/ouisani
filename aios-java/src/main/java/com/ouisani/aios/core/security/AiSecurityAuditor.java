@@ -32,7 +32,7 @@ public class AiSecurityAuditor {
      * @return 审核决议 (SecurityDecision)
      */
     public static SecurityDecision evaluateIntent(String agentId, String toolName, String args, String recentContext) {
-        log.debug("[Semantic Firewall] Auditor inspecting call from [{}] to [{}]", agentId, toolName);
+        log.debug("[Semantic Firewall] 审核员正在检查来自 [{}] 对 [{}] 的调用", agentId, toolName);
 
         String prompt = buildAuditPrompt(toolName, args, recentContext);
 
@@ -44,7 +44,7 @@ public class AiSecurityAuditor {
                 auditorModel = LlmRouterHolder.getProvider("openai");
             }
             if (auditorModel == null) {
-                log.error("[Semantic Firewall] No LLM provider available. Defaulting to BLOCK.");
+                log.error("[Semantic Firewall] 无可用 LLM 提供者。默认拒绝。");
                 return new SecurityDecision(false, "Security Auditor: no LLM provider available. Access denied by fail-closed policy.");
             }
 
@@ -57,14 +57,14 @@ public class AiSecurityAuditor {
             String reason = decisionNode.path("reason").asText("No reason provided.");
 
             if (!isSafe) {
-                log.warn("[Semantic Firewall] MALICIOUS INTENT DETECTED! Blocked [{}] from calling [{}]. Reason: {}", agentId, toolName, reason);
+                log.warn("[Semantic Firewall] 检测到恶意意图！已阻止 [{}] 调用 [{}]。原因: {}", agentId, toolName, reason);
             }
 
             return new SecurityDecision(isSafe, reason);
 
         } catch (Exception e) {
             // Failsafe 机制：如果审核员自己挂了，默认拒绝高危操作 (Fail-Closed)
-            log.error("[Semantic Firewall] Auditor failed to respond. Defaulting to BLOCK.", e);
+            log.error("[Semantic Firewall] 审核员响应失败。默认拒绝。", e);
             return new SecurityDecision(false, "Security Auditor offline. Access denied by fail-closed policy.");
         }
     }

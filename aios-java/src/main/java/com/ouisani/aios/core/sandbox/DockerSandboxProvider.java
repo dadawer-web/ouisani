@@ -43,16 +43,16 @@ public class DockerSandboxProvider implements SandboxProvider {
 
     @Override
     public String executeCode(String code, String entrypoint) throws Exception {
-        log.info("[Cloud Sandbox] Spawning physical Docker container for Agent...");
+        log.info("[Cloud Sandbox] 正在为 Agent 启动物理 Docker 容器...");
         System.out.println("  ╔══════════════════════════════════════════════════════════════╗");
-        System.out.printf("  ║  [Cloud Sandbox] Docker Image : %s%n", dockerImage);
-        System.out.printf("  ║  [Cloud Sandbox] Entrypoint   : %s%n", entrypoint != null ? entrypoint : "default");
+        System.out.printf("  ║  [Cloud Sandbox] Docker 镜像 : %s%n", dockerImage);
+        System.out.printf("  ║  [Cloud Sandbox] 命令         : %s%n", entrypoint != null ? entrypoint : "default");
         System.out.println("  ╚══════════════════════════════════════════════════════════════╝");
 
         // Write code to host temp file
         Path scriptPath = Path.of(HOST_SCRIPT_PATH);
         Files.writeString(scriptPath, code, StandardCharsets.UTF_8);
-        log.debug("[Cloud Sandbox] Code written to {}", HOST_SCRIPT_PATH);
+        log.debug("[Cloud Sandbox] 代码已写入 {}", HOST_SCRIPT_PATH);
 
         // Determine container script path and command based on entrypoint/language
         String containerScriptPath = "/script.py";
@@ -83,9 +83,9 @@ public class DockerSandboxProvider implements SandboxProvider {
                 execCommand, containerScriptPath
         );
 
-        log.info("[Cloud Sandbox] Executing: {}", String.join(" ", command));
+        log.info("[Cloud Sandbox] 正在执行: {}", String.join(" ", command));
         System.out.printf("  ├─ [Cloud Sandbox] CMD: %s%n", String.join(" ", command));
-        System.out.println("  ├─ [Sandbox Security] Spawned isolated container with network bridged off and resource hard-capped.");
+        System.out.println("  ├─ [Sandbox Security] 已启动隔离容器，网络已桥接关闭，资源硬限制。");
 
         ProcessBuilder pb = new ProcessBuilder(command)
                 .redirectErrorStream(true);
@@ -94,8 +94,8 @@ public class DockerSandboxProvider implements SandboxProvider {
         try {
             process = pb.start();
         } catch (IOException e) {
-            log.error("[Cloud Sandbox] Failed to start Docker process: {}", e.getMessage());
-            System.err.printf("  🚨 [Cloud Sandbox] Docker execution failed: %s%n", e.getMessage());
+            log.error("[Cloud Sandbox] 启动 Docker 进程失败: {}", e.getMessage());
+            System.err.printf("  🚨 [Cloud Sandbox] Docker 执行失败: %s%n", e.getMessage());
             throw new RuntimeException("Docker execution failed: " + e.getMessage(), e);
         }
 
@@ -118,19 +118,19 @@ public class DockerSandboxProvider implements SandboxProvider {
         }
 
         if (exitCode != 0) {
-            log.warn("[Cloud Sandbox] Container exited with code {}: {}", exitCode, output.trim());
-            System.err.printf("  ⚠ [Cloud Sandbox] Exit code %d%n", exitCode);
-            System.err.printf("  ⚠ [Cloud Sandbox] Output: %s%n", output.trim());
+            log.warn("[Cloud Sandbox] 容器退出码 {}: {}", exitCode, output.trim());
+            System.err.printf("  ⚠ [Cloud Sandbox] 退出码 %d%n", exitCode);
+            System.err.printf("  ⚠ [Cloud Sandbox] 输出: %s%n", output.trim());
         } else {
-            log.info("[Cloud Sandbox] Container completed successfully");
-            System.out.printf("  └─ [Cloud Sandbox] Execution complete (exit=0)%n");
+            log.info("[Cloud Sandbox] 容器执行成功");
+            System.out.printf("  └─ [Cloud Sandbox] 执行完成 (exit=0)%n");
         }
 
         // Clean up host temp file
         try {
             Files.deleteIfExists(scriptPath);
         } catch (IOException e) {
-            log.warn("[Cloud Sandbox] Failed to delete temp script: {}", e.getMessage());
+            log.warn("[Cloud Sandbox] 删除临时脚本失败: {}", e.getMessage());
         }
 
         return output;

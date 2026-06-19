@@ -34,7 +34,7 @@ public class TokenZramProvider implements MemoryProvider {
     @Override
     public boolean store(String agentId, String memoryContent) {
         if (agentId == null || memoryContent == null || memoryContent.isEmpty()) {
-            log.warn("[TokenZramProvider] store rejected: agentId={}, contentEmpty={}",
+            log.warn("[TokenZramProvider] 存储被拒绝: agentId={}, contentEmpty={}",
                     agentId, memoryContent == null || memoryContent.isEmpty());
             return false;
         }
@@ -53,7 +53,7 @@ public class TokenZramProvider implements MemoryProvider {
         pages.add(storedContent);
         long tokenEstimate = Math.max(1, storedContent.length() / 4);
 
-        log.info("[TokenZramProvider] Stored memory for agent='{}': contentLen={}, tokens~={}, totalPages={}",
+        log.info("[TokenZramProvider] 已存储 Agent 内存: agent='{}', contentLen={}, tokens~={}, totalPages={}",
                 agentId, memoryContent.length(), tokenEstimate, pages.size());
 
         // Check if we need to swap out old pages to disk
@@ -67,14 +67,14 @@ public class TokenZramProvider implements MemoryProvider {
     @Override
     public String retrieve(String agentId, String query) {
         if (agentId == null || query == null || query.isEmpty()) {
-            log.warn("[TokenZramProvider] retrieve rejected: agentId={}, queryEmpty={}",
+            log.warn("[TokenZramProvider] 检索被拒绝: agentId={}, queryEmpty={}",
                     agentId, query == null || query.isEmpty());
             return "";
         }
 
         List<String> pages = pageStore.get(agentId);
         if (pages == null || pages.isEmpty()) {
-            log.info("[TokenZramProvider] No memory pages found for agent='{}'", agentId);
+            log.info("[TokenZramProvider] 未找到内存页 agent='{}'", agentId);
             return "";
         }
 
@@ -116,11 +116,11 @@ public class TokenZramProvider implements MemoryProvider {
                     result.append(augmented);
                 }
             } catch (Exception e) {
-                log.debug("[TokenZramProvider] ContextInjector augmentation skipped: {}", e.getMessage());
+                log.debug("[TokenZramProvider] ContextInjector 增强已跳过: {}", e.getMessage());
             }
         }
 
-        log.info("[TokenZramProvider] Retrieved memory for agent='{}': query='{}', resultLen={}",
+        log.info("[TokenZramProvider] 已检索 Agent 内存: agent='{}', query='{}', resultLen={}",
                 agentId, query, result.length());
 
         return result.toString().trim();
@@ -130,7 +130,7 @@ public class TokenZramProvider implements MemoryProvider {
     public void clear(String agentId) {
         List<String> removed = pageStore.remove(agentId);
         int count = removed != null ? removed.size() : 0;
-        log.info("[TokenZramProvider] Cleared memory for agent='{}': pagesEvicted={}", agentId, count);
+        log.info("[TokenZramProvider] 已清除 Agent 内存: agent='{}', pagesEvicted={}", agentId, count);
     }
 
     @Override
@@ -141,7 +141,7 @@ public class TokenZramProvider implements MemoryProvider {
     // ── Internal: ZRAM Compression ──
 
     private String compressWithZram(String agentId, String content) {
-        log.info("[TokenZramProvider] Applying ZRAM compression for agent='{}': originalLen={}",
+        log.info("[TokenZramProvider] 正在应用 ZRAM 压缩 agent='{}': originalLen={}",
                 agentId, content.length());
 
         // Use TokenZram's truncation compression as a lightweight in-process method.
@@ -153,7 +153,7 @@ public class TokenZramProvider implements MemoryProvider {
 
         long originalTokens = Math.max(1, content.length() / 4);
         long compressedTokens = Math.max(1, compressed.length() / 4);
-        log.info("[TokenZramProvider] ZRAM compression: agent='{}', originalTokens~={}, compressedTokens~={}, ratio={}%",
+        log.info("[TokenZramProvider] ZRAM 压缩: agent='{}', originalTokens~={}, compressedTokens~={}, ratio={}%",
                 agentId, originalTokens, compressedTokens,
                 (compressedTokens * 100 / originalTokens));
 
@@ -179,7 +179,7 @@ public class TokenZramProvider implements MemoryProvider {
 
         String pointer = SwapManager.instance().swapOut(agentId, coldPages);
         if (pointer.isEmpty()) {
-            log.warn("[TokenZramProvider] Swap out failed for agent='{}'", agentId);
+            log.warn("[TokenZramProvider] Agent '{}' 换出失败", agentId);
             return;
         }
 
@@ -189,7 +189,7 @@ public class TokenZramProvider implements MemoryProvider {
         }
         pages.add(coldIndices.get(0), pointer);
 
-        log.info("[TokenZramProvider] Swapped {} cold pages to disk for agent='{}': pointer='{}'",
+        log.info("[TokenZramProvider] 已将 {} 个冷页面换出至磁盘 agent='{}': pointer='{}'",
                 coldPages.size(), agentId, pointer);
     }
 }

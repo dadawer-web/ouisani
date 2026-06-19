@@ -163,8 +163,8 @@ public class SemanticRaftNode {
         // 接受集群连接
         startServer(clusterPort);
 
-        log.info("[Raft] Node {} started on port {}, role={}", nodeId, clusterPort, role);
-        System.out.printf("  ✓ [Raft] Node %s started (port=%d, role=%s)%n", nodeId, clusterPort, role);
+        log.info("[Raft] 节点 {} 已在端口 {} 启动, role={}", nodeId, clusterPort, role);
+        System.out.printf("  ✓ [Raft] 节点 %s 已启动 (port=%d, role=%s)%n", nodeId, clusterPort, role);
     }
 
     /**
@@ -185,7 +185,7 @@ public class SemanticRaftNode {
             peer.disconnect();
         }
 
-        log.info("[Raft] Node {} stopped", nodeId);
+        log.info("[Raft] 节点 {} 已停止", nodeId);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -202,7 +202,7 @@ public class SemanticRaftNode {
         // 尝试连接
         if (peer.connect()) {
             peer.startReceiving(this::handleMessage);
-            log.info("[Raft] Peer connected: {} ({}:{})", nodeId, host, port);
+            log.info("[Raft] 对等节点已连接: {} ({}:{})", nodeId, host, port);
         }
 
         // 初始化 Leader 状态
@@ -259,7 +259,7 @@ public class SemanticRaftNode {
         totalElections.incrementAndGet();
 
         log.info("[Raft] ╔══════════════════════════════════════════════════╗");
-        log.info("[Raft] ║  ELECTION STARTED: node={}, term={}            ║", nodeId, currentTerm);
+        log.info("[Raft] ║  选举已开始: node={}, term={}            ║", nodeId, currentTerm);
         log.info("[Raft] ╚══════════════════════════════════════════════════╝");
 
         SemanticEtw.getInstance().logEvent("RAFT", "ELECTION_START",
@@ -306,7 +306,7 @@ public class SemanticRaftNode {
             case MEMORY_REPLICATE -> handleMemoryReplicate(msg);
             case NODE_JOIN -> handleNodeJoin(msg);
             case CLUSTER_STATUS -> handleClusterStatus(msg);
-            default -> log.warn("[Raft] Unknown message type: {}", msg.type());
+            default -> log.warn("[Raft] 未知消息类型: {}", msg.type());
         }
     }
 
@@ -328,7 +328,7 @@ public class SemanticRaftNode {
             }
         }
 
-        log.debug("[Raft] Vote request from {}: granted={}", candidateId, grantVote);
+        log.debug("[Raft] 来自 {} 的投票请求: 已授予={}", candidateId, grantVote);
 
         ClusterPeer peer = peers.get(candidateId);
         if (peer != null && peer.isConnected()) {
@@ -359,8 +359,8 @@ public class SemanticRaftNode {
             leaderId = nodeId;
 
             log.info("[Raft] ╔══════════════════════════════════════════════════╗");
-            log.info("[Raft] ║  LEADER ELECTED: node={}, term={}             ║", nodeId, currentTerm);
-            log.info("[Raft] ║  This node now controls the cluster.          ║");
+            log.info("[Raft] ║  Leader 已选出: node={}, term={}             ║", nodeId, currentTerm);
+            log.info("[Raft] ║  此节点现在控制集群。                          ║");
             log.info("[Raft] ╚══════════════════════════════════════════════════╝");
 
             SemanticEtw.getInstance().logEvent("RAFT", "LEADER_ELECTED",
@@ -448,7 +448,7 @@ public class SemanticRaftNode {
 
             if (replications >= (clusterSize() / 2) + 1) {
                 commitIndex = n;
-                log.debug("[Raft] Commit index advanced to {}", commitIndex);
+                log.debug("[Raft] 提交索引推进至 {}", commitIndex);
                 break;
             }
         }
@@ -466,7 +466,7 @@ public class SemanticRaftNode {
                     try {
                         memoryApplyCallback.accept(entry);
                     } catch (Exception e) {
-                        log.warn("[Raft] Memory apply error: {}", e.getMessage());
+                        log.warn("[Raft] 记忆应用错误: {}", e.getMessage());
                     }
                 }
                 lastApplied++;
@@ -526,10 +526,10 @@ public class SemanticRaftNode {
                     peer.sendAsync(RaftMessage.taskDispatch(nodeId, targetNode, payload));
                     totalTasksDispatched.incrementAndGet();
 
-                    log.info("[Raft] Task dispatched: taskId={}, target={}", taskId, targetNode);
+                    log.info("[Raft] 任务已派发: taskId={}, target={}", taskId, targetNode);
                 } else {
                     // 目标节点不可用，本地执行
-                    log.warn("[Raft] Target node {} unavailable, executing locally", targetNode);
+                    log.warn("[Raft] 目标节点 {} 不可用，本地执行", targetNode);
                 }
             }
             // 如果 Leader 是最空闲的或无可用节点，本地执行
@@ -583,7 +583,7 @@ public class SemanticRaftNode {
      * 处理任务派发消息。
      */
     private void handleTaskDispatch(RaftMessage msg) {
-        log.info("[Raft] Task dispatch received from {}", msg.fromNodeId());
+        log.info("[Raft] 收到来自 {} 的任务派发", msg.fromNodeId());
 
         if (role == Role.LEADER) {
             // Leader 收到 Follower 的任务请求，重新派发
@@ -591,7 +591,7 @@ public class SemanticRaftNode {
         } else {
             // Follower 收到 Leader 的任务派发，执行任务
             // (实际执行由 TaskScheduler 回调处理)
-            log.info("[Raft] Task assigned to this node: {}", msg.payload());
+            log.info("[Raft] 任务已分配至本节点: {}", msg.payload());
         }
     }
 
@@ -653,7 +653,7 @@ public class SemanticRaftNode {
         totalLogEntries.incrementAndGet();
         totalMemoryReplicated.incrementAndGet();
 
-        log.info("[Raft] Memory replicated: idx={}, term={}, query={}", entry.index, entry.term,
+        log.info("[Raft] 内存已复制: idx={}, term={}, query={}", entry.index, entry.term,
                 query.length() > 50 ? query.substring(0, 50) + "..." : query);
 
         // 广播到 Follower
@@ -689,7 +689,7 @@ public class SemanticRaftNode {
             }
         } else {
             // Follower 收到 Leader 的记忆复制
-            log.info("[Raft] Memory replication received from Leader");
+            log.info("[Raft] 收到来自 Leader 的记忆复制");
         }
     }
 
@@ -705,7 +705,7 @@ public class SemanticRaftNode {
     // ════════════════════════════════════════════════════════════════
 
     private void handleNodeJoin(RaftMessage msg) {
-        log.info("[Raft] Node join request from {}", msg.fromNodeId());
+        log.info("[Raft] 收到来自 {} 的节点加入请求", msg.fromNodeId());
 
         if (role == Role.LEADER) {
             // Leader 处理节点加入请求
@@ -753,10 +753,10 @@ public class SemanticRaftNode {
                         peers.put(remoteId, peer);
                         peer.startReceiving(this::handleMessage);
 
-                        log.info("[Raft] Accepted connection from {}", remoteId);
+                        log.info("[Raft] 接受来自 {} 的连接", remoteId);
                     } catch (IOException e) {
                         if (running) {
-                            log.warn("[Raft] Accept error: {}", e.getMessage());
+                            log.warn("[Raft] 接受连接错误: {}", e.getMessage());
                         }
                     }
                 }
@@ -765,7 +765,7 @@ public class SemanticRaftNode {
             acceptThread.start();
 
         } catch (IOException e) {
-            log.error("[Raft] Failed to start server on port {}: {}", port, e.getMessage());
+            log.error("[Raft] 在端口 {} 启动服务器失败: {}", port, e.getMessage());
         }
     }
 

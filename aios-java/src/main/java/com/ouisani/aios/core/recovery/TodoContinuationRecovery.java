@@ -41,7 +41,7 @@ public class TodoContinuationRecovery implements RecoveryStrategy {
 
     @Override
     public RecoveryResult apply(RecoveryContext context) {
-        log.info("[TodoContinuationRecovery] Injecting continuation prompt for agent {}", context.agentId());
+        log.info("[TodoContinuationRecovery] 正在为 Agent 注入续接 Prompt {}", context.agentId());
         lastInjectionTime = System.currentTimeMillis();
         consecutiveInjections++;
 

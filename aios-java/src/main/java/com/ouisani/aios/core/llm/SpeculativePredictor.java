@@ -119,8 +119,8 @@ public final class SpeculativePredictor {
         this.speculationExecutor = Executors.newVirtualThreadPerTaskExecutor();
         this.enabled = true;
 
-        log.info("[SpeculativePredictor] Configured with LlmRouter, enabled=true");
-        System.out.println("  ✓ [SpecExec] Semantic Branch Predictor active (branches="
+        log.info("[SpeculativePredictor] 已配置 LlmRouter, enabled=true");
+        System.out.println("  ✓ [SpecExec] 语义分支预测器已激活 (branches="
                 + BRANCH_COUNT + ", hitThreshold=" + HIT_THRESHOLD + ")");
     }
 
@@ -147,7 +147,7 @@ public final class SpeculativePredictor {
 
         totalPredictions.incrementAndGet();
 
-        log.debug("[SpeculativePredictor] Predicting branches for context (len={})", context.length());
+        log.debug("[SpeculativePredictor] 正在为上下文预测分支 (len={})", context.length());
 
         try {
             // 构造预测提示词
@@ -181,7 +181,7 @@ public final class SpeculativePredictor {
                 branches = branches.subList(0, BRANCH_COUNT);
             }
 
-            log.info("[SpeculativePredictor] Predicted {} branches: {}", branches.size(),
+            log.info("[SpeculativePredictor] 已预测 {} 个分支: {}", branches.size(),
                     branches.stream().map(b -> b.intent + "(" + String.format("%.2f", b.confidence) + ")")
                             .toList());
 
@@ -192,7 +192,7 @@ public final class SpeculativePredictor {
             return branches;
 
         } catch (Exception e) {
-            log.error("[SpeculativePredictor] Prediction error: {}", e.getMessage());
+            log.error("[SpeculativePredictor] 预测错误: {}", e.getMessage());
             return List.of();
         }
     }
@@ -332,7 +332,7 @@ public final class SpeculativePredictor {
             log.info("[SpeculativePredictor] ║  BRANCH PREDICTION HIT! similarity={}",
                     String.format("%.4f", bestSimilarity));
             log.info("[SpeculativePredictor] ║  Predicted: {}", bestRecord.intent);
-            log.info("[SpeculativePredictor] ║  Result available instantly (0 latency)");
+            log.info("[SpeculativePredictor] ║  结果立即可用（0 延迟）");
             log.info("[SpeculativePredictor] ╚══════════════════════════════════════════════════╝");
 
             SemanticEtw.getInstance().logEvent("SPEC_EXEC", "HIT",

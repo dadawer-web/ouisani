@@ -71,7 +71,7 @@ public class ToolAssembler {
             if (context.isToolAllowed(entry.getKey())) {
                 result.add(entry.getValue());
             } else {
-                log.debug("[ToolAssembler] Tool '{}' denied by policy", entry.getKey());
+                log.debug("[ToolAssembler] Tool '{}' 工具被策略拒绝", entry.getKey());
             }
         }
 

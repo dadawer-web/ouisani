@@ -97,10 +97,10 @@ public class ClusterPeer {
             socket = new Socket(host, port);
             initStreams();
             connected = true;
-            log.info("[ClusterPeer] Connected to {} ({}:{})", nodeId, host, port);
+            log.info("[ClusterPeer] 已连接至 {} ({}:{})", nodeId, host, port);
             return true;
         } catch (IOException e) {
-            log.warn("[ClusterPeer] Connect failed to {} ({}:{}): {}", nodeId, host, port, e.getMessage());
+            log.warn("[ClusterPeer] 连接失败 {} ({}:{}): {}", nodeId, host, port, e.getMessage());
             connected = false;
             return false;
         }
@@ -118,7 +118,7 @@ public class ClusterPeer {
         } catch (IOException ignored) {}
         if (receiverThread != null) receiverThread.interrupt();
         sendExecutor.shutdownNow();
-        log.info("[ClusterPeer] Disconnected from {}", nodeId);
+        log.info("[ClusterPeer] 已断开与 {} 的连接", nodeId);
     }
 
     /**
@@ -139,7 +139,7 @@ public class ClusterPeer {
                     }
                 } catch (Exception e) {
                     if (connected) {
-                        log.warn("[ClusterPeer] Receive error from {}: {}", nodeId, e.getMessage());
+                        log.warn("[ClusterPeer] 接收错误 来自 {}: {}", nodeId, e.getMessage());
                     }
                     break;
                 }
@@ -162,7 +162,7 @@ public class ClusterPeer {
             try {
                 sendMessage(message);
             } catch (Exception e) {
-                log.warn("[ClusterPeer] Send failed to {}: {}", nodeId, e.getMessage());
+                log.warn("[ClusterPeer] 发送失败 至 {}: {}", nodeId, e.getMessage());
             }
         });
     }
@@ -232,7 +232,7 @@ public class ClusterPeer {
 
             return new RaftMessage(RaftMessage.Type.valueOf(type), term, from, to, payload, ts);
         } catch (Exception e) {
-            log.warn("[ClusterPeer] Deserialization error: {}", e.getMessage());
+            log.warn("[ClusterPeer] 反序列化错误: {}", e.getMessage());
             return null;
         }
     }

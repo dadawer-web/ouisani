@@ -54,13 +54,13 @@ public final class StrictDecodeStrategy implements DecodeStrategy {
         // 首次尝试：直接解析
         T result = tryParse(llmOutput, targetClass);
         if (result != null) {
-            log.debug("[Strict] First-pass decode successful: type={}", targetClass.getSimpleName());
+            log.debug("[Strict] 首轮解码成功: type={}", targetClass.getSimpleName());
             return result;
         }
 
         // 自愈循环：要求 LLM 修复自己的无效 JSON
         if (llmProvider == null) {
-            log.debug("[Strict] No LlmProvider for self-healing, giving up");
+            log.debug("[Strict] 无 LlmProvider 用于自愈，放弃");
             return null;
         }
 
@@ -70,8 +70,8 @@ public final class StrictDecodeStrategy implements DecodeStrategy {
         for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
             lastError = getLastError();
 
-            log.info("[Strict] Self-healing attempt {}/{} for type={}", attempt, MAX_RETRIES, targetClass.getSimpleName());
-            System.out.printf("  \u001B[33m[Strict Decoder] Self-healing attempt %d/%d (error: %s)\u001B[0m%n",
+            log.info("[Strict] 自愈尝试 {}/{} type={}", attempt, MAX_RETRIES, targetClass.getSimpleName());
+            System.out.printf("  \u001B[33m[Strict Decoder] 自愈尝试 %d/%d (错误: %s)\u001B[0m%n",
                     attempt, MAX_RETRIES,
                     lastError.length() > 80 ? lastError.substring(0, 80) + "..." : lastError);
 
@@ -82,14 +82,14 @@ public final class StrictDecodeStrategy implements DecodeStrategy {
             try {
                 currentOutput = llmProvider.think(healPrompt);
             } catch (Exception e) {
-                log.warn("[Strict] LLM self-heal call failed: {}", e.getMessage());
+                log.warn("[Strict] LLM 自愈调用失败: {}", e.getMessage());
                 return null;
             }
 
             result = tryParse(currentOutput, targetClass);
             if (result != null) {
-                log.info("[Strict] Self-healing succeeded on attempt {}", attempt);
-                System.out.printf("  \u001B[32m[Strict Decoder] Self-healing successful on attempt %d!%n\u001B[0m", attempt);
+                log.info("[Strict] 自愈成功，第 {} 次尝试", attempt);
+                System.out.printf("  \u001B[32m[Strict Decoder] 自愈成功，第 %d 次尝试！%n\u001B[0m", attempt);
                 return result;
             }
         }

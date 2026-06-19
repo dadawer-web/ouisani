@@ -70,7 +70,7 @@ public class TopologyCompiler {
      * @return 纯 JSON 字符串，格式为 {"nodes": [...], "edges": [...]}
      */
     public static String compileTopology(String prompt, List<String> enabledSkills, List<String> enabledRoles) {
-        log.info("[TopologyCompiler] compileTopology called: promptLen={}, skills={}, roles={}",
+        log.info("[TopologyCompiler] compileTopology 已调用: promptLen={}, skills={}, roles={}",
                 prompt.length(), enabledSkills, enabledRoles);
 
         // 1. 读取架构师角色卡
@@ -89,6 +89,7 @@ public class TopologyCompiler {
                    - 对于每个节点，你必须指定最合适的 `executor`。
                    - 填写 "omni"：当任务涉及逻辑推理、代码编写、搜索引擎、爬虫、文件读写、Bash 系统命令等无需物理视觉的任务。
                    - 填写 "operator"：【仅当】任务必须移动真实的物理鼠标、敲击键盘、或调用宿主机 GUI 打开真实软件时使用。
+                   - 填写 "external"：当任务需要调用外部成熟 Agent CLI（如 Claude Code、Codex、SWE-agent、Aider）时使用。也可指定具体类型："external:claude-code"、"external:codex"、"external:swe-agent"、"external:aider"。
 
                 2. 内存状态流转与变量引用 (Memory Context):
                    - 节点之间通过内存总线传递数据，而不是写死在硬盘。
@@ -160,9 +161,10 @@ public class TopologyCompiler {
                 }
 
                 规则：
-                1. 每个节点必须有 instanceId、role、executor（'omni' 或 'operator'）
+                1. 每个节点必须有 instanceId、role、executor（'omni'、'operator' 或 'external'）
                 2. executor='omni'：逻辑思考、写代码、文件读写、网页搜索、Bash 命令等纯数字任务（默认）
                 3. executor='operator'：仅当必须操作物理鼠标、键盘、查看屏幕截图时使用
+                3.1 executor='external'：调用外部成熟 Agent CLI（Claude Code/Codex/SWE-agent/Aider）。可指定具体类型如 "external:claude-code"、"external:codex"、"external:swe-agent"、"external:aider"
                 4. upstreamDependencies 数组声明该节点必须等待哪些上游节点完成后才能启动
                 5. 无依赖的并行节点的 upstreamDependencies 为空数组 []
                 6. 下游节点通过 {{上游节点ID.变量名}} 引用上游输出
@@ -177,7 +179,7 @@ public class TopologyCompiler {
         AiosSdk sdk = AiosSdk.getInstance();
         String response = sdk.think("topology_compiler", fullPrompt.toString());
 
-        log.debug("[TopologyCompiler] LLM raw response length: {}", response.length());
+        log.debug("[TopologyCompiler] LLM 原始响应长度: {}", response.length());
 
         // 5. 极其暴力的 JSON 截取清洗，防止大模型废话
         String cleanJson = extractPureJson(response);
@@ -201,7 +203,7 @@ public class TopologyCompiler {
                     sb.append("---\n# Role: ").append(roleName).append("\n");
                     sb.append(content.trim()).append("\n---\n\n");
                 } catch (Exception e) {
-                    log.warn("[TopologyCompiler] Role file not found: {} (skipped)", yamlPath);
+                    log.warn("[TopologyCompiler] 角色文件未找到: {} (skipped)", yamlPath);
                 }
             }
             if (!sb.isEmpty()) return sb.toString();
@@ -212,7 +214,7 @@ public class TopologyCompiler {
         try {
             return java.nio.file.Files.readString(java.nio.file.Path.of(defaultPath));
         } catch (Exception e) {
-            log.warn("[TopologyCompiler] Default architect role not found, using minimal rules");
+            log.warn("[TopologyCompiler] 默认架构师角色未找到，使用最小规则");
             return "动态粒度原则：根据任务复杂度决定节点数量。I/O 隔离铁律：一个数据源一个节点。Scatter-Gather：先并行收集再聚合。";
         }
     }
@@ -245,7 +247,7 @@ public class TopologyCompiler {
             }
             return sb.isEmpty() ? fullManifest : sb.toString();
         } catch (Exception e) {
-            log.warn("[TopologyCompiler] MANIFEST.md read failed: {}", e.getMessage());
+            log.warn("[TopologyCompiler] MANIFEST.md 读取失败: {}", e.getMessage());
             return "（技能说明读取失败，请使用标准库）";
         }
     }
@@ -262,6 +264,7 @@ public class TopologyCompiler {
                    - 对于每个节点，你必须指定最合适的 `executor`。
                    - 填写 "omni"：当任务涉及逻辑推理、代码编写、搜索引擎、爬虫、文件读写、Bash 系统命令等无需物理视觉的任务。
                    - 填写 "operator"：【仅当】任务必须移动真实的物理鼠标、敲击键盘、或调用宿主机 GUI 打开真实软件时使用。
+                   - 填写 "external"：当任务需要调用外部成熟 Agent CLI（如 Claude Code、Codex、SWE-agent、Aider）时使用。也可指定具体类型："external:claude-code"、"external:codex"、"external:swe-agent"、"external:aider"。
 
                 2. 内存状态流转与变量引用 (Memory Context):
                    - 节点之间通过内存总线传递数据，而不是写死在硬盘。
@@ -319,9 +322,10 @@ public class TopologyCompiler {
                 }
 
                 规则：
-                1. 每个节点必须有 instanceId、role、executor（'omni' 或 'operator'）
+                1. 每个节点必须有 instanceId、role、executor（'omni'、'operator' 或 'external'）
                 2. executor='omni'：逻辑思考、写代码、文件读写、网页搜索、Bash 命令等纯数字任务（默认）
                 3. executor='operator'：仅当必须操作物理鼠标、键盘、查看屏幕截图时使用
+                3.1 executor='external'：调用外部成熟 Agent CLI（Claude Code/Codex/SWE-agent/Aider）。可指定具体类型如 "external:claude-code"、"external:codex"、"external:swe-agent"、"external:aider"
                 4. upstreamDependencies 数组声明该节点必须等待哪些上游节点完成后才能启动
                 5. 无依赖的并行节点的 upstreamDependencies 为空数组 []
                 6. 下游节点通过 {{上游节点ID.变量名}} 引用上游输出
@@ -365,7 +369,7 @@ public class TopologyCompiler {
     private final Map<String, AgentBlueprint> blueprintRegistry = new HashMap<>();
 
     private TopologyCompiler() {
-        log.info("[OmniFactory] Topology Compiler initialized.");
+        log.info("[OmniFactory] Topology Compiler 已初始化。");
     }
 
     /**
@@ -375,7 +379,7 @@ public class TopologyCompiler {
      */
     public void registerBlueprint(AgentBlueprint blueprint) {
         blueprintRegistry.put(blueprint.blueprintId(), blueprint);
-        log.info("[OmniFactory] Blueprint registered: '{}'", blueprint.blueprintId());
+        log.info("[OmniFactory] Blueprint 已注册: '{}'", blueprint.blueprintId());
     }
 
     /**
@@ -383,7 +387,7 @@ public class TopologyCompiler {
      */
     public void registerBlueprints(Map<String, AgentBlueprint> blueprints) {
         blueprintRegistry.putAll(blueprints);
-        log.info("[OmniFactory] {} blueprints registered. Total: {}", blueprints.size(), blueprintRegistry.size());
+        log.info("[OmniFactory] {} 个 Blueprint 已注册。总计: {}", blueprints.size(), blueprintRegistry.size());
     }
 
     /**
@@ -419,7 +423,7 @@ public class TopologyCompiler {
                 你是一个顶级的 AGI 操作系统工作流编译器。请分析用户需求，将其拆解为带有严格依赖关系的 DAG。
 
                 【核心架构规范】
-                1. 每个节点必须指定 executor: "omni"（逻辑/代码/搜索/Bash）或 "operator"（物理鼠标/键盘/GUI）
+                1. 每个节点必须指定 executor: "omni"（逻辑/代码/搜索/Bash）、"operator"（物理鼠标/键盘/GUI）或 "external"（外部 Agent CLI，如 "external:claude-code"/"external:codex"/"external:swe-agent"/"external:aider"）
                 2. 节点间通过内存总线传递数据，下游用 {{上游节点ID.变量名}} 引用上游输出
                 3. upstreamDependencies 数组声明该节点必须等待的上游节点 ID
                 4. 批处理与迭代节点 (Iteration) 【极度重要】:
@@ -446,22 +450,30 @@ public class TopologyCompiler {
                 + "只输出 JSON，不要其他文字。";
 
         String topologyJson = sdk.think("topology_compiler", compilePrompt);
-        System.out.printf("[OmniFactory]   Topology JSON received (%d chars).%n", topologyJson.length());
+        System.out.printf("[OmniFactory]   已收到拓扑 JSON (%d chars).%n", topologyJson.length());
         log.debug("[OmniFactory] Topology JSON: {}", topologyJson);
 
         // ── Step 2: 解析 JSON 为 WorkflowNode 列表 ──
         List<WorkflowNode> nodes = parseTopologyJson(topologyJson);
-        System.out.printf("[OmniFactory]   Parsed %d workflow nodes.%n", nodes.size());
-        log.info("[OmniFactory] Parsed {} workflow nodes from LLM output.", nodes.size());
+        System.out.printf("[OmniFactory]   已解析 %d 个工作流节点.%n", nodes.size());
+        log.info("[OmniFactory] 已解析 {} 个工作流节点 from LLM output.", nodes.size());
 
         if (nodes.isEmpty()) {
             System.out.println("[OmniFactory]   ⚠ No nodes parsed. Returning empty manifest.");
-            log.warn("[OmniFactory] Topology parsing yielded 0 nodes.");
+            log.warn("[OmniFactory] 拓扑解析产生 0 个节点。");
             return new WorkflowManifest("empty_workflow", List.of());
         }
 
         // ── Step 3: 构建 WorkflowManifest ──
-        String workflowName = "wf_" + (userRequest.hashCode() & 0x7FFFFFFF);
+        // 优先使用 LLM 在 JSON 中生成的 workflowName（保留语义），
+        // 回退到基于用户输入的简短摘要
+        String workflowName = extractJsonValue(topologyJson, "workflowName");
+        if (workflowName == null || workflowName.isBlank()) {
+            // 从用户原始输入中提取前 20 字符作为摘要
+            workflowName = userRequest.length() > 20
+                    ? userRequest.substring(0, 20).trim()
+                    : userRequest.trim();
+        }
         WorkflowManifest manifest = new WorkflowManifest(workflowName, nodes);
 
         // ── Step 4: 蓝图校验 + 自动补全 ──
@@ -599,7 +611,7 @@ public class TopologyCompiler {
         // 提取 nodes 数组内容
         String nodesArray = extractNodesArray(cleaned);
         if (nodesArray == null || nodesArray.isBlank()) {
-            log.warn("[TopologyCompiler] No 'nodes' array found in LLM output");
+            log.warn("[TopologyCompiler] LLM 输出中未找到 'nodes' 数组");
             return nodes;
         }
 
@@ -610,6 +622,16 @@ public class TopologyCompiler {
             WorkflowNode node = parseSingleNode(obj);
             if (node != null) {
                 nodes.add(node);
+            }
+        }
+
+        // ── 解析 edges 数组（借鉴 Langflow Edge 路由） ──
+        String edgesArray = AppGateway.extractJsonArray(cleaned, "edges");
+        if (edgesArray != null && !edgesArray.isBlank()) {
+            List<WorkflowEdge> edges = parseEdges(edgesArray);
+            if (!edges.isEmpty()) {
+                WorkflowEngine.getInstance().setEdges(edges);
+                log.info("[TopologyCompiler] 已解析 {} 条 Edge，已设置到 WorkflowEngine。", edges.size());
             }
         }
 
@@ -652,6 +674,31 @@ public class TopologyCompiler {
         // 注入上游依赖
         for (String dep : upstreamDeps) {
             node.addDependency(dep.trim());
+        }
+
+        // ── 条件路由字段解析 ──
+        String condition = extractJsonValue(obj, "condition");
+        if (condition != null && !condition.isBlank()) {
+            node.setCondition(condition.trim());
+        }
+
+        // ── Frozen 字段解析 ──
+        String frozenStr = extractJsonValue(obj, "frozen");
+        if ("true".equalsIgnoreCase(frozenStr)) {
+            node.setFrozen(true);
+        }
+
+        // ── 声明式端口解析（借鉴 Langflow Edge 端口路由） ──
+        String inputPortsArray = AppGateway.extractJsonArray(obj, "inputPorts");
+        if (inputPortsArray != null && !inputPortsArray.isBlank()) {
+            List<Port> inputPorts = parsePorts(inputPortsArray);
+            node.setInputPorts(inputPorts);
+        }
+
+        String outputPortsArray = AppGateway.extractJsonArray(obj, "outputPorts");
+        if (outputPortsArray != null && !outputPortsArray.isBlank()) {
+            List<Port> outputPorts = parsePorts(outputPortsArray);
+            node.setOutputPorts(outputPorts);
         }
 
         // ── 迭代节点专属字段解析 ──
@@ -759,5 +806,46 @@ public class TopologyCompiler {
             return m.group(1);
         }
         return null;
+    }
+
+    /**
+     * 解析端口数组 JSON 为 Port 列表。
+     * <p>
+     * 匹配格式：[{"name": "data_in", "dataType": "json"}, ...]
+     */
+    private List<Port> parsePorts(String portsArray) {
+        List<Port> ports = new ArrayList<>();
+        List<String> rawPortObjs = AppGateway.splitJsonObjectsSafe(portsArray);
+        for (String portObj : rawPortObjs) {
+            String name = extractJsonValue(portObj, "name");
+            String dataType = extractJsonValue(portObj, "dataType");
+            if (name != null && !name.isBlank()) {
+                ports.add(new Port(name.trim(), dataType != null ? dataType.trim() : "any"));
+            }
+        }
+        return ports;
+    }
+
+    /**
+     * 解析边数组 JSON 为 WorkflowEdge 列表。
+     * <p>
+     * 匹配格式：[{"sourceNodeId": "a", "sourcePortName": "result", "targetNodeId": "b", "targetPortName": "data_in"}, ...]
+     */
+    private List<WorkflowEdge> parseEdges(String edgesArray) {
+        List<WorkflowEdge> edges = new ArrayList<>();
+        List<String> rawEdgeObjs = AppGateway.splitJsonObjectsSafe(edgesArray);
+        for (String edgeObj : rawEdgeObjs) {
+            String sourceNodeId = extractJsonValue(edgeObj, "sourceNodeId");
+            String sourcePortName = extractJsonValue(edgeObj, "sourcePortName");
+            String targetNodeId = extractJsonValue(edgeObj, "targetNodeId");
+            String targetPortName = extractJsonValue(edgeObj, "targetPortName");
+            if (sourceNodeId != null && targetNodeId != null
+                    && sourcePortName != null && targetPortName != null) {
+                edges.add(new WorkflowEdge(
+                        sourceNodeId.trim(), sourcePortName.trim(),
+                        targetNodeId.trim(), targetPortName.trim()));
+            }
+        }
+        return edges;
     }
 }

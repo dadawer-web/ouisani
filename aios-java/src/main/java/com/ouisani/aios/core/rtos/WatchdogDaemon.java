@@ -123,9 +123,9 @@ public final class WatchdogDaemon {
         scheduler.scheduleAtFixedRate(
                 this::watchdogTick, 0, CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
-        log.info("[WatchdogDaemon] Started: interval={}ms, watchdogTimeout={}ms",
+        log.info("[WatchdogDaemon] 已启动: 间隔 {}ms, 超时 {}ms",
                 CHECK_INTERVAL_MS, watchdogTimeoutMs);
-        System.out.printf("  ✓ [Watchdog] HARD RT WATCHDOG active (timeout=%ds, check=%dms)%n",
+        System.out.printf("  ✓ [Watchdog] 硬实时 Watchdog 已激活 (timeout=%ds, check=%dms)%n",
                 watchdogTimeoutMs / 1000, CHECK_INTERVAL_MS);
     }
 

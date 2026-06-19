@@ -80,6 +80,7 @@ module com.ouisani.aios {
     opens com.ouisani.aios.core.memory;
     opens com.ouisani.aios.core.memory.providers;
     opens com.ouisani.aios.core.network;
+    opens com.ouisani.aios.core.pipeline;
     opens com.ouisani.aios.core.permission;
     opens com.ouisani.aios.core.pkg;
     opens com.ouisani.aios.core.plugin;

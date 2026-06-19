@@ -56,8 +56,8 @@ public final class AiosApt {
         String wasmFileName = packageName + ".wasm";
         String toolName = "tool." + packageName;
 
-        System.out.printf("  📦 [APT] Fetching package from registry... %s/%s%n", REGISTRY_URL, wasmFileName);
-        log.info("[APT] Fetching package from registry: {}", wasmFileName);
+        System.out.printf("  📦 [APT] 正在从仓库获取包... %s/%s%n", REGISTRY_URL, wasmFileName);
+        log.info("[APT] 正在从仓库获取包: {}", wasmFileName);
 
         // Step 1: Simulate download
         byte[] bytecode = simulateDownload(packageName);
@@ -74,16 +74,16 @@ public final class AiosApt {
             Path wasmPath = pluginDir.resolve(wasmFileName);
             Files.write(wasmPath, bytecode);
         } catch (IOException e) {
-            System.out.printf("  📦 [APT] Failed to write plugin: %s%n", e.getMessage());
-            log.error("[APT] Write failed: {}", e.getMessage());
+            System.out.printf("  📦 [APT] 写入插件失败: %s%n", e.getMessage());
+            log.error("[APT] 写入插件失败: {}", e.getMessage());
             return;
         }
 
         // Step 3: Hot-load via PluginManager
         PluginManager.getInstance().registerPlugin(toolName, bytecode);
 
-        System.out.printf("  📦 [APT] Installed successfully! → %s (hot-loaded as %s)%n", wasmFileName, toolName);
-        log.info("[APT] Fetching package from registry... Installed successfully! → {}", wasmFileName);
+        System.out.printf("  📦 [APT] 安装成功! → %s (hot-loaded as %s)%n", wasmFileName, toolName);
+        log.info("[APT] 正在从仓库获取包... 安装成功! → {}", wasmFileName);
     }
 
     /**
@@ -99,8 +99,8 @@ public final class AiosApt {
             log.warn("[APT] Failed to delete plugin file: {}", e.getMessage());
         }
 
-        System.out.printf("  🗑 [APT] Package '%s' removed%n", packageName);
-        log.info("[APT] Package removed: {}", packageName);
+        System.out.printf("  🗑 [APT] 包 '%s' 已移除%n", packageName);
+        log.info("[APT] 包已移除: {}", packageName);
     }
 
     /**

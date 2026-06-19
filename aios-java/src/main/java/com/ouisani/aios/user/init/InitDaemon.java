@@ -126,27 +126,27 @@ public class InitDaemon extends AbstractAgent {
 
         System.out.println();
         System.out.println("  ╔══════════════════════════════════════════════════════════════╗");
-        System.out.println("  ║  [PID 1] InitDaemon taking control...                      ║");
-        System.out.println("  ║  Agent ID: sys_init_1 | Priority: REALTIME | Budget: ∞     ║");
+        System.out.println("  ║  [PID 1] InitDaemon 接管控制权...                           ║");
+        System.out.println("  ║  Agent ID: sys_init_1 | 优先级: REALTIME | 预算: ∞         ║");
         System.out.println("  ╚══════════════════════════════════════════════════════════════╝");
-        log.info("[PID 1] InitDaemon starting...");
+        log.info("[PID 1] InitDaemon 正在启动...");
 
         // ════════════════════════════════════════════════════════════════
         //  Phase 1: 硬件层 (Hardware Layer) — BIOS POST + 晶振起振
         // ════════════════════════════════════════════════════════════════
         currentPhase = BootPhase.HARDWARE;
         System.out.println();
-        System.out.println("  ┌─ Phase 1: Hardware Layer ──────────────────────────────────┐");
+        System.out.println("  ┌─ 阶段1：硬件层 ──────────────────────────────────────────┐");
 
         // 1a. SystemTickGenerator — 硬件晶振起振
         boolean tickOk = false;
         try {
             SystemTickGenerator.instance().start();
             tickOk = true;
-            System.out.println("  │  [HW] SystemTickGenerator: CRYSTAL OSCILLATOR STARTED ✓    │");
+            System.out.println("  │  [HW] SystemTickGenerator：晶振已启动 ✓                    │");
         } catch (Exception e) {
-            log.warn("[PID 1] SystemTickGenerator start failed: {}", e.getMessage());
-            System.out.println("  │  [HW] SystemTickGenerator: FAILED ✗                       │");
+            log.warn("[PID 1] SystemTickGenerator 启动失败：{}", e.getMessage());
+            System.out.println("  │  [HW] SystemTickGenerator：启动失败 ✗                      │");
         }
         bootResults.put("SystemTickGenerator", tickOk);
 
@@ -156,15 +156,15 @@ public class InitDaemon extends AbstractAgent {
             if (llmRouter != null) {
                 llmOk = llmRouter.isAvailable();
                 if (llmOk) {
-                    System.out.println("  │  [HW] LlmProvider: API CONNECTION VERIFIED ✓               │");
+                    System.out.println("  │  [HW] LlmProvider：API 连接已验证 ✓                        │");
                 } else {
-                    System.out.println("  │  [HW] LlmProvider: NO PROVIDER REGISTERED ⚠                │");
+                    System.out.println("  │  [HW] LlmProvider：未注册提供者 ⚠                          │");
                 }
             } else {
-                System.out.println("  │  [HW] LlmProvider: NOT CONFIGURED ⚠                        │");
+                System.out.println("  │  [HW] LlmProvider：未配置 ⚠                                │");
             }
         } catch (Exception e) {
-            System.out.println("  │  [HW] LlmProvider: CHECK FAILED ✗                          │");
+            System.out.println("  │  [HW] LlmProvider：检查失败 ✗                              │");
         }
         bootResults.put("LlmProvider", llmOk);
 
@@ -183,12 +183,12 @@ public class InitDaemon extends AbstractAgent {
                 authMgr.addProfile(new AuthProfile("backup-key", "openai",
                         envApiKey, envBaseUrl, 50));
                 authOk = true;
-                System.out.println("  │  [HW] AuthProfileManager: 2 PROFILES LOADED ✓              │");
+                System.out.println("  │  [HW] AuthProfileManager：已加载 2 个配置 ✓                │");
             } else {
-                System.out.println("  │  [HW] AuthProfileManager: NO API KEY IN ENV ⚠              │");
+                System.out.println("  │  [HW] AuthProfileManager：环境变量中无 API Key ⚠           │");
             }
         } catch (Exception e) {
-            System.out.println("  │  [HW] AuthProfileManager: INIT FAILED ✗                    │");
+            System.out.println("  │  [HW] AuthProfileManager：初始化失败 ✗                     │");
         }
         bootResults.put("AuthProfileManager", authOk);
 
@@ -197,9 +197,9 @@ public class InitDaemon extends AbstractAgent {
         try {
             VfsJournal.getInstance().open();
             journalOk = true;
-            System.out.println("  │  [HW] VfsJournal: WAL LOG READY ✓                          │");
+            System.out.println("  │  [HW] VfsJournal：WAL 日志就绪 ✓                            │");
         } catch (Exception e) {
-            System.out.println("  │  [HW] VfsJournal: OPEN FAILED ✗                            │");
+            System.out.println("  │  [HW] VfsJournal：打开失败 ✗                                │");
         }
         bootResults.put("VfsJournal", journalOk);
 
@@ -210,7 +210,7 @@ public class InitDaemon extends AbstractAgent {
         // ════════════════════════════════════════════════════════════════
         currentPhase = BootPhase.KERNEL;
         System.out.println();
-        System.out.println("  ┌─ Phase 2: Kernel Layer ────────────────────────────────────┐");
+        System.out.println("  ┌─ 阶段2：内核层 ────────────────────────────────────────────┐");
 
         // 2a. VFS 挂载 — 由 VfsManager.init() 完成（在 InitDaemon 之前已调用）
         boolean vfsOk = false;
@@ -218,12 +218,12 @@ public class InitDaemon extends AbstractAgent {
             VfsManager vfs = VfsManager.instance();
             vfsOk = vfs.resolve("/dev").isPresent() && vfs.resolve("/proc").isPresent();
             if (vfsOk) {
-                System.out.println("  │  [KERN] VFS: /, /dev, /proc, /var MOUNTED ✓                │");
+                System.out.println("  │  [KERN] VFS：/、/dev、/proc、/var 已挂载 ✓                  │");
             } else {
-                System.out.println("  │  [KERN] VFS: PARTIAL MOUNT ⚠                               │");
+                System.out.println("  │  [KERN] VFS：部分挂载 ⚠                                    │");
             }
         } catch (Exception e) {
-            System.out.println("  │  [KERN] VFS: MOUNT FAILED ✗                                │");
+            System.out.println("  │  [KERN] VFS：挂载失败 ✗                                    │");
         }
         bootResults.put("VFS", vfsOk);
 
@@ -232,9 +232,9 @@ public class InitDaemon extends AbstractAgent {
         try {
             BpfManager bpf = BpfManager.instance();
             bpfOk = true; // BpfManager 已初始化即视为 OK
-            System.out.println("  │  [KERN] BpfManager: SEMANTIC RULES LOADED ✓                │");
+            System.out.println("  │  [KERN] BpfManager：语义规则已加载 ✓                        │");
         } catch (Exception e) {
-            System.out.println("  │  [KERN] BpfManager: INIT FAILED ✗                          │");
+            System.out.println("  │  [KERN] BpfManager：初始化失败 ✗                            │");
         }
         bootResults.put("BpfManager", bpfOk);
 
@@ -242,11 +242,11 @@ public class InitDaemon extends AbstractAgent {
         boolean etwOk = false;
         try {
             SemanticEtw etw = SemanticEtw.getInstance();
-            etw.logEvent("BOOT", "KERNEL_INIT", "Phase 2 kernel layer initialized");
+            etw.logEvent("BOOT", "KERNEL_INIT", "阶段2 内核层已初始化");
             etwOk = true;
-            System.out.println("  │  [KERN] SemanticEtw: AUDIT TRAIL ACTIVE ✓                   │");
+            System.out.println("  │  [KERN] SemanticEtw：审计追踪已激活 ✓                       │");
         } catch (Exception e) {
-            System.out.println("  │  [KERN] SemanticEtw: INIT FAILED ✗                          │");
+            System.out.println("  │  [KERN] SemanticEtw：初始化失败 ✗                           │");
         }
         bootResults.put("SemanticEtw", etwOk);
 
@@ -257,16 +257,16 @@ public class InitDaemon extends AbstractAgent {
         // ════════════════════════════════════════════════════════════════
         currentPhase = BootPhase.SERVICE;
         System.out.println();
-        System.out.println("  ┌─ Phase 3: Service Layer ───────────────────────────────────┐");
+        System.out.println("  ┌─ 阶段3：服务层 ───────────────────────────────────────────┐");
 
         // 3a. WatchdogDaemon — 硬实时看门狗
         boolean watchdogOk = false;
         try {
             WatchdogDaemon.instance();
             watchdogOk = true;
-            System.out.println("  │  [SVC] WatchdogDaemon: HARD RT WATCHDOG ACTIVE ✓            │");
+            System.out.println("  │  [SVC] WatchdogDaemon：硬实时看门狗已激活 ✓                  │");
         } catch (Exception e) {
-            System.out.println("  │  [SVC] WatchdogDaemon: FAILED ✗                             │");
+            System.out.println("  │  [SVC] WatchdogDaemon：启动失败 ✗                            │");
         }
         bootResults.put("WatchdogDaemon", watchdogOk);
 
@@ -276,9 +276,9 @@ public class InitDaemon extends AbstractAgent {
             SystemMonitorDaemon.getInstance().configure(scheduler);
             SystemMonitorDaemon.getInstance().start();
             telemetryOk = true;
-            System.out.println("  │  [SVC] SystemMonitorDaemon: TELEMETRY HEARTBEAT 1s ✓        │");
+            System.out.println("  │  [SVC] SystemMonitorDaemon：遥测心跳 1s ✓                    │");
         } catch (Exception e) {
-            System.out.println("  │  [SVC] SystemMonitorDaemon: FAILED ✗                        │");
+            System.out.println("  │  [SVC] SystemMonitorDaemon：启动失败 ✗                       │");
         }
         bootResults.put("SystemMonitorDaemon", telemetryOk);
 
@@ -287,9 +287,9 @@ public class InitDaemon extends AbstractAgent {
         try {
             CognitiveDreamDaemon.instance().start();
             dreamOk = true;
-            System.out.println("  │  [SVC] CognitiveDreamDaemon: MEMORY CONSOLIDATION ✓         │");
+            System.out.println("  │  [SVC] CognitiveDreamDaemon：记忆巩固 ✓                      │");
         } catch (Exception e) {
-            System.out.println("  │  [SVC] CognitiveDreamDaemon: FAILED ✗                       │");
+            System.out.println("  │  [SVC] CognitiveDreamDaemon：启动失败 ✗                      │");
         }
         bootResults.put("CognitiveDreamDaemon", dreamOk);
 
@@ -301,20 +301,20 @@ public class InitDaemon extends AbstractAgent {
             PluginManager.getInstance().scanAndLoadPlugins(PLUGIN_DIR);
             pluginCount = PluginManager.getInstance().registeredPlugins().size();
             pluginOk = true;
-            System.out.printf("  │  [SVC] PluginManager: %d PLUGINS LOADED ✓                  │%n", pluginCount);
+            System.out.printf("  │  [SVC] PluginManager：已加载 %d 个插件 ✓                    │%n", pluginCount);
         } catch (Exception e) {
-            System.out.println("  │  [SVC] PluginManager: SCAN FAILED ✗                         │");
+            System.out.println("  │  [SVC] PluginManager：扫描失败 ✗                              │");
         }
         bootResults.put("PluginManager", pluginOk);
 
         // 3e. VFS Manifest 驱动启动 — 从 /etc/init/startup_manifest.json 读取业务进程清单
         boolean manifestOk = false;
         try {
-            System.out.println("  │  [SVC] Reading /etc/init/startup_manifest.json...              │");
+            System.out.println("  │  [SVC] 正在读取 /etc/init/startup_manifest.json...              │");
             manifestOk = bootFromVfsManifest();
         } catch (Exception e) {
-            log.warn("[PID 1] VFS manifest boot failed: {}", e.getMessage());
-            System.out.println("  │  [SVC] VFS Manifest Boot: FAILED ✗                          │");
+            log.warn("[PID 1] VFS manifest 引导失败：{}", e.getMessage());
+            System.out.println("  │  [SVC] VFS Manifest 引导：失败 ✗                            │");
         }
         bootResults.put("VfsManifestBoot", manifestOk);
 
@@ -331,14 +331,14 @@ public class InitDaemon extends AbstractAgent {
 
         System.out.println();
         System.out.println("  ╔══════════════════════════════════════════════════════════════╗");
-        System.out.printf("  ║  [PID 1] BOOT COMPLETE: %d/%d subsystems OK               ║%n", okCount, total);
-        System.out.printf("  ║  Boot time: %dms                                            ║%n", bootTimeMs);
+        System.out.printf("  ║  [PID 1] 引导完成：%d/%d 子系统正常                       ║%n", okCount, total);
+        System.out.printf("  ║  引导耗时：%dms                                            ║%n", bootTimeMs);
         System.out.println("  ║                                                             ║");
-        System.out.println("  ║  System reaches RUNLEVEL 5.                                ║");
-        System.out.println("  ║  User space is now fully operational!                      ║");
+        System.out.println("  ║  系统达到 RUNLEVEL 5。                                      ║");
+        System.out.println("  ║  用户空间已完全就绪！                                       ║");
         System.out.println("  ╚══════════════════════════════════════════════════════════════╝");
 
-        log.info("[PID 1] Boot complete: {}/{} subsystems OK, bootTime={}ms",
+        log.info("[PID 1] 引导完成：{}/{} 子系统正常，引导耗时={}ms",
                 okCount, total, bootTimeMs);
 
         SemanticEtw.getInstance().logEvent("BOOT", "RUNLEVEL_5",
@@ -365,8 +365,8 @@ public class InitDaemon extends AbstractAgent {
 
         if (manifestJson == null) {
             // Manifest 不存在，写入默认 manifest
-            System.out.println("  │  [SVC] No startup_manifest.json found, generating default... │");
-            log.info("[PID 1] No VFS manifest at '{}', generating default with AutoMedicAgent", manifestPath);
+            System.out.println("  │  [SVC] 未找到 startup_manifest.json，正在生成默认配置... │");
+            log.info("[PID 1] VFS 中未找到 '{}'，正在生成包含 AutoMedicAgent 的默认配置", manifestPath);
 
             // 确保 /etc/init 目录存在
             vfs.writeText("/etc/init/.keep", "");
@@ -377,7 +377,7 @@ public class InitDaemon extends AbstractAgent {
             // 生成默认 manifest — 包含系统基础进程
             manifestJson = generateDefaultManifest();
             vfs.writeText(manifestPath, manifestJson);
-            System.out.println("  │  [SVC] Default manifest written to VFS ✓                     │");
+            System.out.println("  │  [SVC] 默认 manifest 已写入 VFS ✓                           │");
         }
 
         // 解析 manifest JSON
@@ -390,14 +390,14 @@ public class InitDaemon extends AbstractAgent {
             // 传递给 WorkflowEngine 自动拉起进程
             WorkflowEngine.getInstance().executeWorkflow(manifest, blueprintRegistry);
 
-            System.out.printf("  │  [SVC] VFS Manifest Boot: %d processes launched ✓           │%n",
+            System.out.printf("  │  [SVC] VFS Manifest 引导：已启动 %d 个进程 ✓               │%n",
                     manifest.nodes().size());
-            System.out.println("[Kernel] Business logic purged. Booting strictly from VFS manifest.");
+            System.out.println("[内核] 业务逻辑已清除。严格从 VFS manifest 引导。");
 
             return true;
         } catch (Exception e) {
-            log.error("[PID 1] Failed to parse/execute VFS manifest: {}", e.getMessage());
-            System.out.println("  │  [SVC] VFS Manifest parse error: " + e.getMessage() + "   │");
+            log.error("[PID 1] 解析/执行 VFS manifest 失败：{}", e.getMessage());
+            System.out.println("  │  [SVC] VFS Manifest 解析错误：" + e.getMessage() + "   │");
             return false;
         }
     }
@@ -538,36 +538,36 @@ public class InitDaemon extends AbstractAgent {
      */
     private void spawnAiosShell() {
         System.out.println();
-        System.out.println("  ┌─ Spawning AiosShell (PID 2) ──────────────────────────────┐");
+        System.out.println("  ┌─ 正在启动 AiosShell (PID 2) ──────────────────────────────┐");
 
         try {
             AiosShell shell = new AiosShell(scheduler, llmRouter);
             shell.spawn(scheduler);
 
-            System.out.printf("  │  Shell PID: %d                                             │%n", shell.getPid());
-            System.out.println("  │  LLM Binding: E_CORE (efficiency core)                     │");
-            System.out.println("  │  Stdin:  /dev/stdin                                        │");
-            System.out.println("  │  Stdout: /dev/stdout                                       │");
-            System.out.println("  │  Prompt: aios>                                             │");
+            System.out.printf("  │  Shell PID：%d                                              │%n", shell.getPid());
+            System.out.println("  │  LLM 绑定：E_CORE（能效核）                                │");
+            System.out.println("  │  Stdin： /dev/stdin                                        │");
+            System.out.println("  │  Stdout：/dev/stdout                                       │");
+            System.out.println("  │  提示符：aios>                                             │");
             System.out.println("  └────────────────────────────────────────────────────────────┘");
 
-            log.info("[PID 1] AiosShell spawned as PID {}", shell.getPid());
+            log.info("[PID 1] AiosShell 已启动，PID：{}", shell.getPid());
 
             SemanticEtw.getInstance().logEvent("BOOT", "SHELL_SPAWNED",
                     "shellPid=" + shell.getPid());
 
         } catch (Exception e) {
-            log.error("[PID 1] Failed to spawn AiosShell: {}", e.getMessage());
-            System.out.println("  │  AiosShell: SPAWN FAILED ✗                                 │");
+            log.error("[PID 1] AiosShell 启动失败：{}", e.getMessage());
+            System.out.println("  │  AiosShell：启动失败 ✗                                      │");
             System.out.println("  └────────────────────────────────────────────────────────────┘");
         }
     }
 
     @Override
     protected void onMessage(String msg) {
-        log.info("[PID 1] Received message: {}", msg);
-        String response = sdk.think(agentId, "Init daemon received: " + msg);
-        System.out.printf("  [PID 1] Response: %s%n", response);
+        log.info("[PID 1] 收到消息：{}", msg);
+        String response = sdk.think(agentId, "Init 守护进程收到：" + msg);
+        System.out.printf("  [PID 1] 响应：%s%n", response);
     }
 
     /**

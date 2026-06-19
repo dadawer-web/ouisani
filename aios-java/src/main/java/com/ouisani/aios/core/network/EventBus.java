@@ -41,11 +41,11 @@ public class EventBus {
     public void register(SseClient client) {
         String id = clientId(client);
         clients.put(id, client);
-        log.info("[EventBus] SSE client connected: {} (total: {})", id, clients.size());
+        log.info("[EventBus] SSE 客户端已连接: {} (总数: {})", id, clients.size());
 
         client.onClose(() -> {
             clients.remove(id);
-            log.info("[EventBus] SSE client disconnected: {} (total: {})", id, clients.size());
+            log.info("[EventBus] SSE 客户端已断开: {} (总数: {})", id, clients.size());
         });
     }
 
@@ -61,7 +61,7 @@ public class EventBus {
     public String subscribe(String eventType, Consumer<String> handler) {
         subscribers.computeIfAbsent(eventType, k -> new CopyOnWriteArrayList<>()).add(handler);
         String subId = eventType + ":" + System.identityHashCode(handler);
-        log.info("[EventBus] Subscriber registered for channel '{}' (total subscribers: {}), subId={}",
+        log.info("[EventBus] 订阅者已注册: 通道 '{}' (订阅者总数: {}), subId={}",
                 eventType, subscribers.get(eventType).size(), subId);
         return subId;
     }
@@ -76,7 +76,7 @@ public class EventBus {
     public void unsubscribe(String eventType, Consumer<String> handler) {
         List<Consumer<String>> handlers = subscribers.get(eventType);
         if (handlers != null && handlers.remove(handler)) {
-            log.info("[EventBus] Subscriber removed from channel '{}' (remaining: {})",
+            log.info("[EventBus] 已取消订阅: 通道 '{}' (剩余: {})",
                     eventType, handlers.size());
         }
     }
@@ -84,14 +84,14 @@ public class EventBus {
     public void broadcast(String eventType, String payload) {
         // Notify SSE clients
         if (!clients.isEmpty()) {
-            log.debug("[EventBus] Broadcasting event: type={}, payloadLen={}, clients={}",
+            log.debug("[EventBus] 正在广播事件: type={}, payloadLen={}, clients={}",
                     eventType, payload.length(), clients.size());
             clients.forEach((id, client) -> {
                 try {
                     client.sendEvent(eventType, payload);
                 } catch (Exception e) {
                     clients.remove(id);
-                    log.warn("[EventBus] Failed to send to client {}, removing: {}", id, e.getMessage());
+                    log.warn("[EventBus] 发送失败，移除客户端 {}: {}", id, e.getMessage());
                 }
             });
         }
@@ -103,7 +103,7 @@ public class EventBus {
                 try {
                     handler.accept(payload);
                 } catch (Exception e) {
-                    log.warn("[EventBus] Subscriber handler error on '{}': {}", eventType, e.getMessage());
+                    log.warn("[EventBus] 订阅者处理器错误，通道 '{}': {}", eventType, e.getMessage());
                 }
             }
         }

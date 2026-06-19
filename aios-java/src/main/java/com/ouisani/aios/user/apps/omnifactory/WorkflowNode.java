@@ -30,11 +30,25 @@ public class WorkflowNode {
     // ── 运行时状态字段（DAG 状态机） ──
     private List<String> upstreamDependencies = new ArrayList<>();
 
-    public enum Status { PENDING, RUNNING, SUCCESS, FAILED, SKIPPED }
+    public enum Status { PENDING, RUNNING, SUCCESS, FAILED, SKIPPED, SUSPENDED }
     private volatile Status status = Status.PENDING;
 
     // 节点的内存输出：执行完毕后，结果存入此 Map 供下游节点读取
     private Map<String, Object> outputData = new ConcurrentHashMap<>();
+
+    // ── 条件路由字段（借鉴 Langflow ConditionalRouter） ──
+    // 当条件表达式求值为 false 时，此节点被标记为 SKIPPED
+    // 格式： "{{upstream_node.result_type}} == 'success'" 或 "{{search_result.count}} > 0"
+    private String condition;
+
+    public String getCondition() { return condition; }
+    public void setCondition(String condition) { this.condition = condition; }
+
+    // ── Frozen 缓存字段（借鉴 Langflow Frozen Vertex） ──
+    private boolean frozen = false;
+
+    public boolean isFrozen() { return frozen; }
+    public void setFrozen(boolean frozen) { this.frozen = frozen; }
 
     // ================= 迭代节点 (Iteration) 专属属性 =================
     // 标识这是一个特殊的控制流节点（默认为 false）
@@ -49,6 +63,10 @@ public class WorkflowNode {
     // 迭代节点内部包裹的子节点集合（子 DAG 图纸）
     private List<WorkflowNode> childNodes = new ArrayList<>();
     // =================================================================
+
+    // ── 声明式端口字段（借鉴 Langflow Component 的 inputs/outputs） ──
+    private List<Port> inputPorts = new ArrayList<>();
+    private List<Port> outputPorts = new ArrayList<>();
 
     // ════════════════════════════════════════════════════════════════
     //  构造函数
@@ -118,6 +136,26 @@ public class WorkflowNode {
 
     public List<WorkflowNode> getChildNodes() { return childNodes; }
     public void setChildNodes(List<WorkflowNode> childNodes) { this.childNodes = childNodes; }
+
+    // ════════════════════════════════════════════════════════════════
+    //  声明式端口访问器（借鉴 Langflow Edge 端口路由）
+    // ════════════════════════════════════════════════════════════════
+
+    public List<Port> inputPorts() { return inputPorts; }
+    public void setInputPorts(List<Port> ports) { this.inputPorts = ports != null ? ports : new ArrayList<>(); }
+
+    public List<Port> outputPorts() { return outputPorts; }
+    public void setOutputPorts(List<Port> ports) { this.outputPorts = ports != null ? ports : new ArrayList<>(); }
+
+    /** 根据端口名获取输出端口 */
+    public Port getOutputPort(String name) {
+        return outputPorts.stream().filter(p -> p.name().equals(name)).findFirst().orElse(null);
+    }
+
+    /** 根据端口名获取输入端口 */
+    public Port getInputPort(String name) {
+        return inputPorts.stream().filter(p -> p.name().equals(name)).findFirst().orElse(null);
+    }
 
     @Override
     public String toString() {

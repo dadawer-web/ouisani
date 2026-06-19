@@ -109,5 +109,11 @@ public enum SignalType {
      *
      * @see com.ouisani.aios.core.sandbox.GraalWasmSandbox
      */
-    SIGSEGV
+    SIGSEGV,
+
+    /** 挂起：暂停 Agent 执行（类比 Linux SIGSTOP），前端 Pause 按钮触发 */
+    SIGSTOP,
+
+    /** 恢复：恢复被挂起的 Agent 执行（类比 Linux SIGCONT），前端 Resume 按钮触发 */
+    SIGCONT
 }

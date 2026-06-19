@@ -46,8 +46,21 @@ public class BoulderStateManager {
             Files.createDirectories(Paths.get(STATE_DIR));
             log.info("[Boulder State] State directory initialized: {}", STATE_DIR);
         } catch (Exception e) {
-            log.error("[Boulder State] Failed to initialize state directory.", e);
+            log.error("[Boulder State] 初始化状态目录失败。", e);
         }
+    }
+
+    /**
+     * 将任意字符串安全化为文件名组件：去掉路径分隔符等危险字符，
+     * 防止 workflowId/nodeId 中的 '/' 被解释为子目录。
+     */
+    private static String sanitizeForFilename(String raw) {
+        if (raw == null) return "unknown";
+        return raw
+                .replace("/", "_")
+                .replace("\\", "_")
+                .replace("..", "_")
+                .replaceAll("[\\\\/:*?\"<>|]", "_");
     }
 
     /**
@@ -55,11 +68,13 @@ public class BoulderStateManager {
      */
     public static void saveCheckpoint(BoulderCheckpoint checkpoint) {
         try {
-            Path path = Paths.get(STATE_DIR, checkpoint.getWorkflowId() + "_" + checkpoint.getNodeId() + ".json");
+            String safeWorkflowId = sanitizeForFilename(checkpoint.getWorkflowId());
+            String safeNodeId = sanitizeForFilename(checkpoint.getNodeId());
+            Path path = Paths.get(STATE_DIR, safeWorkflowId + "_" + safeNodeId + ".json");
             mapper.writeValue(path.toFile(), checkpoint);
-            log.debug("[Boulder State] Checkpoint secured for node: {}", checkpoint.getNodeId());
+            log.debug("[Boulder State] 节点检查点已保存: {}", checkpoint.getNodeId());
         } catch (Exception e) {
-            log.error("[Boulder State] Failed to save checkpoint for node: {}", checkpoint.getNodeId(), e);
+            log.error("[Boulder State] 保存检查点失败，节点: {}", checkpoint.getNodeId(), e);
         }
     }
 
@@ -68,14 +83,16 @@ public class BoulderStateManager {
      */
     public static Optional<BoulderCheckpoint> loadCheckpoint(String workflowId, String nodeId) {
         try {
-            File file = new File(STATE_DIR, workflowId + "_" + nodeId + ".json");
+            String safeWorkflowId = sanitizeForFilename(workflowId);
+            String safeNodeId = sanitizeForFilename(nodeId);
+            File file = new File(STATE_DIR, safeWorkflowId + "_" + safeNodeId + ".json");
             if (file.exists()) {
                 BoulderCheckpoint checkpoint = mapper.readValue(file, BoulderCheckpoint.class);
-                log.debug("[Boulder State] Checkpoint loaded for node: {} (status={})", nodeId, checkpoint.getStatus());
+                log.debug("[Boulder State] 节点检查点已加载: {} (status={})", nodeId, checkpoint.getStatus());
                 return Optional.of(checkpoint);
             }
         } catch (Exception e) {
-            log.error("[Boulder State] Corruption detected in checkpoint file for node: {}", nodeId, e);
+            log.error("[Boulder State] 检查点文件检测到损坏，节点: {}", nodeId, e);
         }
         return Optional.empty();
     }
@@ -85,8 +102,9 @@ public class BoulderStateManager {
      */
     public static void cleanWorkflowCheckpoints(String workflowId) {
         try {
+            String safeWorkflowId = sanitizeForFilename(workflowId);
             File dir = new File(STATE_DIR);
-            File[] files = dir.listFiles((d, name) -> name.startsWith(workflowId + "_"));
+            File[] files = dir.listFiles((d, name) -> name.startsWith(safeWorkflowId + "_"));
             if (files != null) {
                 for (File file : files) {
                     Files.deleteIfExists(file.toPath());
@@ -103,10 +121,12 @@ public class BoulderStateManager {
      */
     public static void deleteCheckpoint(String workflowId, String nodeId) {
         try {
-            Path path = Paths.get(STATE_DIR, workflowId + "_" + nodeId + ".json");
+            String safeWorkflowId = sanitizeForFilename(workflowId);
+            String safeNodeId = sanitizeForFilename(nodeId);
+            Path path = Paths.get(STATE_DIR, safeWorkflowId + "_" + safeNodeId + ".json");
             Files.deleteIfExists(path);
         } catch (Exception e) {
-            log.error("[Boulder State] Failed to delete checkpoint for node: {}", nodeId, e);
+            log.error("[Boulder State] 删除检查点失败，节点: {}", nodeId, e);
         }
     }
 
@@ -115,14 +135,15 @@ public class BoulderStateManager {
      */
     public static List<BoulderCheckpoint> listWorkflowCheckpoints(String workflowId) {
         List<BoulderCheckpoint> checkpoints = new ArrayList<>();
+        String safeWorkflowId = sanitizeForFilename(workflowId);
         File dir = new File(STATE_DIR);
-        File[] files = dir.listFiles((d, name) -> name.startsWith(workflowId + "_") && name.endsWith(".json"));
+        File[] files = dir.listFiles((d, name) -> name.startsWith(safeWorkflowId + "_") && name.endsWith(".json"));
         if (files != null) {
             for (File file : files) {
                 try {
                     checkpoints.add(mapper.readValue(file, BoulderCheckpoint.class));
                 } catch (Exception e) {
-                    log.warn("[Boulder State] Corrupted checkpoint file: {}", file.getName());
+                    log.warn("[Boulder State] 损坏的检查点文件: {}", file.getName());
                 }
             }
         }
@@ -133,8 +154,9 @@ public class BoulderStateManager {
      * 检查指定工作流是否有检查点（用于判断是否需要断点续传）。
      */
     public static boolean hasCheckpoints(String workflowId) {
+        String safeWorkflowId = sanitizeForFilename(workflowId);
         File dir = new File(STATE_DIR);
-        File[] files = dir.listFiles((d, name) -> name.startsWith(workflowId + "_") && name.endsWith(".json"));
+        File[] files = dir.listFiles((d, name) -> name.startsWith(safeWorkflowId + "_") && name.endsWith(".json"));
         return files != null && files.length > 0;
     }
 

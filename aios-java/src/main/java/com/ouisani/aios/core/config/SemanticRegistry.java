@@ -48,12 +48,12 @@ public final class SemanticRegistry {
         setValue("HKEY_LOCAL_AIOS/Cgroup/AgentDefaultQuota", "50000");
         setValue("HKEY_LOCAL_AIOS/Cgroup/SwapThresholdRatio", "0.95");
 
-        log.info("[SemanticRegistry] Initialized with {} default entries", tree.size());
+        log.info("[SemanticRegistry] 已初始化，默认条目数: {}", tree.size());
     }
 
     public void setValue(String key, String value) {
         tree.put(key, value);
-        log.debug("[SemanticRegistry] SET: {} = {}", key, value);
+        log.debug("[SemanticRegistry] 设置: {} = {}", key, value);
     }
 
     public String getValue(String key) {
@@ -67,7 +67,7 @@ public final class SemanticRegistry {
     public boolean removeKey(String key) {
         String removed = tree.remove(key);
         if (removed != null) {
-            log.debug("[SemanticRegistry] REMOVED: {}", key);
+            log.debug("[SemanticRegistry] 已移除: {}", key);
             return true;
         }
         return false;

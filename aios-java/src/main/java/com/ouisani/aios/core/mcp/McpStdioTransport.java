@@ -56,7 +56,7 @@ public class McpStdioTransport implements McpTransport {
 
     private void doStart() throws IOException {
 
-        log.info("[MCP Transport] Booting Stdio process: {}", String.join(" ", pendingCommand));
+        log.info("[MCP Transport] 启动 Stdio 进程: {}", String.join(" ", pendingCommand));
         ProcessBuilder pb = new ProcessBuilder(pendingCommand);
         // 极其重要：合并错误流，防止子进程因为 stderr 写满而阻塞死锁
         pb.redirectErrorStream(true);
@@ -82,14 +82,14 @@ public class McpStdioTransport implements McpTransport {
                 }
             }
         } catch (IOException e) {
-            log.error("[MCP Stdio] Read loop terminated unexpectedly.", e);
+            log.error("[MCP Stdio] 读取循环意外终止", e);
         } finally {
-            log.warn("[MCP Stdio] Process stream closed.");
+            log.warn("[MCP Stdio] 进程流已关闭");
         }
     }
 
     public synchronized void send(String jsonMessage) throws IOException {
-        if (writer == null) throw new IOException("Transport not started");
+        if (writer == null) throw new IOException("传输层未启动，请先调用 start()");
         log.debug("[MCP Stdio] SEND: {}", jsonMessage);
         writer.write(jsonMessage);
         writer.newLine(); // 必须发送换行符

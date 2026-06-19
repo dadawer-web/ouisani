@@ -144,7 +144,7 @@ public class AstSearchTool implements Tool<AstSearchTool.Input> {
             return ToolOutput.ok(sb.toString());
 
         } catch (RuntimeException e) {
-            log.warn("[AstSearch] Search failed: {}", e.getMessage());
+            log.warn("[AstSearch] 搜索失败: {}", e.getMessage());
             throw e; // 让自愈引擎处理
         } catch (Exception e) {
             return ToolOutput.fail("AST search error: " + e.getMessage());

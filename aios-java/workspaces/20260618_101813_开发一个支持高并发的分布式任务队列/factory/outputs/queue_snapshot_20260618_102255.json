@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026-06-18T10:22:55.334029",
+  "status": {
+    "pending_tasks": 2,
+    "delayed_tasks": 0,
+    "total_submitted": 6,
+    "priority_distribution": {
+      "3": 1,
+      "5": 2,
+      "2": 1,
+      "4": 1,
+      "1": 1
+    },
+    "queue_length": 2,
+    "timestamp": 1781749375.3342896
+  },
+  "pending_tasks": [
+    {
+      "task_id": "task_b0194b4c",
+      "priority": 5,
+      "created_at": 1781749372.3336332,
+      "payload": {
+        "type": "delayed",
+        "data": "delayed work"
+      }
+    },
+    {
+      "task_id": "task_c47d6687",
+      "priority": 5,
+      "created_at": 1781749372.333693,
+      "payload": {
+        "batch": 4,
+        "data": "batch item 4"
+      }
+    }
+  ],
+  "delayed_tasks": []
+}

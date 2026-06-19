@@ -1,0 +1,47 @@
+═══════════════════════════════════════════════════
+  AIOS Semantic Core Dump
+  Node: create_frontend
+  Role: 生成HTML/JS前端文件，调用后端REST API实现番茄钟界面，包含开始计时和结束按钮，自动引用后端API配置
+  Executor: omni
+  Timestamp: 2026-06-19T17:02:05.098541376Z
+  Duration: 696592ms
+  Trace ID: (none)
+═══════════════════════════════════════════════════
+
+── CRASH INFO ──
+Exception: java.util.concurrent.CompletionException
+Message: java.lang.RuntimeException: Agent 在 3 次自愈尝试后失败。最后错误: Node create_frontend 未验证通过。LLM 响应: 
+[RECOVERY STRATEGY APPLIED: Fallback recovery: generic retry prompt injected]
+Cause: java.lang.RuntimeException: Agent 在 3 次自愈尝试后失败。最后错误: Node create_frontend 未验证通过。LLM 响应: 
+[RECOVERY STRATEGY APPLIED: Fallback recovery: generic retry prompt injected]
+
+StackTrace:
+  at java.base/java.util.concurrent.CompletableFuture.reportJoin(CompletableFuture.java:413)
+  at java.base/java.util.concurrent.CompletableFuture.join(CompletableFuture.java:2118)
+  at com.ouisani.aios.user.apps.omnifactory.WorkflowEngine.executeNode(WorkflowEngine.java:537)
+  at com.ouisani.aios.user.apps.omnifactory.WorkflowEngine.lambda$executeDagInternal$2(WorkflowEngine.java:275)
+  at java.base/java.util.concurrent.CompletableFuture.uniHandle(CompletableFuture.java:934)
+  at java.base/java.util.concurrent.CompletableFuture$UniHandle.tryFire(CompletableFuture.java:911)
+  at java.base/java.util.concurrent.CompletableFuture$Completion.run(CompletableFuture.java:482)
+  at java.base/java.util.concurrent.ThreadPerTaskExecutor$TaskRunner.run(ThreadPerTaskExecutor.java:314)
+  at java.base/java.lang.VirtualThread.run(VirtualThread.java:329)
+
+── VARIABLE SNAPSHOT ──
+  (empty)
+
+── UPSTREAM OUTPUTS ──
+
+── NODE BLUEPRINT ──
+  BlueprintId: agentNode
+  Role: 生成HTML/JS前端文件，调用后端REST API实现番茄钟界面，包含开始计时和结束按钮，自动引用后端API配置
+  Subscribe: topic_create_backend_create_frontend
+  Publish: 
+
+── BOULDER CHECKPOINT HISTORY ──
+  (no previous checkpoint)
+
+── VFS MOUNT STATE ──
+
+═══════════════════════════════════════════════════
+  END OF CORE DUMP
+═══════════════════════════════════════════════════

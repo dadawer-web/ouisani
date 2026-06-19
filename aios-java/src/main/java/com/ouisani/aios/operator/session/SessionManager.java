@@ -429,7 +429,7 @@ public class SessionManager {
                 }
             }
         } catch (Exception e) {
-            log.warn("[SessionManager] OOM Killer check failed (non-fatal): {}", e.getMessage());
+            log.warn("[SessionManager] OOM Killer 检查失败（非致命）: {}", e.getMessage());
         }
 
         return new SessionContext(messages, thinkingLevel, provider, modelId);

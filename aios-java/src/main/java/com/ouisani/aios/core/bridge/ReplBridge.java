@@ -49,7 +49,7 @@ public class ReplBridge {
      */
     public void sendMessage(String message) {
         if (session == null) {
-            log.warn("[ReplBridge] No active session");
+            log.warn("[ReplBridge] 无活跃会话");
             return;
         }
         session.appendMessage(message);

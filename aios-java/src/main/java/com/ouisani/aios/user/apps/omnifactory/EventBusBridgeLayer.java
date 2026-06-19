@@ -130,7 +130,7 @@ public class EventBusBridgeLayer extends GraphEngineLayer {
             // EventBus.broadcast 接受 String, String
             EventBus.instance().broadcast(DAG_EVENT_CHANNEL, JSON.writeValueAsString(message));
         } catch (Exception e) {
-            log.debug("[EventBusBridge] Broadcast failed: {}", e.getMessage());
+            log.debug("[EventBusBridge] 广播失败: {}", e.getMessage());
         }
     }
 }

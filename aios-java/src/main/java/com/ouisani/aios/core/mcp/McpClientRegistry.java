@@ -78,7 +78,7 @@ public class McpClientRegistry {
      */
     public synchronized void mountServer(String serverName, List<String> commandArgs) {
         if (clients.containsKey(serverName)) {
-            log.warn("[MCP Registry] Server '{}' is already mounted.", serverName);
+            log.warn("[MCP Registry] 服务器 '{}' 已挂载", serverName);
             return;
         }
 
@@ -95,9 +95,9 @@ public class McpClientRegistry {
             conn.setState(ConnectionState.CONNECTED);
             connections.put(serverName, conn);
 
-            log.info("[MCP Registry] Successfully mounted server '{}'.", serverName);
+            log.info("[MCP Registry] 服务器 '{}' 挂载成功", serverName);
         } catch (Exception e) {
-            log.error("[MCP Registry] Failed to mount server '{}': {}", serverName, e.getMessage());
+            log.error("[MCP Registry] 服务器 '{}' 挂载失败: {}", serverName, e.getMessage());
 
             // 记录失败状态
             McpConnection conn = new McpConnection(serverName, new McpConfigManager.McpServerConfig(
@@ -121,7 +121,7 @@ public class McpClientRegistry {
      */
     public synchronized void mountHttpServer(String serverName, String serverUrl, Map<String, String> headers) {
         if (clients.containsKey(serverName)) {
-            log.warn("[MCP Registry] Server '{}' is already mounted.", serverName);
+            log.warn("[MCP Registry] 服务器 '{}' 已挂载", serverName);
             return;
         }
 
@@ -139,9 +139,9 @@ public class McpClientRegistry {
             conn.setState(ConnectionState.CONNECTED);
             connections.put(serverName, conn);
 
-            log.info("[MCP Registry] Successfully mounted HTTP server '{}'.", serverName);
+            log.info("[MCP Registry] HTTP 服务器 '{}' 挂载成功", serverName);
         } catch (Exception e) {
-            log.error("[MCP Registry] Failed to mount HTTP server '{}': {}", serverName, e.getMessage());
+            log.error("[MCP Registry] HTTP 服务器 '{}' 挂载失败: {}", serverName, e.getMessage());
 
             McpConnection conn = new McpConnection(serverName, new McpConfigManager.McpServerConfig(
                     serverName, "http", serverUrl, null, headers, Map.of(),
@@ -161,7 +161,7 @@ public class McpClientRegistry {
             client.disconnect();
         }
         connections.remove(serverName);
-        log.info("[MCP Registry] Server '{}' unmounted.", serverName);
+        log.info("[MCP Registry] 服务器 '{}' 已卸载", serverName);
     }
 
     /**
@@ -170,7 +170,7 @@ public class McpClientRegistry {
     public McpClient getClient(String serverName) {
         McpClient client = clients.get(serverName);
         if (client == null) {
-            throw new RuntimeException("MCP server '" + serverName + "' is not mounted or offline.");
+            throw new RuntimeException("MCP 服务器 '" + serverName + "' 未挂载或离线");
         }
         return client;
     }
@@ -183,7 +183,7 @@ public class McpClientRegistry {
         clients.clear();
         connections.values().forEach(c -> c.setState(ConnectionState.DISCONNECTED));
         connections.clear();
-        log.info("[MCP Registry] All servers unmounted.");
+        log.info("[MCP Registry] 所有服务器已卸载");
     }
 
     // ── 旧架构兼容 API ──
@@ -200,7 +200,7 @@ public class McpClientRegistry {
         connections.put(serverName, conn);
 
         if (clients.containsKey(serverName)) {
-            log.info("[McpClientRegistry] Server '{}' already has a live client, skipping.", serverName);
+            log.info("[McpClientRegistry] 服务器 '{}' 已有活跃客户端，跳过", serverName);
             return conn;
         }
 
@@ -214,7 +214,7 @@ public class McpClientRegistry {
             } else if ("http".equals(type) || "sse".equals(type)) {
                 String url = config.url();
                 if (url == null || url.isEmpty()) {
-                    throw new RuntimeException("HTTP/SSE server requires a valid URL");
+                    throw new RuntimeException("HTTP/SSE 服务器需要有效的 URL");
                 }
                 // 旧版 sse 类型映射到 http
                 Map<String, String> headers = config.headers() != null ? config.headers() : Map.of();
@@ -224,15 +224,15 @@ public class McpClientRegistry {
                 clients.put(serverName, client);
                 conn.setState(ConnectionState.CONNECTED);
             } else {
-                log.warn("[McpClientRegistry] Unsupported transport type '{}' for server '{}'", type, serverName);
+                log.warn("[McpClientRegistry] 不支持的传输类型 '{}'，服务器 '{}'", type, serverName);
                 conn.setState(ConnectionState.FAILED);
             }
         } catch (Exception e) {
-            log.error("[MCP Registry] Auto-mount failed for '{}': {}", serverName, e.getMessage());
+            log.error("[MCP Registry] 服务器 '{}' 自动挂载失败: {}", serverName, e.getMessage());
             conn.setState(ConnectionState.FAILED);
         }
 
-        log.info("[McpClientRegistry] Registered: {} (type: {})", serverName, type);
+        log.info("[McpClientRegistry] 已注册: {} (类型: {})", serverName, type);
         return conn;
     }
 
@@ -271,7 +271,7 @@ public class McpClientRegistry {
         clients.clear();
         connections.values().forEach(c -> c.setState(ConnectionState.DISCONNECTED));
         connections.clear();
-        log.info("[McpClientRegistry] All connections closed");
+        log.info("[McpClientRegistry] 所有连接已关闭");
     }
 
     /** 兼容旧 hasServer() */
@@ -303,14 +303,14 @@ public class McpClientRegistry {
 
                 return MAPPER.treeToValue(result, Map.class);
             } catch (Exception e) {
-                return Map.of("error", "MCP call failed: " + e.getMessage());
+                return Map.of("error", "MCP 调用失败: " + e.getMessage());
             }
         }
 
         // 回退到旧架构的 stub
         McpConnection conn = connections.get(serverName);
         if (conn == null) {
-            return Map.of("error", "MCP server '" + serverName + "' not connected");
+            return Map.of("error", "MCP 服务器 '" + serverName + "' 未连接");
         }
         return Map.of("server", serverName, "tool", toolName, "args", args, "status", "dispatched");
     }
@@ -361,7 +361,7 @@ public class McpClientRegistry {
                 }
             }
         } catch (Exception e) {
-            log.debug("[MCP Registry] Tool sync skipped for '{}': {}", serverName, e.getMessage());
+            log.debug("[MCP Registry] 服务器 '{}' 工具同步跳过: {}", serverName, e.getMessage());
         }
     }
 }

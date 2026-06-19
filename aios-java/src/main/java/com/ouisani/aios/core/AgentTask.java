@@ -94,6 +94,24 @@ public final class AgentTask {
     /** 待处理信号队列 — 类比 POSIX 信号队列（SIGTERM/SIGINT/SIGUSR1） */
     private final ConcurrentLinkedQueue<SignalType> pendingSignals;
 
+    // ── SIGSTOP/SIGCONT 进程控制（借鉴 Agent Zero 的 Pause/Resume） ──
+    private volatile boolean paused = false;
+
+    public boolean isPaused() { return paused; }
+
+    public void setPaused(boolean paused) {
+        this.paused = paused;
+        if (paused) {
+            log.info("[AgentTask:{}] 收到 SIGSTOP，进程已挂起", pid);
+        } else {
+            log.info("[AgentTask:{}] 收到 SIGCONT，进程已恢复", pid);
+            // 唤醒可能在等待的线程
+            synchronized (this) {
+                notifyAll();
+            }
+        }
+    }
+
     /**
      * 构造 Agent 任务控制块。
      * <p>

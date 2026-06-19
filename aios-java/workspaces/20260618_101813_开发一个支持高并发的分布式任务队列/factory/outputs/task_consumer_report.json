@@ -1,0 +1,16 @@
+{
+  "agent_id": "test_task_consumer",
+  "execution_summary": {
+    "total_tasks_processed": 10,
+    "successful_tasks": 10,
+    "failed_tasks": 0,
+    "success_rate": 100.0
+  },
+  "configuration": {
+    "max_workers": 3,
+    "heartbeat_interval": 5.0,
+    "task_timeout": 60.0
+  },
+  "shutdown_time": 1781749283.9251866,
+  "status": "shutdown_complete"
+}

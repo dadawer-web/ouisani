@@ -1,12 +1,21 @@
 package com.ouisani.aios.core.network;
 
+import com.ouisani.aios.core.a2a.A2aFederation;
+import com.ouisani.aios.core.a2a.A2aMessage;
+import com.ouisani.aios.core.a2a.A2aNodeDescriptor;
+import com.ouisani.aios.core.a2a.A2aProtocol;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.syscall.SyscallDispatcher;
 import com.ouisani.aios.core.syscall.SyscallRequest;
 import com.ouisani.aios.core.TaskScheduler;
+import com.ouisani.aios.core.ipc.SignalType;
+import com.ouisani.aios.core.ipc.VariablePool;
+import com.ouisani.aios.core.workspace.ProjectWorkspaceManager;
+import com.ouisani.aios.core.workspace.ProjectWorkspaceManager.ProjectWorkspace;
 import com.ouisani.aios.user.apps.omnifactory.OmniMotherAgent;
 import com.ouisani.aios.user.apps.omnifactory.OperatorAgent;
 import com.ouisani.aios.user.apps.omnifactory.TopologyCompiler;
+import com.ouisani.aios.user.apps.omnifactory.WorkflowEngine;
 import com.ouisani.aios.user.apps.omnifactory.WorkflowManifest;
 import com.ouisani.aios.user.apps.omnifactory.WorkflowNode;
 import com.ouisani.aios.user.sdk.AbstractAgent;
@@ -54,6 +63,9 @@ public class AppGateway {
     /** 可视化大屏观察者 — 接收内核自愈告警等高优先级信号 */
     private static final Set<WsContext> dashboardObservers = ConcurrentHashMap.newKeySet();
 
+    /** Gson 实例 — 用于状态同步通道的 JSON 序列化/反序列化 */
+    private static final com.google.gson.Gson gson = new com.google.gson.Gson();
+
     public static void attachTo(Javalin app) {
         app.ws("/api/app/{app_name}/stream", ws -> {
             ws.onConnect(ctx -> {
@@ -62,8 +74,8 @@ public class AppGateway {
                 // Auth check
                 String token = ctx.queryParam("token");
                 if (!AuthManager.instance().verifyToken(token)) {
-                    log.warn("[Gateway] Unauthorized WebSocket connection attempt for app: {}", appName);
-                    System.out.printf("  🚫 [Gateway] Unauthorized connection rejected for app: %s%n", appName);
+                    log.warn("[Gateway] 未授权的 WebSocket 连接尝试，应用: {}", appName);
+                    System.out.printf("  🚫 [Gateway] 未授权连接被拒绝，应用: %s%n", appName);
                     ctx.session.close();
                     return;
                 }
@@ -79,12 +91,12 @@ public class AppGateway {
                             ctx.send(data);
                         }
                     } catch (Exception e) {
-                        log.debug("[Gateway] Failed to push stdout to client for app {}: {}", appName, e.getMessage());
+                        log.debug("[Gateway] 向应用 {} 的客户端推送 stdout 失败: {}", appName, e.getMessage());
                     }
                 });
 
-                log.info("[Gateway] External UI connected to application: {}", appName);
-                System.out.printf("  📡 [Gateway] External UI connected to application: %s%n", appName);
+                log.info("[Gateway] 外部 UI 已连接到应用: {}", appName);
+                System.out.printf("  📡 [Gateway] 外部 UI 已连接到应用: %s%n", appName);
             });
 
             ws.onMessage(ctx -> {
@@ -97,10 +109,10 @@ public class AppGateway {
                     SyscallRequest writeReq = new SyscallRequest("vfs.write",
                             java.util.Map.of("path", stdinPath, "data", message));
                     SyscallDispatcher.getInstance().execute("app_gateway", writeReq);
-                    log.debug("[Gateway] Injected {} bytes into stdin for app: {}", message.length(), appName);
+                    log.debug("[Gateway] 已注入 {} 字节到应用 {} 的 stdin", message.length(), appName);
                 } catch (Exception e) {
-                    log.warn("[Gateway] Failed to write to stdin for app {}: {}", appName, e.getMessage());
-                    System.out.printf("  ⚠ [Gateway] stdin write failed for app %s: %s%n", appName, e.getMessage());
+                    log.warn("[Gateway] 向应用 {} 写入 stdin 失败: {}", appName, e.getMessage());
+                    System.out.printf("  ⚠ [Gateway] 应用 %s 的 stdin 写入失败: %s%n", appName, e.getMessage());
                 }
             });
 
@@ -113,8 +125,8 @@ public class AppGateway {
                         appClients.remove(appName);
                     }
                 }
-                log.info("[Gateway] External UI disconnected from application: {}", appName);
-                System.out.printf("  📡 [Gateway] External UI disconnected from application: %s%n", appName);
+                log.info("[Gateway] 外部 UI 已断开与应用 {} 的连接", appName);
+                System.out.printf("  📡 [Gateway] 外部 UI 已断开与应用 %s 的连接%n", appName);
             });
 
             ws.onError(ctx -> {
@@ -123,13 +135,15 @@ public class AppGateway {
                 if (clients != null) {
                     clients.remove(ctx);
                 }
-                log.warn("[Gateway] WebSocket error for app {}: {}", appName,
-                        ctx.error() != null ? ctx.error().getMessage() : "unknown");
+                Throwable err = ctx.error();
+                if (err != null) {
+                    log.warn("[Gateway] 应用 {} 的 WebSocket 错误: {}", appName, err.getMessage());
+                }
             });
         });
 
-        log.info("[Gateway] App Gateway attached: /api/app/{app_name}/stream");
-        System.out.println("  ✓ [Gateway] App Gateway attached: /api/app/{app_name}/stream");
+        log.info("[Gateway] App Gateway 已挂载: /api/app/{app_name}/stream");
+        System.out.println("  ✓ [Gateway] App Gateway 已挂载: /api/app/{app_name}/stream");
 
         // ════════════════════════════════════════════════════════════════
         //  Dashboard Alert WebSocket — 内核自愈告警实时推送通道
@@ -138,24 +152,26 @@ public class AppGateway {
             ws.onConnect(ctx -> {
                 String token = ctx.queryParam("token");
                 if (!AuthManager.instance().verifyToken(token)) {
-                    log.warn("[Gateway] Unauthorized dashboard WebSocket connection attempt");
+                    log.warn("[Gateway] 未授权的 Dashboard WebSocket 连接尝试");
                     ctx.session.close();
                     return;
                 }
                 dashboardObservers.add(ctx);
-                log.info("[Gateway] Dashboard observer connected");
-                System.out.println("  📡 [Gateway] Dashboard observer connected");
+                log.info("[Gateway] Dashboard 观察者已连接");
+                System.out.println("  📡 [Gateway] Dashboard 观察者已连接");
             });
 
             ws.onClose(ctx -> {
                 dashboardObservers.remove(ctx);
-                log.info("[Gateway] Dashboard observer disconnected");
+                log.info("[Gateway] Dashboard 观察者已断开");
             });
 
             ws.onError(ctx -> {
                 dashboardObservers.remove(ctx);
-                log.warn("[Gateway] Dashboard WebSocket error: {}",
-                        ctx.error() != null ? ctx.error().getMessage() : "unknown");
+                Throwable err = ctx.error();
+                if (err != null) {
+                    log.warn("[Gateway] Dashboard WebSocket 错误: {}", err.getMessage());
+                }
             });
         });
 
@@ -169,8 +185,8 @@ public class AppGateway {
         // 订阅可观测性事件通道 — 邮件飞梭、自愈重试等动效数据源
         EventBus.instance().subscribe("sys.telemetry.events", AppGateway::broadcastToDashboards);
 
-        log.info("[Gateway] System Alert Channel opened. Ready to push high-priority rescue signals to dashboard.");
-        System.out.println("[Gateway] System Alert Channel opened. Ready to push high-priority rescue signals to dashboard.");
+        log.info("[Gateway] 系统告警通道已开启。准备向 Dashboard 推送高优先级救援信号。");
+        System.out.println("[Gateway] 系统告警通道已开启。准备向 Dashboard 推送高优先级救援信号。");
 
         // ════════════════════════════════════════════════════════════════
         //  God Hand Protocol — 前端参数热补丁控制通道
@@ -179,12 +195,12 @@ public class AppGateway {
             ws.onConnect(ctx -> {
                 String token = ctx.queryParam("token");
                 if (!AuthManager.instance().verifyToken(token)) {
-                    log.warn("[Gateway] Unauthorized God Hand WebSocket connection attempt");
+                    log.warn("[Gateway] 未授权的 God Hand WebSocket 连接尝试");
                     ctx.session.close();
                     return;
                 }
-                log.info("[Gateway] God Hand control channel connected");
-                System.out.println("[Gateway] God Hand control channel connected");
+                log.info("[Gateway] God Hand 控制通道已连接");
+                System.out.println("[Gateway] God Hand 控制通道已连接");
             });
 
             ws.onMessage(ctx -> {
@@ -196,7 +212,7 @@ public class AppGateway {
                         String paramsJson = extractJsonObject(message, "params");
 
                         if (targetNode == null || targetNode.isBlank()) {
-                            log.warn("[Gateway] HOT_PATCH_PARAM missing targetNode");
+                            log.warn("[Gateway] HOT_PATCH_PARAM 缺少 targetNode");
                             return;
                         }
 
@@ -208,27 +224,29 @@ public class AppGateway {
                         // 2. 向 EventBus 广播参数变更通知
                         EventBus.instance().broadcast("sys.control." + targetNode, "CONFIG_UPDATED");
 
-                        System.out.printf("[Gateway] God Hand: HOT_PATCH_PARAM → %s. Config written to %s. EventBus notified.%n",
+                        System.out.printf("[Gateway] God Hand: HOT_PATCH_PARAM → %s。配置已写入 %s。EventBus 已通知。%n",
                                 targetNode, configPath);
-                        log.info("[Gateway] God Hand: HOT_PATCH_PARAM for node '{}'. Config: {}", targetNode, configPath);
+                        log.info("[Gateway] God Hand: HOT_PATCH_PARAM 节点 '{}'。配置: {}", targetNode, configPath);
                     }
                 } catch (Exception e) {
-                    log.warn("[Gateway] Failed to process God Hand message: {}", e.getMessage());
+                    log.warn("[Gateway] 处理 God Hand 消息失败: {}", e.getMessage());
                 }
             });
 
             ws.onClose(ctx -> {
-                log.info("[Gateway] God Hand control channel disconnected");
+                log.info("[Gateway] God Hand 控制通道已断开");
             });
 
             ws.onError(ctx -> {
-                log.warn("[Gateway] God Hand WebSocket error: {}",
-                        ctx.error() != null ? ctx.error().getMessage() : "unknown");
+                Throwable err = ctx.error();
+                if (err != null) {
+                    log.warn("[Gateway] God Hand WebSocket 错误: {}", err.getMessage());
+                }
             });
         });
 
-        log.info("[Gateway] God Hand Protocol attached: /api/app/god_hand/control");
-        System.out.println("[Gateway] God Hand Protocol attached: /api/app/god_hand/control");
+        log.info("[Gateway] God Hand Protocol 已挂载: /api/app/god_hand/control");
+        System.out.println("[Gateway] God Hand Protocol 已挂载: /api/app/god_hand/control");
 
         // ════════════════════════════════════════════════════════════════
         //  God Hand Protocol V2 — /api/workflow/control 热机干涉通道
@@ -237,12 +255,12 @@ public class AppGateway {
             ws.onConnect(ctx -> {
                 String token = ctx.queryParam("token");
                 if (!AuthManager.instance().verifyToken(token)) {
-                    log.warn("[Gateway] Unauthorized workflow control WebSocket connection attempt");
+                    log.warn("[Gateway] 未授权的 Workflow 控制通道 WebSocket 连接尝试");
                     ctx.session.close();
                     return;
                 }
-                log.info("[Gateway] Workflow control channel connected");
-                System.out.println("[Gateway] Workflow control channel connected");
+                log.info("[Gateway] Workflow 控制通道已连接");
+                System.out.println("[Gateway] Workflow 控制通道已连接");
             });
 
             ws.onMessage(ctx -> {
@@ -254,7 +272,7 @@ public class AppGateway {
                         String paramsJson = extractJsonObject(message, "params");
 
                         if (targetNode == null || targetNode.isBlank()) {
-                            log.warn("[Gateway] HOT_PATCH_PARAM missing targetNode");
+                            log.warn("[Gateway] HOT_PATCH_PARAM 缺少 targetNode");
                             return;
                         }
 
@@ -266,35 +284,37 @@ public class AppGateway {
                         // 触发系统级广播
                         EventBus.instance().broadcast("sys.control." + targetNode, "CONFIG_UPDATED");
 
-                        System.out.printf("[Gateway] God Hand Protocol engaged. Hot-patched VFS config for node %s.%n",
+                        System.out.printf("[Gateway] God Hand Protocol 已启动。已热补丁节点 %s 的 VFS 配置。%n",
                                 targetNode);
-                        log.info("[Gateway] God Hand Protocol engaged. Hot-patched VFS config for node '{}'.", targetNode);
+                        log.info("[Gateway] God Hand Protocol 已启动。已热补丁节点 '{}' 的 VFS 配置。", targetNode);
                     }
                 } catch (Exception e) {
-                    log.warn("[Gateway] Failed to process workflow control message: {}", e.getMessage());
+                    log.warn("[Gateway] 处理 Workflow 控制消息失败: {}", e.getMessage());
                 }
             });
 
             ws.onClose(ctx -> {
-                log.info("[Gateway] Workflow control channel disconnected");
+                log.info("[Gateway] Workflow 控制通道已断开");
             });
 
             ws.onError(ctx -> {
-                log.warn("[Gateway] Workflow control WebSocket error: {}",
-                        ctx.error() != null ? ctx.error().getMessage() : "unknown");
+                Throwable err = ctx.error();
+                if (err != null) {
+                    log.warn("[Gateway] Workflow 控制通道 WebSocket 错误: {}", err.getMessage());
+                }
             });
         });
 
-        log.info("[Gateway] Workflow control channel attached: /api/workflow/control");
-        System.out.println("[Gateway] Workflow control channel attached: /api/workflow/control");
+        log.info("[Gateway] Workflow 控制通道已挂载: /api/workflow/control");
+        System.out.println("[Gateway] Workflow 控制通道已挂载: /api/workflow/control");
 
         // ════════════════════════════════════════════════════════════════
         //  POST /api/workflow/compile — 两段式生成：第一段，动态拓扑编译
         // ════════════════════════════════════════════════════════════════
         app.post("/api/workflow/compile", ctx -> {
             String payload = ctx.body();
-            System.out.printf("[App Gateway] Received topology compile request. Size: %d bytes.%n", payload.length());
-            log.info("[App Gateway] Received topology compile request. Size: {} bytes.", payload.length());
+            System.out.printf("[App Gateway] 收到拓扑编译请求。大小: %d 字节。%n", payload.length());
+            log.info("[App Gateway] 收到拓扑编译请求。大小: {} 字节。", payload.length());
 
             try {
                 // 解析请求 JSON
@@ -302,7 +322,7 @@ public class AppGateway {
                 if (prompt == null || prompt.isBlank()) {
                     ctx.status(400);
                     ctx.contentType("application/json");
-                    ctx.result("{\"status\":\"error\",\"message\":\"Missing 'prompt' field\"}");
+                    ctx.result("{\"status\":\"error\",\"message\":\"缺少 'prompt' 字段\"}");
                     return;
                 }
 
@@ -320,15 +340,15 @@ public class AppGateway {
                     // 强制挂载原生特权技能
                     enabledSkills.add("ComputerUseTool");
                     enabledSkills.add("BashTool");
-                    log.info("[App Gateway] Auto-discovered {} skills for compilation", enabledSkills.size());
+                    log.info("[App Gateway] 自动发现 {} 个技能用于编译", enabledSkills.size());
                 }
 
                 // 解析 enabledRoles 数组
                 List<String> enabledRoles = extractJsonStringArray(payload, "enabledRoles");
 
-                System.out.printf("[App Gateway] Compiling topology: prompt='%s...', skills=%s, roles=%s%n",
+                System.out.printf("[App Gateway] 正在编译拓扑: prompt='%s...', skills=%s, roles=%s%n",
                         prompt.substring(0, Math.min(prompt.length(), 50)), enabledSkills, enabledRoles);
-                log.info("[App Gateway] Compiling topology: skills={}, roles={}", enabledSkills, enabledRoles);
+                log.info("[App Gateway] 正在编译拓扑: skills={}, roles={}", enabledSkills, enabledRoles);
 
                 // 调用 TopologyCompiler 编译拓扑
                 String topologyJson = TopologyCompiler.compileTopology(prompt, enabledSkills, enabledRoles);
@@ -337,17 +357,23 @@ public class AppGateway {
                 if (!topologyJson.contains("\"agentType\"")) {
                     String agentType = extractJsonField(payload, "agentType");
                     if (agentType == null || agentType.isBlank()) agentType = "omni";
-                    topologyJson = topologyJson.substring(0, topologyJson.lastIndexOf('}'))
-                                   + ", \"agentType\": \"" + agentType + "\"}";
+                    int lastBrace = topologyJson.lastIndexOf('}');
+                    if (lastBrace > 0) {
+                        topologyJson = topologyJson.substring(0, lastBrace)
+                                       + ", \"agentType\": \"" + agentType + "\"}";
+                    } else {
+                        // JSON 格式异常（无闭合花括号），直接追加
+                        topologyJson = "{\"agentType\": \"" + agentType + "\"}";
+                    }
                 }
 
                 ctx.contentType("application/json");
                 ctx.result(topologyJson);
-                System.out.printf("[App Gateway] Topology compiled successfully. Response size: %d bytes.%n",
+                System.out.printf("[App Gateway] 拓扑编译完成。响应大小: %d 字节。%n",
                         topologyJson.length());
             } catch (Exception e) {
-                System.out.printf("[App Gateway] Topology compile failed: %s%n", e.getMessage());
-                log.error("[App Gateway] Topology compile failed", e);
+                System.out.printf("[App Gateway] 拓扑编译失败: %s%n", e.getMessage());
+                log.error("[App Gateway] 拓扑编译失败", e);
                 ctx.status(500);
                 ctx.contentType("application/json");
                 ctx.result("{\"status\":\"error\",\"message\":\"" + e.getMessage().replace("\"", "'") + "\"}");
@@ -362,69 +388,57 @@ public class AppGateway {
             ctx.result("");
         });
 
-        log.info("[App Gateway] Topology Compile API attached: POST /api/workflow/compile");
-        System.out.println("  ✓ [App Gateway] Topology Compile API: POST /api/workflow/compile");
+        log.info("[App Gateway] 拓扑编译 API 已挂载: POST /api/workflow/compile");
+        System.out.println("  ✓ [App Gateway] 拓扑编译 API: POST /api/workflow/compile");
 
         // ════════════════════════════════════════════════════════════════
         //  POST /api/workflow/deploy — 前端可视化大屏 → AIOS 内核
         // ════════════════════════════════════════════════════════════════
         app.post("/api/workflow/deploy", ctx -> {
             String payload = ctx.body();
-            System.out.printf("[App Gateway] Received Omni-Workflow payload from dashboard. Size: %d bytes.%n",
+            System.out.printf("[App Gateway] 收到来自 Dashboard 的 Omni-Workflow 负载。大小: %d 字节。%n",
                     payload.length());
-            log.info("[App Gateway] Received Omni-Workflow payload from dashboard. Size: {} bytes.", payload.length());
+            log.info("[App Gateway] 收到来自 Dashboard 的 Omni-Workflow 负载。大小: {} 字节。", payload.length());
 
             try {
                 // 解析 JSON → WorkflowManifest
                 WorkflowManifest manifest = parseWorkflowManifest(payload);
 
-                System.out.printf("[App Gateway] Parsed workflow '%s' with %d nodes.%n",
+                System.out.printf("[App Gateway] 已解析工作流 '%s'，包含 %d 个节点。%n",
                         manifest.workflowName(), manifest.nodes().size());
-                log.info("[App Gateway] Parsed workflow '{}' with {} nodes.",
+                log.info("[App Gateway] 已解析工作流 '{}'，包含 {} 个节点。",
                         manifest.workflowName(), manifest.nodes().size());
 
-                // 通过内核调度器拉起母体智能体（按节点 executor 动态路由）
-                // 将节点按 executor 分组，每组拉起对应的母体
-                List<WorkflowNode> omniNodes = new ArrayList<>();
-                List<WorkflowNode> operatorNodes = new ArrayList<>();
-                for (WorkflowNode node : manifest.nodes()) {
-                    if ("operator".equalsIgnoreCase(node.executor())) {
-                        operatorNodes.add(node);
-                    } else {
-                        omniNodes.add(node);
+                // 通过 DAG 引擎并发调度 — 无依赖节点自动并行执行
+                // 不再直接 spawn 单个 OmniMotherAgent 串行处理所有节点
+                // DAG 引擎会为每个节点动态创建 Agent（OmniMotherAgent 或 OperatorAgent），
+                // 利用 CompletableFuture + 虚拟线程实现拓扑级并发
+                //
+                // 异步启动 DAG 引擎，避免阻塞 HTTP 请求线程
+                Thread.startVirtualThread(() -> {
+                    try {
+                        WorkflowEngine.getInstance().executeDag(
+                                manifest.nodes(),
+                                manifest.workflowName(),
+                                manifest.enabledSkills(),
+                                manifest.enabledRoles()
+                        );
+                        System.out.printf("[App Gateway] DAG 引擎执行完成，工作流: %s%n", manifest.workflowName());
+                    } catch (Exception e) {
+                        System.err.printf("[App Gateway] DAG 引擎执行异常: %s%n", e.getMessage());
+                        log.error("[App Gateway] DAG 引擎执行异常", e);
                     }
-                }
+                });
 
-                TaskScheduler scheduler = VfsManager.instance().getTaskScheduler();
-
-                // 拉起 OmniMotherAgent 处理逻辑/代码节点
-                if (!omniNodes.isEmpty()) {
-                    WorkflowManifest omniManifest = new WorkflowManifest(
-                            manifest.workflowName() + "_omni", omniNodes,
-                            manifest.enabledSkills(), manifest.enabledRoles(), "omni");
-                    AbstractAgent omni = new OmniMotherAgent(omniManifest);
-                    omni.spawn(scheduler);
-                    System.out.printf("[App Gateway] Igniting OmniMotherAgent for %d logic nodes...%n", omniNodes.size());
-                    log.info("[App Gateway] Igniting OmniMotherAgent for {} logic nodes", omniNodes.size());
-                }
-
-                // 拉起 OperatorAgent 处理物理操作节点
-                if (!operatorNodes.isEmpty()) {
-                    WorkflowManifest operatorManifest = new WorkflowManifest(
-                            manifest.workflowName() + "_operator", operatorNodes,
-                            manifest.enabledSkills(), manifest.enabledRoles(), "operator");
-                    AbstractAgent operator = new OperatorAgent(operatorManifest);
-                    operator.spawn(scheduler);
-                    System.out.printf("[App Gateway] Igniting OperatorAgent for %d physical nodes...%n", operatorNodes.size());
-                    log.info("[App Gateway] Igniting OperatorAgent for {} physical nodes", operatorNodes.size());
-                }
+                System.out.printf("[App Gateway] DAG 引擎已异步启动，%d 个节点将按拓扑并发执行。%n", manifest.nodes().size());
+                log.info("[App Gateway] DAG 引擎已异步启动，{} 个节点将按拓扑并发执行。", manifest.nodes().size());
 
                 ctx.contentType("application/json");
-                ctx.result("{\"status\":\"success\",\"message\":\"Genesis Process Initiated\"}");
-                System.out.println("[App Gateway] External API engaged. Ready to receive N-Node topologies.");
+                ctx.result("{\"status\":\"success\",\"message\":\"创世进程已启动\"}");
+                System.out.println("[App Gateway] 外部 API 已就绪。准备接收 N 节点拓扑。");
             } catch (Exception e) {
-                System.out.printf("[App Gateway] Failed to parse workflow payload: %s%n", e.getMessage());
-                log.error("[App Gateway] Failed to parse workflow payload", e);
+                System.out.printf("[App Gateway] 解析工作流负载失败: %s%n", e.getMessage());
+                log.error("[App Gateway] 解析工作流负载失败", e);
                 ctx.status(400);
                 ctx.contentType("application/json");
                 ctx.result("{\"status\":\"error\",\"message\":\"" + e.getMessage().replace("\"", "'") + "\"}");
@@ -473,7 +487,7 @@ public class AppGateway {
                     });
                 }
             } catch (Exception e) {
-                log.error("[Gateway] Catalog scan failed", e);
+                log.error("[Gateway] 目录扫描失败", e);
             }
             result.put("roles", roles);
             result.put("skills", skills);
@@ -494,8 +508,476 @@ public class AppGateway {
             ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
         });
 
-        log.info("[App Gateway] Workflow Deploy API attached: POST /api/workflow/deploy");
-        System.out.println("  ✓ [App Gateway] Workflow Deploy API: POST /api/workflow/deploy");
+        log.info("[App Gateway] 工作流部署 API 已挂载: POST /api/workflow/deploy");
+        System.out.println("  ✓ [App Gateway] 工作流部署 API: POST /api/workflow/deploy");
+
+        // ════════════════════════════════════════════════════════════════
+        //  SIGSTOP/SIGCONT 进程控制 API（借鉴 Agent Zero 的 Pause/Resume）
+        // ════════════════════════════════════════════════════════════════
+        app.post("/api/process/{pid}/pause", ctx -> {
+            int pid = Integer.parseInt(ctx.pathParam("pid"));
+            AiosSdk.getInstance().sendSignal(pid, SignalType.SIGSTOP);
+            ctx.contentType("application/json");
+            ctx.result("{\"status\":\"paused\",\"pid\":" + pid + "}");
+        });
+
+        app.post("/api/process/{pid}/resume", ctx -> {
+            int pid = Integer.parseInt(ctx.pathParam("pid"));
+            AiosSdk.getInstance().sendSignal(pid, SignalType.SIGCONT);
+            ctx.contentType("application/json");
+            ctx.result("{\"status\":\"resumed\",\"pid\":" + pid + "}");
+        });
+
+        app.post("/api/process/{pid}/nudge", ctx -> {
+            int pid = Integer.parseInt(ctx.pathParam("pid"));
+            String nudgedPrompt = ctx.body();
+            AiosSdk.getInstance().sendSignal(pid, SignalType.SIGUSR1);
+            // 将 nudge 内容写入共享内存，SIGUSR1 处理时会读取
+            VariablePool.getInstance().set(
+                    VariablePool.Scope.TASK,
+                    String.valueOf(pid), "nudge", nudgedPrompt
+            );
+            ctx.contentType("application/json");
+            ctx.result("{\"status\":\"nudged\",\"pid\":" + pid + "}");
+        });
+
+        app.get("/api/process/{pid}/snapshot", ctx -> {
+            int pid = Integer.parseInt(ctx.pathParam("pid"));
+            com.ouisani.aios.core.AgentTask task = VfsManager.instance().getTaskScheduler() != null
+                    ? VfsManager.instance().getTaskScheduler().getTask(pid) : null;
+            if (task != null) {
+                ctx.contentType("application/json");
+                ctx.result("{\"pid\":" + pid
+                        + ",\"status\":\"" + task.status() + "\""
+                        + ",\"paused\":" + task.isPaused()
+                        + ",\"priority\":\"" + task.processPriority() + "\""
+                        + ",\"gasUsed\":" + task.gasUsed()
+                        + ",\"budget\":" + task.budget()
+                        + "}");
+            } else {
+                ctx.status(404).result("{\"error\":\"Process not found\"}");
+            }
+        });
+
+        log.info("[App Gateway] 进程控制 API 已挂载: /api/process/{pid}/pause|resume|nudge|snapshot");
+        System.out.println("  ✓ [App Gateway] 进程控制 API: /api/process/{pid}/pause|resume|nudge|snapshot");
+
+        // ════════════════════════════════════════════════════════════════
+        //  项目工作区 API（借鉴 Agent Zero 的 Projects 系统）
+        // ════════════════════════════════════════════════════════════════
+        app.post("/api/workspace/create", ctx -> {
+            String body = ctx.body();
+            String name = extractJsonField(body, "name");
+            String quotaStr = extractJsonField(body, "quota");
+            long quota = quotaStr != null ? Long.parseLong(quotaStr) : 100000L;
+
+            ProjectWorkspace ws = ProjectWorkspaceManager.getInstance().createWorkspace(name, quota);
+            ctx.contentType("application/json");
+            ctx.result("{\"projectId\":\"" + ws.projectId() + "\",\"name\":\"" + ws.projectName()
+                    + "\",\"vfsRoot\":\"" + ws.vfsRoot() + "\",\"quota\":" + ws.tokenQuota() + "}");
+        });
+
+        app.get("/api/workspace/list", ctx -> {
+            Collection<ProjectWorkspace> workspaces = ProjectWorkspaceManager.getInstance().listWorkspaces();
+            StringBuilder sb = new StringBuilder("[");
+            boolean first = true;
+            for (ProjectWorkspace ws : workspaces) {
+                if (!first) sb.append(",");
+                sb.append("{\"projectId\":\"").append(ws.projectId())
+                  .append("\",\"name\":\"").append(ws.projectName())
+                  .append("\",\"vfsRoot\":\"").append(ws.vfsRoot())
+                  .append("\",\"quota\":").append(ws.tokenQuota()).append("}");
+                first = false;
+            }
+            sb.append("]");
+            ctx.contentType("application/json");
+            ctx.result(sb.toString());
+        });
+
+        app.delete("/api/workspace/{projectId}", ctx -> {
+            String projectId = ctx.pathParam("projectId");
+            boolean ok = ProjectWorkspaceManager.getInstance().destroyWorkspace(projectId);
+            ctx.contentType("application/json");
+            ctx.result("{\"success\":" + ok + "}");
+        });
+
+        log.info("[App Gateway] 项目工作区 API 已挂载: /api/workspace/create|list|{projectId}");
+        System.out.println("  ✓ [App Gateway] 项目工作区 API: /api/workspace/create|list|{projectId}");
+
+        // ════════════════════════════════════════════════════════════════
+        //  Human-in-the-Loop 恢复 API
+        // ════════════════════════════════════════════════════════════════
+        app.get("/api/recovery/pending", ctx -> {
+            var pending = com.ouisani.aios.core.recovery.RecoveryOrchestrator.instance()
+                    .getPendingHumanInterventions();
+            StringBuilder json = new StringBuilder("{\"pending\":[");
+            boolean first = true;
+            for (var entry : pending.entrySet()) {
+                if (!first) json.append(",");
+                var req = entry.getValue();
+                json.append(String.format(
+                        "{\"nodeId\":\"%s\",\"workflowId\":\"%s\",\"diagnosis\":\"%s\",\"timestamp\":%d}",
+                        req.nodeId().replace("\"", "\\\""),
+                        req.workflowId().replace("\"", "\\\""),
+                        req.diagnosis().replace("\"", "'").replace("\n", " "),
+                        req.timestamp()
+                ));
+                first = false;
+            }
+            json.append("]}");
+            ctx.contentType("application/json");
+            ctx.result(json.toString());
+        });
+
+        // CORS 预检支持
+        app.options("/api/recovery/pending", ctx -> {
+            ctx.header("Access-Control-Allow-Origin", "*");
+            ctx.header("Access-Control-Allow-Methods", "GET, OPTIONS");
+            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+            ctx.result("");
+        });
+
+        app.post("/api/recovery/{nodeId}/resume", ctx -> {
+            String nodeId = ctx.pathParam("nodeId");
+            // 读取请求体作为人类指导
+            String body = ctx.body();
+            // 从 JSON 中提取 guidance
+            String guidance = "";
+            Matcher guidanceMatcher = Pattern.compile("\"guidance\"\\s*:\\s*\"([^\"]*?)\"").matcher(body);
+            if (guidanceMatcher.find()) guidance = guidanceMatcher.group(1);
+
+            boolean success = com.ouisani.aios.core.recovery.RecoveryOrchestrator.instance()
+                    .resumeFromHumanIntervention(nodeId, guidance);
+
+            String resp = String.format("{\"success\":%b,\"nodeId\":\"%s\"}", success, nodeId);
+            ctx.contentType("application/json");
+            ctx.status(success ? 200 : 500);
+            ctx.result(resp);
+        });
+
+        // CORS 预检支持
+        app.options("/api/recovery/{nodeId}/resume", ctx -> {
+            ctx.header("Access-Control-Allow-Origin", "*");
+            ctx.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+            ctx.result("");
+        });
+
+        log.info("[App Gateway] Human-in-the-Loop 恢复 API 已挂载: /api/recovery/pending, /api/recovery/{nodeId}/resume");
+        System.out.println("  ✓ [App Gateway] Human-in-the-Loop 恢复 API: /api/recovery/pending, /api/recovery/{nodeId}/resume");
+
+        // ════════════════════════════════════════════════════════════════
+        //  A2A 通信协议端点（借鉴 Agent Zero 的 A2A 协议）
+        // ════════════════════════════════════════════════════════════════
+        app.post(A2aProtocol.HTTP_ENDPOINT, ctx -> {
+            String body = ctx.body();
+            A2aMessage message = A2aMessage.fromJson(body);
+            if (message != null) {
+                A2aFederation.getInstance().handleIncomingMessage(message);
+                ctx.result("{\"status\":\"received\"}");
+            } else {
+                ctx.status(400).result("{\"error\":\"Invalid A2A message\"}");
+            }
+        });
+
+        app.get(A2aProtocol.DISCOVERY_ENDPOINT, ctx -> {
+            Collection<A2aNodeDescriptor> nodes = A2aFederation.getInstance().getRemoteNodes();
+            StringBuilder sb = new StringBuilder("{\"localNodeId\":\"")
+                    .append(A2aFederation.getInstance().getLocalNodeId())
+                    .append("\",\"remoteNodes\":[");
+            boolean first = true;
+            for (A2aNodeDescriptor node : nodes) {
+                if (!first) sb.append(",");
+                sb.append("{\"nodeId\":\"").append(node.getNodeId())
+                  .append("\",\"endpoint\":\"").append(node.getEndpoint())
+                  .append("\",\"capabilities\":").append(node.getCapabilities())
+                  .append(",\"agents\":").append(node.getAvailableAgents().size())
+                  .append("}");
+                first = false;
+            }
+            sb.append("]}");
+            ctx.contentType("application/json");
+            ctx.result(sb.toString());
+        });
+
+        app.post("/api/a2a/register", ctx -> {
+            String body = ctx.body();
+            String nodeId = extractJsonField(body, "nodeId");
+            String endpoint = extractJsonField(body, "endpoint");
+            if (nodeId == null || endpoint == null) {
+                ctx.status(400).result("{\"error\":\"Missing nodeId or endpoint\"}");
+                return;
+            }
+            A2aNodeDescriptor descriptor = new A2aNodeDescriptor(nodeId, endpoint);
+            A2aFederation.getInstance().registerRemoteNode(descriptor);
+            ctx.result("{\"status\":\"registered\",\"nodeId\":\"" + nodeId + "\"}");
+        });
+
+        log.info("[App Gateway] A2A 通信协议端点已挂载");
+        System.out.println("  ✓ [App Gateway] A2A 通信协议端点: /api/a2a/message, /api/a2a/discovery, /api/a2a/register");
+
+        // ════════════════════════════════════════════════════════════════
+        //  Human-in-the-Loop + Frontend Tool — 借鉴 CopilotKit
+        // ════════════════════════════════════════════════════════════════
+
+        // HITL: 获取待处理的人类响应请求
+        app.get("/api/hitl/pending", ctx -> {
+            var pending = com.ouisani.aios.core.tool.HumanResponseTool.getPendingRequests();
+            StringBuilder json = new StringBuilder("{\"pending\":[");
+            boolean first = true;
+            for (var entry : pending.entrySet()) {
+                if (!first) json.append(",");
+                json.append(String.format("{\"requestId\":\"%s\",\"agentId\":\"%s\"}",
+                        entry.getKey(), entry.getValue()));
+                first = false;
+            }
+            json.append("]}");
+            ctx.result(json.toString()).contentType("application/json");
+        });
+
+        // HITL: 提交人类响应
+        app.post("/api/hitl/{requestId}/respond", ctx -> {
+            String requestId = ctx.pathParam("requestId");
+            String body = ctx.body();
+            // 从 JSON 中提取 response 字段
+            String response = "";
+            try {
+                var jsonObj = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
+                if (jsonObj.has("response")) {
+                    response = jsonObj.get("response").getAsString();
+                }
+            } catch (Exception e) {
+                response = body; // 非 JSON，直接用 body
+            }
+
+            boolean success = com.ouisani.aios.core.tool.HumanResponseTool.submitResponse(requestId, response);
+            ctx.result("{\"success\":" + success + "}").contentType("application/json");
+            ctx.status(success ? 200 : 404);
+        });
+
+        // FrontendTool: 注册前端工具
+        app.post("/api/frontend/tool/register", ctx -> {
+            String body = ctx.body();
+            var jsonObj = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
+            String toolName = jsonObj.get("toolName").getAsString();
+            String schema = jsonObj.has("schema") ? jsonObj.get("schema").toString() : "{}";
+            com.ouisani.aios.core.tool.FrontendTool.registerFrontendTool(toolName, schema);
+            ctx.result("{\"success\":true}").contentType("application/json");
+        });
+
+        // FrontendTool: 注销前端工具
+        app.post("/api/frontend/tool/unregister", ctx -> {
+            String body = ctx.body();
+            var jsonObj = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
+            String toolName = jsonObj.get("toolName").getAsString();
+            com.ouisani.aios.core.tool.FrontendTool.unregisterFrontendTool(toolName);
+            ctx.result("{\"success\":true}").contentType("application/json");
+        });
+
+        // FrontendTool: 提交工具调用结果
+        app.post("/api/frontend/tool/{callId}/result", ctx -> {
+            String callId = ctx.pathParam("callId");
+            String body = ctx.body();
+            String result = "";
+            try {
+                var jsonObj = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
+                if (jsonObj.has("result")) {
+                    result = jsonObj.get("result").getAsString();
+                }
+            } catch (Exception e) {
+                result = body;
+            }
+
+            boolean success = com.ouisani.aios.core.tool.FrontendTool.submitResult(callId, result);
+            ctx.result("{\"success\":" + success + "}").contentType("application/json");
+            ctx.status(success ? 200 : 404);
+        });
+
+        // FrontendTool: 列出已注册的前端工具
+        app.get("/api/frontend/tool/list", ctx -> {
+            var tools = com.ouisani.aios.core.tool.FrontendTool.getRegisteredTools();
+            StringBuilder json = new StringBuilder("{\"tools\":[");
+            boolean first = true;
+            for (var entry : tools.entrySet()) {
+                if (!first) json.append(",");
+                json.append(String.format("{\"name\":\"%s\",\"schema\":%s}",
+                        entry.getKey(), entry.getValue()));
+                first = false;
+            }
+            json.append("]}");
+            ctx.result(json.toString()).contentType("application/json");
+        });
+
+        // WebSocket: HITL + FrontendTool 双向通道
+        app.ws("/api/agent/interaction", ws -> {
+            ws.onConnect(ctx -> {
+                log.info("[App Gateway] Agent 交互 WebSocket 已连接: {}", ctx.sessionId());
+            });
+
+            ws.onMessage(ctx -> {
+                String msg = ctx.message();
+                try {
+                    var jsonObj = com.google.gson.JsonParser.parseString(msg).getAsJsonObject();
+                    String type = jsonObj.get("type").getAsString();
+
+                    switch (type) {
+                        case "hitl_response" -> {
+                            // 人类响应
+                            String requestId = jsonObj.get("requestId").getAsString();
+                            String response = jsonObj.get("response").getAsString();
+                            boolean success = com.ouisani.aios.core.tool.HumanResponseTool.submitResponse(requestId, response);
+                            ctx.send("{\"type\":\"hitl_response_ack\",\"success\":" + success + "}");
+                        }
+                        case "frontend_tool_result" -> {
+                            // 前端工具结果
+                            String callId = jsonObj.get("callId").getAsString();
+                            String result = jsonObj.get("result").getAsString();
+                            boolean success = com.ouisani.aios.core.tool.FrontendTool.submitResult(callId, result);
+                            ctx.send("{\"type\":\"frontend_tool_result_ack\",\"success\":" + success + "}");
+                        }
+                        case "register_frontend_tool" -> {
+                            // 注册前端工具
+                            String toolName = jsonObj.get("toolName").getAsString();
+                            String schema = jsonObj.has("schema") ? jsonObj.get("schema").toString() : "{}";
+                            com.ouisani.aios.core.tool.FrontendTool.registerFrontendTool(toolName, schema);
+                            ctx.send("{\"type\":\"register_ack\",\"toolName\":\"" + toolName + "\"}");
+                        }
+                        case "unregister_frontend_tool" -> {
+                            String toolName = jsonObj.get("toolName").getAsString();
+                            com.ouisani.aios.core.tool.FrontendTool.unregisterFrontendTool(toolName);
+                            ctx.send("{\"type\":\"unregister_ack\",\"toolName\":\"" + toolName + "\"}");
+                        }
+                        default -> {
+                            ctx.send("{\"type\":\"error\",\"message\":\"Unknown type: " + type + "\"}");
+                        }
+                    }
+                } catch (Exception e) {
+                    log.error("[App Gateway] 交互 WebSocket 消息解析失败: {}", e.getMessage());
+                    ctx.send("{\"type\":\"error\",\"message\":\"" + e.getMessage() + "\"}");
+                }
+            });
+
+            ws.onClose(ctx -> {
+                log.info("[App Gateway] Agent 交互 WebSocket 已断开: {}", ctx.sessionId());
+            });
+        });
+
+        log.info("[App Gateway] HITL + FrontendTool 交互通道已挂载: /api/agent/interaction");
+        System.out.println("  ✓ [App Gateway] HITL + FrontendTool 交互通道: /api/agent/interaction");
+
+        // ════════════════════════════════════════════════════════════════
+        //  双向状态同步 — 借鉴 CopilotKit 的前端状态与 Agent 状态双向同步
+        // ════════════════════════════════════════════════════════════════
+
+        // WebSocket: 状态同步通道
+        app.ws("/api/state/sync", ws -> {
+            ws.onConnect(ctx -> {
+                String sessionId = ctx.sessionId();
+                com.ouisani.aios.core.network.StateSyncChannel.instance().sessionConnected(sessionId);
+                log.info("[App Gateway] 状态同步 WebSocket 已连接: {}", sessionId);
+                // 发送欢迎消息
+                ctx.send("{\"type\":\"connected\",\"sessionId\":\"" + sessionId + "\"}");
+            });
+
+            ws.onMessage(ctx -> {
+                String msg = ctx.message();
+                String sessionId = ctx.sessionId();
+                try {
+                    var jsonObj = com.google.gson.JsonParser.parseString(msg).getAsJsonObject();
+                    String type = jsonObj.get("type").getAsString();
+
+                    switch (type) {
+                        case "state_update" -> {
+                            // 前端 → Agent 状态更新
+                            String key = jsonObj.get("key").getAsString();
+                            Object value = gson.fromJson(jsonObj.get("value"), Object.class);
+                            com.ouisani.aios.core.network.StateSyncChannel.instance()
+                                    .handleFrontendStateUpdate(sessionId, key, value);
+                            ctx.send("{\"type\":\"state_update_ack\",\"key\":\"" + key + "\",\"success\":true}");
+                        }
+                        case "get_snapshot" -> {
+                            // 前端请求状态快照
+                            String snapshot = com.ouisani.aios.core.network.StateSyncChannel.instance()
+                                    .getSessionSnapshot(sessionId);
+                            ctx.send(snapshot);
+                        }
+                        default -> {
+                            ctx.send("{\"type\":\"error\",\"message\":\"Unknown type: " + type + "\"}");
+                        }
+                    }
+                } catch (Exception e) {
+                    log.error("[App Gateway] 状态同步消息解析失败: {}", e.getMessage());
+                    ctx.send("{\"type\":\"error\",\"message\":\"" + e.getMessage() + "\"}");
+                }
+            });
+
+            ws.onClose(ctx -> {
+                String sessionId = ctx.sessionId();
+                com.ouisani.aios.core.network.StateSyncChannel.instance().sessionDisconnected(sessionId);
+                log.info("[App Gateway] 状态同步 WebSocket 已断开: {}", sessionId);
+            });
+        });
+
+        // REST: 获取状态同步通道状态
+        app.get("/api/state/status", ctx -> {
+            int sessions = com.ouisani.aios.core.network.StateSyncChannel.instance().getConnectedSessionCount();
+            ctx.result("{\"connectedSessions\":" + sessions + "}").contentType("application/json");
+        });
+
+        log.info("[App Gateway] 双向状态同步通道已挂载: /api/state/sync, /api/state/status");
+        System.out.println("  ✓ [App Gateway] 双向状态同步通道: /api/state/sync, /api/state/status");
+
+        // ════════════════════════════════════════════════════════════════
+        //  Cross-Validation — 多模型对抗与交叉审查（借鉴 OmniGent Debby & Polly）
+        // ════════════════════════════════════════════════════════════════
+
+        app.post("/api/cross-validation/run", ctx -> {
+            String body = ctx.body();
+            var jsonObj = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
+            String task = jsonObj.get("task").getAsString();
+            String providerA = jsonObj.has("providerA") ? jsonObj.get("providerA").getAsString() : "smart_model";
+                String providerB = jsonObj.has("providerB") ? jsonObj.get("providerB").getAsString() : "fast_model";
+            int maxRounds = jsonObj.has("maxRounds") ? jsonObj.get("maxRounds").getAsInt() : 3;
+
+            // 异步执行，避免阻塞 HTTP 请求
+            Thread.startVirtualThread(() -> {
+                try {
+                    var result = com.ouisani.aios.user.apps.omnifactory.CrossValidationTemplate.execute(
+                            task, providerA, providerB, maxRounds);
+                    com.ouisani.aios.core.network.EventBus.instance().broadcast(
+                            "cross_validation.result",
+                            new com.google.gson.Gson().toJson(result));
+                } catch (Exception e) {
+                    log.error("[App Gateway] Cross-Validation 执行失败: {}", e.getMessage());
+                }
+            });
+
+            ctx.result("{\"status\":\"started\",\"message\":\"Cross-Validation 已启动，结果将通过 EventBus 推送\"}")
+               .contentType("application/json");
+        });
+
+        // 获取可用的 LLM Provider 列表（用于前端选择对抗模型）
+        app.get("/api/cross-validation/providers", ctx -> {
+            var router = com.ouisani.aios.core.llm.LlmRouterHolder.get();
+            if (router == null) {
+                ctx.result("{\"providers\":[]}").contentType("application/json");
+                return;
+            }
+            var backends = router.getBackends();
+            StringBuilder json = new StringBuilder("{\"providers\":[");
+            boolean first = true;
+            for (var entry : backends.entrySet()) {
+                if (!first) json.append(",");
+                json.append(String.format("{\"name\":\"%s\",\"core\":\"%s\"}",
+                        entry.getKey(), entry.getValue().computeCore()));
+                first = false;
+            }
+            json.append("]}");
+            ctx.result(json.toString()).contentType("application/json");
+        });
+
+        log.info("[App Gateway] Cross-Validation API 已挂载: /api/cross-validation/run, /api/cross-validation/providers");
+        System.out.println("  ✓ [App Gateway] Cross-Validation API: /api/cross-validation/run, /api/cross-validation/providers");
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -531,7 +1013,7 @@ public class AppGateway {
         // 提取 nodes 数组部分
         String nodesArray = extractJsonArray(json, "nodes");
         if (nodesArray == null || nodesArray.isBlank()) {
-            throw new IllegalArgumentException("Missing or empty 'nodes' array in payload");
+            throw new IllegalArgumentException("负载中缺少 'nodes' 数组或数组为空");
         }
 
         // 逐个解析节点对象 — 使用安全的深度感知分割器
@@ -547,7 +1029,7 @@ public class AppGateway {
             Map<String, String> userParams = extractUserParams(obj);
 
             if (instanceId != null && !instanceId.isBlank()) {
-                nodes.add(new WorkflowNode(
+                WorkflowNode node = new WorkflowNode(
                         instanceId.trim(),
                         role != null ? role.trim() : "",
                         blueprintId != null ? blueprintId.trim() : instanceId.trim(),
@@ -555,12 +1037,25 @@ public class AppGateway {
                         subscribeTopic != null ? subscribeTopic.trim() : "",
                         publishTopic != null ? publishTopic.trim() : "",
                         executor != null ? executor.trim() : "omni"
-                ));
+                );
+
+                // 解析 upstreamDependencies — 决定哪些节点可以并发执行
+                String depsArray = extractJsonArray(obj, "upstreamDependencies");
+                if (depsArray != null && !depsArray.isBlank()) {
+                    for (String dep : depsArray.split(",")) {
+                        String trimmed = dep.trim().replaceAll("[\"\\[\\]\\s]", "");
+                        if (!trimmed.isEmpty()) {
+                            node.addDependency(trimmed);
+                        }
+                    }
+                }
+
+                nodes.add(node);
             }
         }
 
         if (nodes.isEmpty()) {
-            throw new IllegalArgumentException("No valid nodes found in payload");
+            throw new IllegalArgumentException("负载中未找到有效节点");
         }
 
         // 解析 enabledSkills / enabledRoles 数组
@@ -713,10 +1208,10 @@ public class AppGateway {
     public String handleSemanticSearch(String query) {
         try {
             String result = com.ouisani.aios.core.plugin.WebSearchTool.searchForAgent(query);
-            return result.isEmpty() ? "No search results found." : result;
+            return result.isEmpty() ? "未找到搜索结果。" : result;
         } catch (Exception e) {
-            log.warn("[Gateway] Semantic search failed: {}", e.getMessage());
-            return "Semantic search unavailable: " + e.getMessage();
+            log.warn("[Gateway] 语义搜索失败: {}", e.getMessage());
+            return "语义搜索不可用: " + e.getMessage();
         }
     }
 
@@ -742,7 +1237,7 @@ public class AppGateway {
                     it.remove();
                 }
             } catch (Exception e) {
-                log.debug("[Gateway] Failed to push alert to dashboard observer: {}", e.getMessage());
+                log.debug("[Gateway] 向 Dashboard 观察者推送告警失败: {}", e.getMessage());
                 it.remove();
             }
         }

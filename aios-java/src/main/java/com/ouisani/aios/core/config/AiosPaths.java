@@ -34,7 +34,29 @@ public final class AiosPaths {
     public static String aiosHome() {
         String home = envOrProp("AIOS_HOME", "aios.home");
         if (home != null && !home.isEmpty()) return home;
+        // 尝试基于项目目录自动检测
+        String projectDir = detectProjectRoot();
+        if (projectDir != null) return projectDir;
         return System.getProperty("user.home") + "/aios-java";
+    }
+
+    /**
+     * 自动检测项目根目录：从 classpath 向上查找包含 pom.xml 的目录。
+     */
+    private static String detectProjectRoot() {
+        // 优先检查当前工作目录
+        String cwd = System.getProperty("user.dir");
+        if (cwd != null && java.nio.file.Files.exists(java.nio.file.Path.of(cwd, "pom.xml"))) {
+            return cwd;
+        }
+        // 检查父目录
+        if (cwd != null) {
+            java.nio.file.Path parent = java.nio.file.Path.of(cwd).getParent();
+            if (parent != null && java.nio.file.Files.exists(parent.resolve("pom.xml"))) {
+                return parent.toString();
+            }
+        }
+        return null;
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -44,6 +66,65 @@ public final class AiosPaths {
     /** 工作区根目录 */
     public static String workspaces() {
         return resolve("AIOS_WORKSPACES", "aios.workspaces", aiosHome() + "/workspaces");
+    }
+
+    /**
+     * 为指定工作流生成集装箱目录路径。
+     * <p>
+     * 目录命名规则：{@code {timestamp}_{safeName}}，其中：
+     * <ul>
+     *   <li>timestamp — 精确到秒的时间戳（如 "20260617_143025"），保证唯一性和可排序性</li>
+     *   <li>safeName — workflowName 的安全化版本（保留中文、字母数字和下划线，最长 40 字符）</li>
+     * </ul>
+     * <p>
+     * 示例：{@code workspaces/20260617_143025_搜索2026大模型趋势}
+     * <p>
+     * 同时在目录下写入 {@code task.meta} 文件，记录原始任务名、创建时间等元信息。
+     *
+     * @param workflowId   工作流唯一标识（UUID 或时间戳）
+     * @param workflowName 工作流名称（可能包含中文和特殊字符）
+     * @return 集装箱目录的绝对路径
+     */
+    public static String workspaceForWorkflow(String workflowId, String workflowName) {
+        // 1. 生成时间戳前缀：yyyyMMdd_HHmmss 格式，可排序且人类可读
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        String timestamp = now.format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+
+        // 2. 安全化 workflowName：保留中文、字母数字和下划线，去掉文件系统不安全字符
+        String safeName = workflowName
+                .replaceAll("[\\\\/:*?\"<>|]", "")      // 去掉文件系统非法字符
+                .replaceAll("\\s+", "_")                   // 空格替换为下划线
+                .replaceAll("_+", "_")                     // 合并连续下划线
+                .replaceAll("^_|_$", "");                  // 去掉首尾下划线
+
+        // 3. 截断到 40 字符，避免目录名过长
+        if (safeName.length() > 40) {
+            safeName = safeName.substring(0, 40);
+        }
+
+        // 4. 如果安全化后为空，使用默认名
+        if (safeName.isEmpty()) {
+            safeName = "workflow";
+        }
+
+        String dirPath = workspaces() + "/" + timestamp + "_" + safeName;
+
+        // 5. 写入 task.meta 元信息文件，记录原始任务名和创建时间
+        try {
+            java.nio.file.Path dir = java.nio.file.Path.of(dirPath);
+            java.nio.file.Files.createDirectories(dir);
+            String metaContent = "# AIOS Task Metadata\n"
+                    + "workflowId: " + workflowId + "\n"
+                    + "workflowName: " + workflowName + "\n"
+                    + "createdAt: " + now.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME) + "\n"
+                    + "directory: " + dirPath + "\n";
+            java.nio.file.Files.writeString(dir.resolve("task.meta"), metaContent);
+        } catch (java.io.IOException e) {
+            // 写入失败不阻断主流程
+            System.err.println("[AiosPaths] task.meta 写入失败: " + e.getMessage());
+        }
+
+        return dirPath;
     }
 
     /** 技能库目录 */
@@ -77,8 +158,14 @@ public final class AiosPaths {
 
     /** .env 配置文件路径 */
     public static String envFile() {
-        return resolve("AIOS_ENV_FILE", "aios.env.file",
-                System.getProperty("user.home") + "/.aios/.env");
+        String envPath = resolve("AIOS_ENV_FILE", "aios.env.file", null);
+        if (envPath != null) return envPath;
+        // 优先查找项目根目录下的 .env
+        String home = aiosHome();
+        if (java.nio.file.Files.exists(java.nio.file.Path.of(home, ".env"))) {
+            return home + "/.env";
+        }
+        return System.getProperty("user.home") + "/.aios/.env";
     }
 
     /** WASI sysroot 路径 */

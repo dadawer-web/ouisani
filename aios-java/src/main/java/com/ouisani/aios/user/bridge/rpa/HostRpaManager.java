@@ -83,7 +83,7 @@ public final class HostRpaManager {
                     if (name.startsWith("X")) {
                         String displayNum = name.substring(1);
                         System.setProperty("DISPLAY", ":" + displayNum);
-                        log.info("[RPA Bridge] Auto-detected DISPLAY=:{}", displayNum);
+                        log.info("[RPA Bridge] 自动检测到 DISPLAY=:{}", displayNum);
                         break;
                     }
                 }
@@ -111,10 +111,10 @@ public final class HostRpaManager {
 
         if (robot != null) {
             initialized = true;
-            log.info("[RPA Bridge] Host GUI Actuators and Vision initialized (user-space bridge).");
-            System.out.println("[Security] Host RPA Manager demoted from core sandbox. Strict SYS_ADMIN capabilities now required for physical host access.");
+            log.info("[RPA Bridge] 宿主 GUI 执行器和视觉已初始化 (user-space bridge).");
+            System.out.println("[Security] Host RPA Manager 已从核心沙箱降级。物理宿主访问现在需要严格的 SYS_ADMIN 权限。");
         } else {
-            log.warn("[RPA Bridge] Robot initialization failed — RPA capabilities disabled.");
+            log.warn("[RPA Bridge] Robot 初始化失败 — RPA 功能已禁用。");
         }
     }
 
@@ -125,31 +125,31 @@ public final class HostRpaManager {
     public SecurityToken issueSysAdminToken(String requester) {
         SecurityToken token = new SecurityToken(requester, SecurityToken.Capability.SYS_ADMIN);
         authorizedTokens.add(token);
-        log.warn("[RPA Bridge] SYS_ADMIN token issued to: {} (tokenId={})", requester, token.id());
+        log.warn("[RPA Bridge] SYS_ADMIN Token 已签发至: {} (tokenId={})", requester, token.id());
         return token;
     }
 
     public void revokeToken(SecurityToken token) {
         authorizedTokens.remove(token);
-        log.info("[RPA Bridge] Token revoked: tokenId={}", token.id());
+        log.info("[RPA Bridge] Token 已撤销: tokenId={}", token.id());
     }
 
     public void requireSysAdmin(SecurityToken token) {
         if (token == null) {
-            log.error("[RPA Bridge] Permission DENIED: null token");
+            log.error("[RPA Bridge] 权限被拒绝: 空 Token");
             throw new PermissionDeniedException("Host RPA access requires SYS_ADMIN SecurityToken. Null token provided.");
         }
         if (!authorizedTokens.contains(token)) {
-            log.error("[RPA Bridge] Permission DENIED: invalid/revoked token (id={})", token.id());
+            log.error("[RPA Bridge] 权限被拒绝: 无效/已撤销 Token (id={})", token.id());
             throw new PermissionDeniedException("Host RPA access requires valid SYS_ADMIN SecurityToken. Token not found or revoked.");
         }
         if (token.capability() != SecurityToken.Capability.SYS_ADMIN) {
-            log.error("[RPA Bridge] Permission DENIED: insufficient capability (has={}, required=SYS_ADMIN)", token.capability());
+            log.error("[RPA Bridge] 权限被拒绝: 权限不足 (has={}, required=SYS_ADMIN)", token.capability());
             throw new PermissionDeniedException("Host RPA access requires SYS_ADMIN capability. Token has: " + token.capability());
         }
         if (token.isExpired()) {
             authorizedTokens.remove(token);
-            log.error("[RPA Bridge] Permission DENIED: expired token (id={})", token.id());
+            log.error("[RPA Bridge] 权限被拒绝: Token 已过期 (id={})", token.id());
             throw new PermissionDeniedException("Host RPA access requires non-expired SYS_ADMIN SecurityToken. Token has expired.");
         }
     }
@@ -434,7 +434,7 @@ public final class HostRpaManager {
             // ── 5. 等待粘贴完成 ──
             robot.delay(50);
 
-            log.info("[RPA Bridge] typeViaClipboard: textLen={} (clipboard paste)", text.length());
+            log.info("[RPA Bridge] typeViaClipboard: 文本长度={} (clipboard paste)", text.length());
         } finally {
             // ── 6. 恢复原始剪贴板内容 ──
             try {
@@ -523,7 +523,7 @@ public final class HostRpaManager {
             Clipboard systemClipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
             return (String) systemClipboard.getData(java.awt.datatransfer.DataFlavor.stringFlavor);
         } catch (Exception e) {
-            log.warn("[RPA Bridge] readClipboard failed: {}", e.getMessage());
+            log.warn("[RPA Bridge] readClipboard 失败: {}", e.getMessage());
             return "";
         }
     }

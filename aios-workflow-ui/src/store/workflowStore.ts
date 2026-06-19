@@ -17,6 +17,12 @@ export interface AgentNodeData {
   subscribeTopic: string;
   publishTopic: string;
   userParams: Record<string, string>;
+  /** 节点运行状态：idle / running / succeeded / failed */
+  status?: "idle" | "running" | "succeeded" | "failed";
+  /** 节点输出结果（成功后由 DAG 事件填充） */
+  output?: string;
+  /** 错误信息（失败时填充） */
+  error?: string;
   [key: string]: unknown;
 }
 
@@ -94,6 +100,7 @@ interface WorkflowStore {
   dismissSystemAlert: () => void;
   setControlWs: (ws: WebSocket | null) => void;
   hotPatchParam: (targetNode: string, params: Record<string, number>) => void;
+  onDagEvent: (event: { eventType: string; nodeId?: string; error?: string; durationMs?: number; [key: string]: unknown }) => void;
   autoCompile: (userIdea: string) => Promise<void>;
   compileToWorkflow: () => CompiledWorkflowManifest;
   deploy: () => Promise<void>;
@@ -247,6 +254,52 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   },
 
   /**
+   * DAG 事件处理器 — 接收后端推送的节点状态变更，更新 React Flow 节点。
+   */
+  onDagEvent: (event) => {
+    const { eventType, nodeId, error, durationMs } = event;
+    if (!nodeId) return;
+
+    set((state) => ({
+      nodes: state.nodes.map((node) => {
+        if (node.id !== nodeId) return node;
+        const d = node.data as AgentNodeData;
+        let newStatus = d.status ?? "idle";
+        let newError = d.error;
+        let newOutput = d.output;
+
+        switch (eventType) {
+          case "NODE_STARTED":
+          case "ITERATION_STARTED":
+            newStatus = "running";
+            newError = undefined;
+            break;
+          case "NODE_SUCCEEDED":
+          case "ITERATION_SUCCEEDED":
+            newStatus = "succeeded";
+            newOutput = `完成 (${durationMs ?? 0}ms)`;
+            newError = undefined;
+            break;
+          case "NODE_FAILED":
+          case "ITERATION_FAILED":
+            newStatus = "failed";
+            newError = error ?? "未知错误";
+            break;
+          case "NODE_SKIPPED":
+            newStatus = "idle";
+            newError = undefined;
+            break;
+        }
+
+        return {
+          ...node,
+          data: { ...d, status: newStatus, error: newError, output: newOutput },
+        };
+      }),
+    }));
+  },
+
+  /**
    * 一键生成拓扑 — 调用后端 LLM 动态编译 DAG。
    * 发送用户需求 + enabledSkills + enabledRoles 到 /api/workflow/compile，
    * 后端 TopologyCompiler 调用 LLM 返回 {nodes, edges} JSON，
@@ -283,7 +336,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         rawData = JSON.parse(cleaned);
       }
 
-      const { nodes = [], edges = [], agentType } = rawData;
+      const { nodes = [], agentType } = rawData;
 
       if (nodes.length === 0) throw new Error("后端返回了空节点");
 
@@ -294,6 +347,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
 
       // 动态分配坐标 — 漏斗型布局：起点居中，中间并发水平排开，终点居中
       const flowNodes: Node[] = nodes.map((n: any, i: number) => {
+        const nodeId = n.instanceId || n.id || `agent_${i + 1}`;
         const isStart = i === 0;
         const isEnd = i === nodes.length - 1 && nodes.length > 1;
         const middleIndex = isEnd ? i - 1 : i;
@@ -314,13 +368,15 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         }
 
         return {
-          id: n.id || `agent_${i + 1}`,
+          id: nodeId,
           type: "agentNode",
           position: { x, y },
           data: {
-            label: n.id || `Node ${i + 1}`,
+            label: nodeId,
             role: n.role || "未分配职责",
             blueprintId: n.blueprintId || "agentNode",
+            executor: n.executor || "omni",
+            isIteration: n.isIteration || false,
             subscribeTopic: "",
             publishTopic: "",
             userParams: n.userParams || {},
@@ -328,13 +384,21 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         };
       });
 
-      const flowEdges: Edge[] = edges.map((e: any, i: number) => ({
-        id: `e_${e.source}_${e.target}_${i}`,
-        source: e.source,
-        target: e.target,
-        animated: true,
-        style: { stroke: "#00f0ff", strokeWidth: 2 },
-      }));
+      // 从 upstreamDependencies 推导边（后端不返回 edges 数组）
+      const flowEdges: Edge[] = [];
+      nodes.forEach((n: any, i: number) => {
+        const targetId = n.instanceId || n.id || `agent_${i + 1}`;
+        const deps: string[] = n.upstreamDependencies || [];
+        deps.forEach((dep: string, di: number) => {
+          flowEdges.push({
+            id: `e_${dep}_${targetId}_${di}`,
+            source: dep,
+            target: targetId,
+            animated: true,
+            style: { stroke: "#00f0ff", strokeWidth: 2 },
+          });
+        });
+      });
 
       set({ nodes: flowNodes, edges: flowEdges, nodeCounter: flowNodes.length });
       showToast(

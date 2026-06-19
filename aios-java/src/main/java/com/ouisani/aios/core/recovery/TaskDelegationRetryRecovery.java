@@ -22,7 +22,7 @@ public class TaskDelegationRetryRecovery implements RecoveryStrategy {
 
     @Override
     public RecoveryResult apply(RecoveryContext context) {
-        log.info("[TaskDelegationRetryRecovery] Injecting delegation retry for agent {}", context.agentId());
+        log.info("[TaskDelegationRetryRecovery] 正在为 Agent 注入委托重试 {}", context.agentId());
         String modifier = "\n\n[SYSTEM WARNING - TASK DELEGATION FAILED]:\n"
                 + "A delegated sub-task failed. Please try a different approach:\n"
                 + "1. Break the task into smaller, more specific sub-tasks\n"

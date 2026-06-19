@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>番茄钟 - Tomato Clock</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+        
+        h1 {
+            color: #ee5a24;
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 0.9em;
+        }
+        
+        .timer-display {
+            font-size: 4em;
+            font-weight: bold;
+            color: #333;
+            margin: 20px 0;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .status {
+            color: #888;
+            margin-bottom: 20px;
+            font-size: 1.1em;
+            min-height: 30px;
+        }
+        
+        .status.working {
+            color: #ee5a24;
+            font-weight: bold;
+        }
+        
+        .status.break {
+            color: #27ae60;
+            font-weight: bold;
+        }
+        
+        .buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            padding: 15px 30px;
+            font-size: 1.1em;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: bold;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .btn-start {
+            background: #27ae60;
+            color: white;
+        }
+        
+        .btn-start:hover {
+            background: #2ecc71;
+        }
+        
+        .btn-stop {
+            background: #e74c3c;
+            color: white;
+        }
+        
+        .btn-stop:hover {
+            background: #c0392b;
+        }
+        
+        .btn-reset {
+            background: #95a5a6;
+            color: white;
+        }
+        
+        .btn-reset:hover {
+            background: #7f8c8d;
+        }
+        
+        .stats {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+            display: flex;
+            justify-content: space-around;
+        }
+        
+        .stat-item {
+            text-align: center;
+        }
+        
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #ee5a24;
+        }
+        
+        .stat-label {
+            color: #888;
+            font-size: 0.85em;
+        }
+        
+        .tomato {
+            font-size: 3em;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="tomato">🍅</div>
+        <h1>番茄钟</h1>
+        <p class="subtitle">专注工作，高效休息</p>
+        
+        <div class="timer-display" id="timer">25:00</div>
+        <div class="status" id="status">准备开始</div>
+        
+        <div class="buttons">
+            <button class="btn-start" id="btnStart" onclick="startTimer()">开始专注</button>
+            <button class="btn-stop" id="btnStop" onclick="stopTimer()" disabled>结束</button>
+            <button class="btn-reset" id="btnReset" onclick="resetTimer()">重置</button>
+        </div>
+        
+        <div class="stats">
+            <div class="stat-item">
+                <div class="stat-number" id="completedCount">0</div>
+                <div class="stat-label">完成番茄</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number" id="totalMinutes">0</div>
+                <div class="stat-label">专注分钟</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 番茄钟配置
+        const WORK_DURATION = 25 * 60;  // 25分钟工作时间
+        const BREAK_DURATION = 5 * 60;  // 5分钟休息时间
+        
+        // 状态变量
+        let timeLeft = WORK_DURATION;
+        let timerInterval = null;
+        let isRunning = false;
+        let isBreakTime = false;
+        let completedPomodoros = 0;
+        let totalFocusMinutes = 0;
+        
+        // 后端API配置
+        const API_BASE_URL = '/api';  // 后端API地址
+        
+        // DOM元素
+        const timerDisplay = document.getElementById('timer');
+        const statusDisplay = document.getElementById('status');
+        const btnStart = document.getElementById('btnStart');
+        const btnStop = document.getElementById('btnStop');
+        const btnReset = document.getElementById('btnReset');
+        const completedCount = document.getElementById('completedCount');
+        const totalMinutes = document.getElementById('totalMinutes');
+        
+        // 格式化时间显示
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+        
+        // 更新显示
+        function updateDisplay() {
+            timerDisplay.textContent = formatTime(timeLeft);
+            completedCount.textContent = completedPomodoros;
+            totalMinutes.textContent = totalFocusMinutes;
+        }
+        
+        // 调用后端API
+        async function callBackendAPI(endpoint, data = {}) {
+            try {
+                const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                if (!response.ok) {
+                    console.warn('API调用失败:', response.status);
+                    return null;
+                }
+                
+                return await response.json();
+            } catch (error) {
+                console.warn('API调用异常:', error.message);
+                return null;
+            }
+        }
+        
+        // 开始计时
+        async function startTimer() {
+            if (isRunning) return;
+            
+            isRunning = true;
+            btnStart.disabled = true;
+            btnStop.disabled = false;
+            
+            if (isBreakTime) {
+                statusDisplay.textContent = '☕ 休息中...';
+                statusDisplay.className = 'status break';
+            } else {
+                statusDisplay.textContent = '🔥 专注中...';
+                statusDisplay.className = 'status working';
+            }
+            
+            // 通知后端开始
+            await callBackendAPI('/timer/start', {
+                type: isBreakTime ? 'break' : 'work',
+                duration: timeLeft
+            });
+            
+            // 开始倒计时
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                updateDisplay();
+                
+                if (timeLeft <= 0) {
+                    completeSession();
+                }
+            }, 1000);
+        }
+        
+        // 停止计时
+        async function stopTimer() {
+            if (!isRunning) return;
+            
+            clearInterval(timerInterval);
+            isRunning = false;
+            btnStart.disabled = false;
+            btnStop.disabled = true;
+            
+            statusDisplay.textContent = '已暂停';
+            statusDisplay.className = 'status';
+            
+            // 通知后端停止
+            await callBackendAPI('/timer/stop', {
+                timeRemaining: timeLeft,
+                type: isBreakTime ? 'break' : 'work'
+            });
+        }
+        
+        // 完成一个周期
+        async function completeSession() {
+            clearInterval(timerInterval);
+            isRunning = false;
+            btnStart.disabled = false;
+            btnStop.disabled = true;
+            
+            if (!isBreakTime) {
+                // 工作完成
+                completedPomodoros++;
+                totalFocusMinutes += 25;
+                
+                // 通知后端完成
+                await callBackendAPI('/timer/complete', {
+                    type: 'work',
+                    completedPomodoros: completedPomodoros
+                });
+                
+                // 播放提示音（如果需要）
+                playNotification();
+                
+                statusDisplay.textContent = '🎉 休息时间到！';
+                statusDisplay.className = 'status break';
+                
+                // 切换到休息时间
+                isBreakTime = true;
+                timeLeft = BREAK_DURATION;
+            } else {
+                // 休息完成
+                await callBackendAPI('/timer/complete', {
+                    type: 'break'
+                });
+                
+                statusDisplay.textContent = '💪 准备继续专注！';
+                statusDisplay.className = 'status working';
+                
+                // 切换回工作时间
+                isBreakTime = false;
+                timeLeft = WORK_DURATION;
+            }
+            
+            updateDisplay();
+        }
+        
+        // 重置计时器
+        async function resetTimer() {
+            clearInterval(timerInterval);
+            isRunning = false;
+            isBreakTime = false;
+            timeLeft = WORK_DURATION;
+            
+            btnStart.disabled = false;
+            btnStop.disabled = true;
+            statusDisplay.textContent = '准备开始';
+            statusDisplay.className = 'status';
+            
+            // 通知后端重置
+            await callBackendAPI('/timer/reset');
+            
+            updateDisplay();
+        }
+        
+        // 播放通知音
+        function playNotification() {
+            try {
+                // 创建简单的提示音
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+                
+                oscillator.frequency.value = 800;
+                oscillator.type = 'sine';
+                gainNode.gain.value = 0.3;
+                
+                oscillator.start();
+                oscillator.stop(audioContext.currentTime + 0.3);
+            } catch (e) {
+                console.log('无法播放提示音:', e);
+            }
+        }
+        
+        // 初始化显示
+        updateDisplay();
+        console.log('🍅 番茄钟前端已加载');
+    </script>
+</body>
+</html>

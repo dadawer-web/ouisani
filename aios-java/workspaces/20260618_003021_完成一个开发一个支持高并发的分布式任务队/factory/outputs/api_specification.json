@@ -1,0 +1,917 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Distributed Task Queue API",
+    "version": "1.0.0",
+    "description": "高并发分布式任务队列系统 API 规范"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080/api/v1",
+      "description": "本地开发服务器"
+    }
+  ],
+  "paths": {
+    "/tasks": {
+      "post": {
+        "summary": "提交新任务",
+        "tags": [
+          "Task Management"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "任务创建成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDefinition"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误"
+          },
+          "429": {
+            "description": "队列已满，拒绝提交"
+          }
+        }
+      },
+      "get": {
+        "summary": "查询任务列表",
+        "tags": [
+          "Task Management"
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "queued",
+                "assigned",
+                "running",
+                "success",
+                "failed",
+                "retrying",
+                "timeout",
+                "cancelled",
+                "dead_letter"
+              ]
+            }
+          },
+          {
+            "name": "queue",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "任务列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TaskDefinition"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}": {
+      "get": {
+        "summary": "获取任务详情",
+        "tags": [
+          "Task Management"
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "任务详情",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDefinition"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "任务不存在"
+          }
+        }
+      },
+      "delete": {
+        "summary": "取消任务",
+        "tags": [
+          "Task Management"
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "任务已取消"
+          },
+          "404": {
+            "description": "任务不存在"
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/retry": {
+      "post": {
+        "summary": "重试失败任务",
+        "tags": [
+          "Task Management"
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "任务已重新入队"
+          },
+          "400": {
+            "description": "任务状态不允许重试"
+          }
+        }
+      }
+    },
+    "/tasks/batch": {
+      "post": {
+        "summary": "批量提交任务",
+        "tags": [
+          "Task Management"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TaskCreateRequest"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "批量任务创建成功"
+          }
+        }
+      }
+    },
+    "/queues": {
+      "get": {
+        "summary": "获取所有队列信息",
+        "tags": [
+          "Queue Management"
+        ],
+        "responses": {
+          "200": {
+            "description": "队列列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TaskQueue"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "创建新队列",
+        "tags": [
+          "Queue Management"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueueCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "队列创建成功"
+          }
+        }
+      }
+    },
+    "/queues/{queue_name}": {
+      "get": {
+        "summary": "获取队列详情",
+        "tags": [
+          "Queue Management"
+        ],
+        "parameters": [
+          {
+            "name": "queue_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "队列详情"
+          }
+        }
+      },
+      "delete": {
+        "summary": "删除队列",
+        "tags": [
+          "Queue Management"
+        ],
+        "parameters": [
+          {
+            "name": "queue_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "队列已删除"
+          }
+        }
+      }
+    },
+    "/queues/{queue_name}/purge": {
+      "post": {
+        "summary": "清空队列",
+        "tags": [
+          "Queue Management"
+        ],
+        "parameters": [
+          {
+            "name": "queue_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "队列已清空"
+          }
+        }
+      }
+    },
+    "/workers": {
+      "get": {
+        "summary": "获取所有Worker列表",
+        "tags": [
+          "Worker Management"
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Worker列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkerNode"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workers/{worker_id}": {
+      "get": {
+        "summary": "获取Worker详情",
+        "tags": [
+          "Worker Management"
+        ],
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Worker详情"
+          },
+          "404": {
+            "description": "Worker不存在"
+          }
+        }
+      }
+    },
+    "/workers/{worker_id}/heartbeat": {
+      "post": {
+        "summary": "Worker心跳上报",
+        "tags": [
+          "Worker Management"
+        ],
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeartbeatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "心跳确认"
+          }
+        }
+      }
+    },
+    "/workers/{worker_id}/drain": {
+      "post": {
+        "summary": "排空Worker（优雅下线）",
+        "tags": [
+          "Worker Management"
+        ],
+        "parameters": [
+          {
+            "name": "worker_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "已进入排空模式"
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "获取系统指标",
+        "tags": [
+          "Monitoring"
+        ],
+        "responses": {
+          "200": {
+            "description": "系统指标",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemMetrics"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "健康检查",
+        "tags": [
+          "Monitoring"
+        ],
+        "responses": {
+          "200": {
+            "description": "系统健康"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "TaskCreateRequest": {
+        "type": "object",
+        "required": [
+          "task_name",
+          "task_type",
+          "payload"
+        ],
+        "properties": {
+          "task_name": {
+            "type": "string",
+            "description": "任务名称"
+          },
+          "task_type": {
+            "type": "string",
+            "enum": [
+              "batch",
+              "streaming",
+              "cron",
+              "one_shot",
+              "chain"
+            ],
+            "description": "任务类型"
+          },
+          "queue_name": {
+            "type": "string",
+            "default": "default",
+            "description": "目标队列"
+          },
+          "payload": {
+            "type": "object",
+            "description": "任务负载数据"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "CRITICAL",
+              "HIGH",
+              "NORMAL",
+              "LOW",
+              "IDLE"
+            ],
+            "default": "NORMAL"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "default": 30000,
+            "description": "超时时间(ms)"
+          },
+          "retry_policy": {
+            "$ref": "#/components/schemas/RetryPolicy"
+          },
+          "resource_requirement": {
+            "$ref": "#/components/schemas/ResourceRequirement"
+          },
+          "scheduled_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "定时执行时间"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metadata": {
+            "type": "object"
+          }
+        }
+      },
+      "TaskDefinition": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "task_name": {
+            "type": "string"
+          },
+          "task_type": {
+            "type": "string"
+          },
+          "queue_name": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "queued",
+              "assigned",
+              "running",
+              "success",
+              "failed",
+              "retrying",
+              "timeout",
+              "cancelled",
+              "dead_letter"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "timeout_ms": {
+            "type": "integer"
+          },
+          "retry_policy": {
+            "$ref": "#/components/schemas/RetryPolicy"
+          },
+          "assigned_worker_id": {
+            "type": "string"
+          },
+          "result": {
+            "type": "object"
+          },
+          "error_message": {
+            "type": "string"
+          },
+          "retry_count": {
+            "type": "integer"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "type": "integer"
+          }
+        }
+      },
+      "RetryPolicy": {
+        "type": "object",
+        "properties": {
+          "max_retries": {
+            "type": "integer",
+            "default": 3
+          },
+          "backoff_type": {
+            "type": "string",
+            "enum": [
+              "linear",
+              "exponential",
+              "fixed"
+            ],
+            "default": "exponential"
+          },
+          "initial_delay_ms": {
+            "type": "integer",
+            "default": 1000
+          },
+          "max_delay_ms": {
+            "type": "integer",
+            "default": 60000
+          },
+          "backoff_multiplier": {
+            "type": "number",
+            "default": 2.0
+          },
+          "retryable_errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ResourceRequirement": {
+        "type": "object",
+        "properties": {
+          "cpu_cores": {
+            "type": "number",
+            "default": 1.0
+          },
+          "memory_mb": {
+            "type": "integer",
+            "default": 512
+          },
+          "gpu_count": {
+            "type": "integer",
+            "default": 0
+          },
+          "disk_mb": {
+            "type": "integer",
+            "default": 1024
+          },
+          "custom_resources": {
+            "type": "object"
+          }
+        }
+      },
+      "TaskQueue": {
+        "type": "object",
+        "properties": {
+          "queue_id": {
+            "type": "string"
+          },
+          "queue_name": {
+            "type": "string"
+          },
+          "queue_type": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "priority",
+              "delayed",
+              "dead_letter",
+              "fifo"
+            ]
+          },
+          "max_size": {
+            "type": "integer"
+          },
+          "current_size": {
+            "type": "integer"
+          },
+          "pending_count": {
+            "type": "integer"
+          },
+          "processing_count": {
+            "type": "integer"
+          },
+          "completed_count": {
+            "type": "integer"
+          },
+          "failed_count": {
+            "type": "integer"
+          },
+          "consumer_groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ttl_seconds": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "WorkerNode": {
+        "type": "object",
+        "properties": {
+          "worker_id": {
+            "type": "string"
+          },
+          "worker_name": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "busy",
+              "draining",
+              "offline",
+              "error",
+              "maintenance"
+            ]
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_tasks": {
+            "type": "integer"
+          },
+          "current_task_count": {
+            "type": "integer"
+          },
+          "resource_capacity": {
+            "type": "object"
+          },
+          "resource_used": {
+            "type": "object"
+          },
+          "last_heartbeat": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completed_tasks": {
+            "type": "integer"
+          },
+          "failed_tasks": {
+            "type": "integer"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "QueueCreateRequest": {
+        "type": "object",
+        "required": [
+          "queue_name"
+        ],
+        "properties": {
+          "queue_name": {
+            "type": "string"
+          },
+          "queue_type": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "priority",
+              "delayed",
+              "dead_letter",
+              "fifo"
+            ],
+            "default": "standard"
+          },
+          "max_size": {
+            "type": "integer",
+            "default": 10000
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "default": 86400
+          },
+          "priority_enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "HeartbeatRequest": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "busy",
+              "draining",
+              "offline",
+              "error",
+              "maintenance"
+            ]
+          },
+          "current_tasks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "resource_used": {
+            "type": "object"
+          }
+        }
+      },
+      "SystemMetrics": {
+        "type": "object",
+        "properties": {
+          "total_tasks": {
+            "type": "integer"
+          },
+          "pending_tasks": {
+            "type": "integer"
+          },
+          "running_tasks": {
+            "type": "integer"
+          },
+          "completed_tasks": {
+            "type": "integer"
+          },
+          "failed_tasks": {
+            "type": "integer"
+          },
+          "active_workers": {
+            "type": "integer"
+          },
+          "idle_workers": {
+            "type": "integer"
+          },
+          "total_queues": {
+            "type": "integer"
+          },
+          "avg_task_duration_ms": {
+            "type": "number"
+          },
+          "tasks_per_second": {
+            "type": "number"
+          },
+          "queue_depth_by_name": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  }
+}

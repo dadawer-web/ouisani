@@ -6,7 +6,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -33,8 +33,8 @@ public class AgentMailbox {
     /** 信箱主人的 Agent ID */
     private final String ownerId;
 
-    /** 阻塞队列 — 无界，支持任意数量的积压消息 */
-    private final BlockingQueue<MailMessage> inbox = new LinkedBlockingQueue<>();
+    /** 优先级阻塞队列 — 系统级消息永远插队执行 */
+    private final PriorityBlockingQueue<MailMessage> inbox = new PriorityBlockingQueue<>();
 
     /** 信箱容量监控 — 记录历史峰值，用于容量规划 */
     private int peakSize = 0;
@@ -53,8 +53,8 @@ public class AgentMailbox {
         if (currentSize > peakSize) {
             peakSize = currentSize;
         }
-        log.debug("[Mailbox] {} received mail from {} (Type: {}, Queue: {})",
-                ownerId, message.getSenderId(), message.getType(), currentSize);
+        log.debug("[Mailbox] {} 收到来自 {} 的邮件 (Type: {}, Priority: {}, Queue: {})",
+                ownerId, message.getSenderId(), message.getType(), message.getPriority(), currentSize);
 
         // 【广播邮件飞梭动效事件 — 供前端大屏渲染 Actor 间通讯动画】
         try {

@@ -106,7 +106,7 @@ public class ChildEngineBuilder {
 
             } catch (Exception e) {
                 failedAtIndex = i;
-                log.error("[ChildEngine] Iteration {}/{} failed: {}", i + 1, iterationItems.size(), e.getMessage());
+                log.error("[ChildEngine] 迭代 {}/{} 失败: {}", i + 1, iterationItems.size(), e.getMessage());
 
                 // 发出迭代失败事件
                 emitEvent(new GraphEngineEvent.GraphNodeEvent.NodeRunIterationFailedEvent(
@@ -171,7 +171,7 @@ public class ChildEngineBuilder {
             try {
                 layer.onEvent(event);
             } catch (Exception e) {
-                log.warn("[ChildEngine] Layer '{}' failed to handle event: {}",
+                log.warn("[ChildEngine] Layer '{}' 处理事件失败: {}",
                         layer.name(), e.getMessage());
             }
         }

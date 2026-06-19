@@ -1,0 +1,47 @@
+═══════════════════════════════════════════════════
+  AIOS Semantic Core Dump
+  Node: create_backend
+  Role: 生成Java Spring Boot后端项目，提供番茄钟REST API（包含/start和/stop端点），输出API配置信息
+  Executor: omni
+  Timestamp: 2026-06-19T16:50:28.329597170Z
+  Duration: 431408ms
+  Trace ID: (none)
+═══════════════════════════════════════════════════
+
+── CRASH INFO ──
+Exception: java.util.concurrent.CompletionException
+Message: java.lang.RuntimeException: Agent 在 3 次自愈尝试后失败。最后错误: Node create_backend 未验证通过。LLM 响应: <tool_name>file_read</tool_name><parameters>{"path": "/home/xmy/tryaios/aios-java/workspaces/我要一个极其简单的『番茄钟』Web_应用/factory/create_backend.py"}</parameters>
+[RECOVERY STRATEGY APPLIED: Tool error recovery: injected error analysis]
+Cause: java.lang.RuntimeException: Agent 在 3 次自愈尝试后失败。最后错误: Node create_backend 未验证通过。LLM 响应: <tool_name>file_read</tool_name><parameters>{"path": "/home/xmy/tryaios/aios-java/workspaces/我要一个极其简单的『番茄钟』Web_应用/factory/create_backend.py"}</parameters>
+[RECOVERY STRATEGY APPLIED: Tool error recovery: injected error analysis]
+
+StackTrace:
+  at java.base/java.util.concurrent.CompletableFuture.reportJoin(CompletableFuture.java:413)
+  at java.base/java.util.concurrent.CompletableFuture.join(CompletableFuture.java:2118)
+  at com.ouisani.aios.user.apps.omnifactory.WorkflowEngine.executeNode(WorkflowEngine.java:537)
+  at com.ouisani.aios.user.apps.omnifactory.WorkflowEngine.lambda$executeDagInternal$2(WorkflowEngine.java:275)
+  at java.base/java.util.concurrent.CompletableFuture.uniHandle(CompletableFuture.java:934)
+  at java.base/java.util.concurrent.CompletableFuture$UniHandle.tryFire(CompletableFuture.java:911)
+  at java.base/java.util.concurrent.CompletableFuture$Completion.run(CompletableFuture.java:482)
+  at java.base/java.util.concurrent.ThreadPerTaskExecutor$TaskRunner.run(ThreadPerTaskExecutor.java:314)
+  at java.base/java.lang.VirtualThread.run(VirtualThread.java:329)
+
+── VARIABLE SNAPSHOT ──
+  (empty)
+
+── UPSTREAM OUTPUTS ──
+
+── NODE BLUEPRINT ──
+  BlueprintId: agentNode
+  Role: 生成Java Spring Boot后端项目，提供番茄钟REST API（包含/start和/stop端点），输出API配置信息
+  Subscribe: 
+  Publish: topic_create_backend_create_frontend
+
+── BOULDER CHECKPOINT HISTORY ──
+  (no previous checkpoint)
+
+── VFS MOUNT STATE ──
+
+═══════════════════════════════════════════════════
+  END OF CORE DUMP
+═══════════════════════════════════════════════════

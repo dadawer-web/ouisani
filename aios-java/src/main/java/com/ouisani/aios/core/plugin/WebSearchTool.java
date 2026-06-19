@@ -66,8 +66,8 @@ public class WebSearchTool {
                     return result;
                 }
             } catch (Exception e) {
-                log.warn("[WebSearchTool] Serper search failed, falling back to Jina: {}", e.getMessage());
-                System.out.println("[WebSearchTool] Serper failed, trying Jina fallback: " + e.getMessage());
+                log.warn("[WebSearchTool] Serper 失败，尝试 Jina 回退: {}", e.getMessage());
+                System.out.println("[WebSearchTool] Serper 失败，尝试 Jina 回退: " + e.getMessage());
             }
         }
 
@@ -75,8 +75,8 @@ public class WebSearchTool {
         try {
             return searchViaJina(query);
         } catch (Exception e) {
-            log.warn("[WebSearchTool] All search backends failed for query: '{}'", query);
-            System.out.println("[WebSearchTool] All search backends failed: " + e.getMessage());
+            log.warn("[WebSearchTool] 所有搜索后端均失败，查询: '{}'", query);
+            System.out.println("[WebSearchTool] 所有搜索后端均失败: " + e.getMessage());
             throw new RuntimeException("Web search unavailable: " + e.getMessage(), e);
         }
     }
@@ -110,8 +110,8 @@ public class WebSearchTool {
                 String truncated = text.length() > MAX_CONTEXT_LENGTH
                         ? text.substring(0, MAX_CONTEXT_LENGTH) + "\n... [truncated]"
                         : text;
-                log.info("[WebSearchTool] Serper search completed: {} chars", truncated.length());
-                System.out.printf("[WebSearchTool] Serper search completed: %d chars%n", truncated.length());
+                log.info("[WebSearchTool] Serper 搜索完成: {} 字符", truncated.length());
+                System.out.printf("[WebSearchTool] Serper 搜索完成: %d 字符%n", truncated.length());
                 return truncated;
             } else {
                 throw new RuntimeException("Serper returned HTTP " + response.statusCode());

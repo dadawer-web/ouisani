@@ -22,7 +22,7 @@ public class EditErrorRecovery implements RecoveryStrategy {
 
     @Override
     public RecoveryResult apply(RecoveryContext context) {
-        log.info("[EditErrorRecovery] Injecting re-read instruction for agent {}", context.agentId());
+        log.info("[EditErrorRecovery] 正在为 Agent 注入重新读取指令 {}", context.agentId());
         String errorMsg = context.exception().getMessage() != null ? context.exception().getMessage() : "Edit failed";
         String modifier = "\n\n[SYSTEM CRITICAL - EDIT FAILED]:\n"
                 + "Your previous file edit failed:\n"

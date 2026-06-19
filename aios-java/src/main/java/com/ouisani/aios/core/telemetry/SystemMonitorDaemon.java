@@ -71,7 +71,7 @@ public final class SystemMonitorDaemon {
         scheduler.scheduleAtFixedRate(this::collectAndBroadcast, 1, 1, TimeUnit.SECONDS);
 
         log.info("[System Monitor] Daemon started — collecting metrics every 1s");
-        System.out.println("  ✓ [System Monitor] Telemetry daemon started (1s interval)");
+        System.out.println("  ✓ [System Monitor] 遥测守护进程已启动 (1s 间隔)");
     }
 
     /**

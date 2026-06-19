@@ -143,7 +143,7 @@ public final class VfsJournal {
                     replayed++;
                     log.debug("[VFS Journal] Replayed: op={}, path={}", entry.operation, entry.nodePath);
                 } else {
-                    log.warn("[VFS Journal] Replay skipped: path '{}' not found in VFS", entry.nodePath);
+                    log.warn("[VFS Journal] 回放已跳过: 路径 '{}' 在 VFS 中未找到", entry.nodePath);
                 }
             } catch (Exception e) {
                 log.warn("[VFS Journal] Replay error for path '{}': {}", entry.nodePath, e.getMessage());

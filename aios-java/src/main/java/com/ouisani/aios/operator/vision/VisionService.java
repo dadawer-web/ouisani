@@ -68,7 +68,7 @@ public class VisionService {
                     List.of(visionMessage), VISION_SYSTEM_PROMPT);
             long elapsedMs = System.currentTimeMillis() - startMs;
 
-            log.info("[VisionService] Screenshot analyzed in {}ms, response length: {}",
+            log.info("[VisionService] 截图已分析，耗时 {}ms，响应长度: {}",
                     elapsedMs, result != null ? result.length() : 0);
 
             if (result == null || result.isBlank()) {

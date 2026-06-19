@@ -71,12 +71,12 @@ public final class ContextInjector {
 
         VectorNode vecMem = resolveVectorMemory();
         if (vecMem == null) {
-            log.debug("[Context Injector] /dev/vec_mem not available, skipping augmentation");
+            log.debug("[Context Injector] /dev/vec_mem 不可用，跳过增强");
             return originalPrompt;
         }
 
         if (vecMem.recordCount() == 0) {
-            log.debug("[Context Injector] Vector Memory is empty, skipping augmentation");
+            log.debug("[Context Injector] Vector Memory 为空，跳过增强");
             return originalPrompt;
         }
 
@@ -85,18 +85,18 @@ public final class ContextInjector {
             String augmentedMemory = extractRelevantMemory(searchResult);
 
             if (augmentedMemory == null || augmentedMemory.isEmpty()) {
-                log.debug("[Context Injector] No high-similarity results found, prompt unchanged");
+                log.debug("[Context Injector] 未找到高相似度结果，Prompt 未变更");
                 return originalPrompt;
             }
 
             String augmented = "[System Augmented Memory:\n" + augmentedMemory + "]\n\n" + originalPrompt;
 
-            log.info("[Context Injector] Transparently augmented prompt with Vector Memory!");
-            System.out.printf("  🧠 [Context Injector] Transparently augmented prompt with Vector Memory!%n");
+            log.info("[Context Injector] 已透明增强 Prompt（Vector Memory）！");
+            System.out.printf("  🧠 [Context Injector] 已透明增强 Prompt（Vector Memory）！%n");
 
             return augmented;
         } catch (Exception e) {
-            log.warn("[Context Injector] Augmentation failed, using original prompt: {}", e.getMessage());
+            log.warn("[Context Injector] 增强失败，使用原始 Prompt: {}", e.getMessage());
             return originalPrompt;
         }
     }

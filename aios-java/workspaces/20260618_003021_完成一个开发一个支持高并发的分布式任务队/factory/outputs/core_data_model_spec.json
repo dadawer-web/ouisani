@@ -1,0 +1,1296 @@
+{
+  "title": "Distributed Task Queue - Core Data Model Specification",
+  "version": "1.0.0",
+  "generated_at": "2026-06-18T00:35:01.475041",
+  "models": {
+    "enums": {
+      "JobStatus": {
+        "values": [
+          "pending",
+          "queued",
+          "assigned",
+          "running",
+          "completed",
+          "failed",
+          "timeout",
+          "retrying",
+          "cancelled"
+        ],
+        "description": "Task lifecycle state machine",
+        "transitions": {
+          "pending": [
+            "queued",
+            "cancelled"
+          ],
+          "queued": [
+            "assigned",
+            "cancelled"
+          ],
+          "assigned": [
+            "running",
+            "queued",
+            "cancelled"
+          ],
+          "running": [
+            "completed",
+            "failed",
+            "timeout",
+            "cancelled"
+          ],
+          "failed": [
+            "retrying",
+            "cancelled"
+          ],
+          "timeout": [
+            "retrying",
+            "cancelled"
+          ],
+          "retrying": [
+            "queued",
+            "failed"
+          ],
+          "completed": [],
+          "cancelled": []
+        },
+        "terminal_states": [
+          "completed",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "TaskPriority": {
+        "values": {
+          "CRITICAL": 0,
+          "HIGH": 1,
+          "NORMAL": 2,
+          "LOW": 3,
+          "BACKGROUND": 4
+        },
+        "description": "Task execution priority (lower value = higher priority)"
+      },
+      "WorkerStatus": {
+        "values": [
+          "idle",
+          "busy",
+          "offline",
+          "draining"
+        ],
+        "description": "Worker node operational status"
+      }
+    },
+    "data_models": {
+      "Task": {
+        "description": "Core task entity representing a unit of work",
+        "fields": {
+          "task_id": "aa99de5b-c56b-4505-b226-95014ca84cd1",
+          "name": "resize-product-image",
+          "description": "Resize product image to 800x600",
+          "status": "completed",
+          "priority": 1,
+          "queue_name": "image-processing",
+          "created_by": "system",
+          "assigned_worker_id": null,
+          "retry_count": 0,
+          "max_retries": 3,
+          "last_error": null,
+          "created_at": 1781714101.47432,
+          "queued_at": 1781714101.474384,
+          "started_at": 1781714101.474433,
+          "completed_at": 1781714101.4744468,
+          "updated_at": 1781714101.4744446,
+          "state_history": [
+            {
+              "from": "pending",
+              "to": "queued",
+              "timestamp": 1781714101.4743803,
+              "error": null
+            },
+            {
+              "from": "queued",
+              "to": "assigned",
+              "timestamp": 1781714101.47441,
+              "error": null
+            },
+            {
+              "from": "assigned",
+              "to": "running",
+              "timestamp": 1781714101.4744306,
+              "error": null
+            },
+            {
+              "from": "running",
+              "to": "completed",
+              "timestamp": 1781714101.4744437,
+              "error": null
+            }
+          ],
+          "result": null,
+          "tags": [
+            "image",
+            "product",
+            "resize"
+          ],
+          "duration_seconds": 1.3828277587890625e-05,
+          "wait_time_seconds": 4.887580871582031e-05,
+          "payload": {
+            "handler": "image_processor",
+            "input_data": {
+              "image_url": "https://example.com/img.jpg",
+              "resize": [
+                800,
+                600
+              ]
+            },
+            "output_location": null,
+            "timeout_seconds": 120,
+            "retry_policy": {
+              "max_retries": 3,
+              "backoff_base": 2,
+              "backoff_max_seconds": 60
+            }
+          }
+        },
+        "key_behaviors": [
+          "State machine with validated transitions",
+          "Automatic timestamp management on state changes",
+          "Retry count tracking with configurable max retries",
+          "Full state history audit trail",
+          "Duration and wait time computation"
+        ]
+      },
+      "TaskPayload": {
+        "description": "Work specification with handler, inputs, and retry policy",
+        "fields": {
+          "handler": "image_processor",
+          "input_data": {
+            "image_url": "https://example.com/img.jpg",
+            "resize": [
+              800,
+              600
+            ]
+          },
+          "output_location": null,
+          "timeout_seconds": 120,
+          "retry_policy": {
+            "max_retries": 3,
+            "backoff_base": 2,
+            "backoff_max_seconds": 60
+          }
+        }
+      },
+      "Worker": {
+        "description": "Processing node that executes tasks",
+        "fields": {
+          "worker_id": "41654263-f307-4798-a1ea-5b985356348d",
+          "hostname": "worker-node-01",
+          "ip_address": "192.168.1.100",
+          "port": 9090,
+          "status": "idle",
+          "max_concurrent_tasks": 5,
+          "current_task_count": 3,
+          "available_capacity": 2,
+          "supported_handlers": [
+            "image_processor",
+            "email_sender",
+            "pdf_generator"
+          ],
+          "tags": [
+            "gpu",
+            "high-memory"
+          ],
+          "last_heartbeat": 1781714101.4747305,
+          "registered_at": 1781714101.4747314,
+          "total_tasks_completed": 0,
+          "total_tasks_failed": 0,
+          "avg_task_duration_ms": 0.0,
+          "active_task_ids": [
+            "task-1",
+            "task-2",
+            "task-3"
+          ]
+        },
+        "key_behaviors": [
+          "Capacity-based task assignment",
+          "Automatic status management (idle/busy)",
+          "Task completion tracking with success/failure counters",
+          "Heartbeat-based liveness detection"
+        ]
+      },
+      "Queue": {
+        "description": "Task ordering and distribution manager",
+        "fields": {
+          "queue_id": "2fc75a8b-cf84-4a5e-b4d8-05b94164e735",
+          "name": "image-processing",
+          "description": "High-priority image processing queue",
+          "max_size": 50000,
+          "default_timeout": 120,
+          "dead_letter_queue": "image-processing-dlq",
+          "max_delivery_count": 5,
+          "rate_limit_per_second": 100.0,
+          "rate_limit_burst": 50,
+          "total_enqueued": 0,
+          "total_dequeued": 0,
+          "total_completed": 0,
+          "total_failed": 0,
+          "pending_count": 0,
+          "is_full": false,
+          "utilization": 0.0,
+          "created_at": 1781714101.4748333,
+          "updated_at": 1781714101.474834
+        },
+        "key_behaviors": [
+          "Priority-based ordering with FIFO within same priority",
+          "Dead letter queue for permanently failed tasks",
+          "Rate limiting with configurable burst capacity",
+          "Size limits with utilization tracking"
+        ]
+      },
+      "TaskResult": {
+        "description": "Standardized execution result from workers",
+        "fields": {
+          "task_id": "aa99de5b-c56b-4505-b226-95014ca84cd1",
+          "status": "completed",
+          "output": {
+            "resized_url": "https://example.com/img_800x600.jpg",
+            "size_bytes": 45678
+          },
+          "error": null,
+          "error_code": null,
+          "execution_time_ms": 1234.5,
+          "worker_id": "41654263-f307-4798-a1ea-5b985356348d",
+          "retry_count": 0,
+          "completed_at": 1781714101.4748962
+        }
+      }
+    },
+    "api_specification": {
+      "openapi": "3.0.3",
+      "info": {
+        "title": "Distributed Task Queue API",
+        "version": "1.0.0",
+        "description": "RESTful API for managing distributed task queues, workers, and job execution"
+      },
+      "servers": [
+        {
+          "url": "http://localhost:8080/api/v1",
+          "description": "Local development"
+        }
+      ],
+      "paths": {
+        "/tasks": {
+          "post": {
+            "summary": "Create a new task",
+            "tags": [
+              "Tasks"
+            ],
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/CreateTaskRequest"
+                  }
+                }
+              }
+            },
+            "responses": {
+              "201": {
+                "description": "Task created",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/Task"
+                    }
+                  }
+                }
+              },
+              "400": {
+                "description": "Invalid request"
+              },
+              "429": {
+                "description": "Queue full or rate limited"
+              }
+            }
+          },
+          "get": {
+            "summary": "List tasks with filtering",
+            "tags": [
+              "Tasks"
+            ],
+            "parameters": [
+              {
+                "name": "status",
+                "in": "query",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "queued",
+                    "assigned",
+                    "running",
+                    "completed",
+                    "failed",
+                    "timeout",
+                    "retrying",
+                    "cancelled"
+                  ]
+                }
+              },
+              {
+                "name": "queue_name",
+                "in": "query",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              {
+                "name": "priority",
+                "in": "query",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              {
+                "name": "tags",
+                "in": "query",
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Comma-separated tags"
+              },
+              {
+                "name": "created_by",
+                "in": "query",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              {
+                "name": "limit",
+                "in": "query",
+                "schema": {
+                  "type": "integer",
+                  "default": 50
+                }
+              },
+              {
+                "name": "offset",
+                "in": "query",
+                "schema": {
+                  "type": "integer",
+                  "default": 0
+                }
+              }
+            ],
+            "responses": {
+              "200": {
+                "description": "Task list",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/TaskListResponse"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/tasks/{task_id}": {
+          "get": {
+            "summary": "Get task by ID",
+            "tags": [
+              "Tasks"
+            ],
+            "parameters": [
+              {
+                "name": "task_id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            ],
+            "responses": {
+              "200": {
+                "description": "Task details",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/Task"
+                    }
+                  }
+                }
+              },
+              "404": {
+                "description": "Task not found"
+              }
+            }
+          },
+          "delete": {
+            "summary": "Cancel a task",
+            "tags": [
+              "Tasks"
+            ],
+            "parameters": [
+              {
+                "name": "task_id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            ],
+            "responses": {
+              "200": {
+                "description": "Task cancelled"
+              },
+              "404": {
+                "description": "Task not found"
+              },
+              "409": {
+                "description": "Task already in terminal state"
+              }
+            }
+          }
+        },
+        "/tasks/{task_id}/status": {
+          "patch": {
+            "summary": "Update task status (internal use by workers)",
+            "tags": [
+              "Tasks"
+            ],
+            "parameters": [
+              {
+                "name": "task_id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            ],
+            "requestBody": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/UpdateStatusRequest"
+                  }
+                }
+              }
+            },
+            "responses": {
+              "200": {
+                "description": "Status updated"
+              },
+              "409": {
+                "description": "Invalid state transition"
+              }
+            }
+          }
+        },
+        "/tasks/{task_id}/result": {
+          "put": {
+            "summary": "Submit task result",
+            "tags": [
+              "Tasks"
+            ],
+            "parameters": [
+              {
+                "name": "task_id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            ],
+            "requestBody": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TaskResult"
+                  }
+                }
+              }
+            },
+            "responses": {
+              "200": {
+                "description": "Result recorded"
+              },
+              "404": {
+                "description": "Task not found"
+              }
+            }
+          }
+        },
+        "/queues": {
+          "get": {
+            "summary": "List all queues",
+            "tags": [
+              "Queues"
+            ],
+            "responses": {
+              "200": {
+                "description": "Queue list",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Queue"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "post": {
+            "summary": "Create a new queue",
+            "tags": [
+              "Queues"
+            ],
+            "requestBody": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/CreateQueueRequest"
+                  }
+                }
+              }
+            },
+            "responses": {
+              "201": {
+                "description": "Queue created",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/Queue"
+                    }
+                  }
+                }
+              },
+              "409": {
+                "description": "Queue name already exists"
+              }
+            }
+          }
+        },
+        "/queues/{queue_name}/stats": {
+          "get": {
+            "summary": "Get queue statistics",
+            "tags": [
+              "Queues"
+            ],
+            "parameters": [
+              {
+                "name": "queue_name",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            ],
+            "responses": {
+              "200": {
+                "description": "Queue stats",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/QueueStats"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/workers": {
+          "get": {
+            "summary": "List all workers",
+            "tags": [
+              "Workers"
+            ],
+            "parameters": [
+              {
+                "name": "status",
+                "in": "query",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "idle",
+                    "busy",
+                    "offline",
+                    "draining"
+                  ]
+                }
+              },
+              {
+                "name": "handler",
+                "in": "query",
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Filter by supported handler"
+              }
+            ],
+            "responses": {
+              "200": {
+                "description": "Worker list",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Worker"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/workers/register": {
+          "post": {
+            "summary": "Register a new worker",
+            "tags": [
+              "Workers"
+            ],
+            "requestBody": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RegisterWorkerRequest"
+                  }
+                }
+              }
+            },
+            "responses": {
+              "201": {
+                "description": "Worker registered",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/Worker"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/workers/{worker_id}/heartbeat": {
+          "post": {
+            "summary": "Worker heartbeat",
+            "tags": [
+              "Workers"
+            ],
+            "parameters": [
+              {
+                "name": "worker_id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            ],
+            "requestBody": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HeartbeatRequest"
+                  }
+                }
+              }
+            },
+            "responses": {
+              "200": {
+                "description": "Heartbeat acknowledged"
+              }
+            }
+          }
+        },
+        "/workers/{worker_id}/tasks": {
+          "get": {
+            "summary": "Get tasks assigned to worker",
+            "tags": [
+              "Workers"
+            ],
+            "parameters": [
+              {
+                "name": "worker_id",
+                "in": "path",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            ],
+            "responses": {
+              "200": {
+                "description": "Assigned tasks",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Task"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/tasks/batch": {
+          "post": {
+            "summary": "Create multiple tasks in batch",
+            "tags": [
+              "Batch"
+            ],
+            "requestBody": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "tasks": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/CreateTaskRequest"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "responses": {
+              "201": {
+                "description": "Batch created",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "task_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "/health": {
+          "get": {
+            "summary": "System health check",
+            "tags": [
+              "System"
+            ],
+            "responses": {
+              "200": {
+                "description": "System healthy",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "$ref": "#/components/schemas/HealthResponse"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "components": {
+        "schemas": {
+          "CreateTaskRequest": {
+            "type": "object",
+            "required": [
+              "name",
+              "payload"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Task name"
+              },
+              "description": {
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/TaskPayload"
+              },
+              "queue_name": {
+                "type": "string",
+                "default": "default"
+              },
+              "priority": {
+                "type": "integer",
+                "enum": [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4
+                ],
+                "default": 2
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_by": {
+                "type": "string",
+                "default": "api"
+              }
+            }
+          },
+          "TaskPayload": {
+            "type": "object",
+            "required": [
+              "handler"
+            ],
+            "properties": {
+              "handler": {
+                "type": "string",
+                "description": "Task handler/executor name"
+              },
+              "input_data": {
+                "type": "object",
+                "description": "Handler input parameters"
+              },
+              "output_location": {
+                "type": "string",
+                "description": "Where to store result"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 300
+              },
+              "retry_policy": {
+                "type": "object"
+              }
+            }
+          },
+          "Task": {
+            "type": "object",
+            "properties": {
+              "task_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "queued",
+                  "assigned",
+                  "running",
+                  "completed",
+                  "failed",
+                  "timeout",
+                  "retrying",
+                  "cancelled"
+                ]
+              },
+              "priority": {
+                "type": "integer"
+              },
+              "queue_name": {
+                "type": "string"
+              },
+              "assigned_worker_id": {
+                "type": "string",
+                "nullable": true
+              },
+              "retry_count": {
+                "type": "integer"
+              },
+              "max_retries": {
+                "type": "integer"
+              },
+              "last_error": {
+                "type": "string",
+                "nullable": true
+              },
+              "created_at": {
+                "type": "number",
+                "format": "float"
+              },
+              "queued_at": {
+                "type": "number",
+                "nullable": true
+              },
+              "started_at": {
+                "type": "number",
+                "nullable": true
+              },
+              "completed_at": {
+                "type": "number",
+                "nullable": true
+              },
+              "updated_at": {
+                "type": "number"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "payload": {
+                "$ref": "#/components/schemas/TaskPayload"
+              },
+              "result": {
+                "type": "object",
+                "nullable": true
+              },
+              "duration_seconds": {
+                "type": "number",
+                "nullable": true
+              },
+              "wait_time_seconds": {
+                "type": "number",
+                "nullable": true
+              }
+            }
+          },
+          "TaskListResponse": {
+            "type": "object",
+            "properties": {
+              "tasks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              },
+              "total": {
+                "type": "integer"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "offset": {
+                "type": "integer"
+              }
+            }
+          },
+          "UpdateStatusRequest": {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              },
+              "worker_id": {
+                "type": "string"
+              }
+            }
+          },
+          "TaskResult": {
+            "type": "object",
+            "properties": {
+              "task_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "output": {
+                "type": "object"
+              },
+              "error": {
+                "type": "string"
+              },
+              "error_code": {
+                "type": "string"
+              },
+              "execution_time_ms": {
+                "type": "number"
+              },
+              "worker_id": {
+                "type": "string"
+              },
+              "retry_count": {
+                "type": "integer"
+              }
+            }
+          },
+          "Queue": {
+            "type": "object",
+            "properties": {
+              "queue_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "max_size": {
+                "type": "integer"
+              },
+              "default_timeout": {
+                "type": "integer"
+              },
+              "dead_letter_queue": {
+                "type": "string",
+                "nullable": true
+              },
+              "max_delivery_count": {
+                "type": "integer"
+              },
+              "rate_limit_per_second": {
+                "type": "number",
+                "nullable": true
+              },
+              "pending_count": {
+                "type": "integer"
+              },
+              "total_enqueued": {
+                "type": "integer"
+              },
+              "total_completed": {
+                "type": "integer"
+              },
+              "total_failed": {
+                "type": "integer"
+              },
+              "utilization": {
+                "type": "number"
+              }
+            }
+          },
+          "CreateQueueRequest": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "max_size": {
+                "type": "integer",
+                "default": 100000
+              },
+              "default_timeout": {
+                "type": "integer",
+                "default": 300
+              },
+              "dead_letter_queue": {
+                "type": "string"
+              },
+              "rate_limit_per_second": {
+                "type": "number"
+              }
+            }
+          },
+          "QueueStats": {
+            "type": "object",
+            "properties": {
+              "queue_name": {
+                "type": "string"
+              },
+              "pending_count": {
+                "type": "integer"
+              },
+              "running_count": {
+                "type": "integer"
+              },
+              "completed_count": {
+                "type": "integer"
+              },
+              "failed_count": {
+                "type": "integer"
+              },
+              "avg_wait_time_ms": {
+                "type": "number"
+              },
+              "avg_execution_time_ms": {
+                "type": "number"
+              },
+              "throughput_per_second": {
+                "type": "number"
+              }
+            }
+          },
+          "Worker": {
+            "type": "object",
+            "properties": {
+              "worker_id": {
+                "type": "string"
+              },
+              "hostname": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "idle",
+                  "busy",
+                  "offline",
+                  "draining"
+                ]
+              },
+              "max_concurrent_tasks": {
+                "type": "integer"
+              },
+              "current_task_count": {
+                "type": "integer"
+              },
+              "available_capacity": {
+                "type": "integer"
+              },
+              "supported_handlers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "last_heartbeat": {
+                "type": "number"
+              },
+              "total_tasks_completed": {
+                "type": "integer"
+              },
+              "total_tasks_failed": {
+                "type": "integer"
+              },
+              "avg_task_duration_ms": {
+                "type": "number"
+              }
+            }
+          },
+          "RegisterWorkerRequest": {
+            "type": "object",
+            "required": [
+              "hostname",
+              "port",
+              "supported_handlers"
+            ],
+            "properties": {
+              "hostname": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer"
+              },
+              "supported_handlers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "max_concurrent_tasks": {
+                "type": "integer",
+                "default": 10
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "HeartbeatRequest": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string"
+              },
+              "current_task_count": {
+                "type": "integer"
+              },
+              "active_task_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "HealthResponse": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "healthy",
+                  "degraded",
+                  "unhealthy"
+                ]
+              },
+              "timestamp": {
+                "type": "number"
+              },
+              "queues_count": {
+                "type": "integer"
+              },
+              "workers_online": {
+                "type": "integer"
+              },
+              "tasks_pending": {
+                "type": "integer"
+              },
+              "tasks_running": {
+                "type": "integer"
+              },
+              "uptime_seconds": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

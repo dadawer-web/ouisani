@@ -40,13 +40,13 @@ public non-sealed class WebhookNode implements VfsNode {
         app.post(route, ctx -> {
             String body = ctx.body();
             incomingQueue.add(body);
-            System.out.printf("  🪝 [WebhookNode] Incoming POST /webhook/%s (%d chars)%n", webhookId, body.length());
+            System.out.printf("  🪝 [WebhookNode] 收到 POST /webhook/%s (%d chars)%n", webhookId, body.length());
             log.info("[WebhookNode] Received webhook: id={}, bodyLen={}", webhookId, body.length());
             ctx.status(200);
             ctx.result("{\"status\":\"accepted\"}");
         });
 
-        System.out.printf("  🪝 [WebhookNode] Route registered: POST /webhook/%s%n", webhookId);
+        System.out.printf("  🪝 [WebhookNode] 路由已注册: POST /webhook/%s%n", webhookId);
         log.info("[WebhookNode] Registered route: POST /webhook/{}", webhookId);
     }
 

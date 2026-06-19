@@ -93,6 +93,7 @@ export const useSystemStore = create<SystemState>((set, get) => ({
           if (raw.channel === "sys.telemetry.metrics") msgType = "SYS_METRICS";
           else if (raw.channel === "sys.eventbus.logs") msgType = "EVENT_BUS_LOG";
           else if (raw.channel === "sys.app.stdout") msgType = "APP_OUTPUT";
+          else if (raw.channel === "sys.dag.events") msgType = "DAG_EVENT";
         }
 
         // 如果解包后的 data 自带 type，优先使用
@@ -118,6 +119,42 @@ export const useSystemStore = create<SystemState>((set, get) => ({
                 typeof data.payload === "string"
                   ? data.payload
                   : JSON.stringify(data.payload ?? ""),
+            };
+            return {
+              eventBusLogs: [newLog, ...state.eventBusLogs].slice(
+                0,
+                MAX_LOG_ENTRIES
+              ),
+            };
+          });
+        }
+        // 接收 DAG 事件 — 节点状态变更（NODE_STARTED / NODE_SUCCEEDED / NODE_FAILED 等）
+        else if (msgType === "DAG_EVENT") {
+          const eventType = data.eventType;
+          const nodeId = data.nodeId;
+
+          // 更新当前激活的工作流节点
+          if (eventType === "NODE_STARTED" || eventType === "ITERATION_STARTED") {
+            if (nodeId) {
+              set({ activeWorkflowNode: nodeId });
+            }
+          } else if (eventType === "NODE_SUCCEEDED" || eventType === "NODE_FAILED"
+                  || eventType === "NODE_SKIPPED" || eventType === "WORKFLOW_SUCCEEDED"
+                  || eventType === "WORKFLOW_FAILED") {
+            set({ activeWorkflowNode: null });
+          }
+
+          // 通知 workflowStore 更新节点状态
+          import("./workflowStore").then(({ useWorkflowStore }) => {
+            useWorkflowStore.getState().onDagEvent(data);
+          }).catch(() => { /* ignore */ });
+
+          // DAG 事件同时写入事件总线日志
+          set((state) => {
+            const newLog: EventBusLog = {
+              timestamp: data.timestamp ?? Date.now(),
+              topic: `dag.${eventType}`,
+              payload: JSON.stringify(data),
             };
             return {
               eventBusLogs: [newLog, ...state.eventBusLogs].slice(

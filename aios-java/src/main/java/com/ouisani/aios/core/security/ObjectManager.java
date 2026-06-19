@@ -178,7 +178,7 @@ public final class ObjectManager {
             }
         }
         if (closed > 0) {
-            log.info("[Object Manager] Closed {} handles for Agent '{}'", closed, agentId);
+            log.info("[Object Manager] 已为 Agent '{}' 关闭 {} 个句柄", agentId, closed);
         }
         return closed;
     }

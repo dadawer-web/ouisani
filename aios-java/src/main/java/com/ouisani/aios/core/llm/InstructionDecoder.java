@@ -55,9 +55,9 @@ public class InstructionDecoder {
         // 按优先级排序（数值越小优先级越高）
         strategyChain.sort(Comparator.comparingInt(DecodeStrategy::priority));
 
-        log.info("[InstructionDecoder] Dual-track decode pipeline initialized: {}",
+        log.info("[InstructionDecoder] 双轨解码管线已初始化: {}",
                 strategyChain.stream().map(DecodeStrategy::name).toList());
-        System.out.println("  \u001B[36m[InstructionDecoder] Dual-track decode pipeline mounted: "
+        System.out.println("  \u001B[36m[InstructionDecoder] 双轨解码管线已挂载: "
                 + strategyChain.stream().map(DecodeStrategy::name).toList() + "\u001B[0m");
     }
 
@@ -84,7 +84,7 @@ public class InstructionDecoder {
      * @throws InstructionDecodeException 所有策略均失败时抛出
      */
     public static <T> T decodeJson(String llmOutput, Class<T> targetClass, LlmProvider llmProvider) {
-        log.info("[InstructionDecoder] Decoding: type={}, inputLen={}, strategies={}",
+        log.info("[InstructionDecoder] 正在解码: type={}, inputLen={}, strategies={}",
                 targetClass.getSimpleName(), llmOutput != null ? llmOutput.length() : 0,
                 strategyChain.size());
 
@@ -92,12 +92,12 @@ public class InstructionDecoder {
             try {
                 T result = strategy.decode(llmOutput, targetClass, llmProvider);
                 if (result != null) {
-                    log.info("[InstructionDecoder] Decode succeeded via strategy '{}': type={}",
+                    log.info("[InstructionDecoder] 通过策略 '{}' 解码成功: type={}",
                             strategy.name(), targetClass.getSimpleName());
                     return result;
                 }
             } catch (Exception e) {
-                log.warn("[InstructionDecoder] Strategy '{}' threw exception: {}",
+                log.warn("[InstructionDecoder] 策略 '{}' 抛出异常: {}",
                         strategy.name(), e.getMessage());
                 // 继续尝试下一个策略 — 不让单个策略的异常导致整个管线崩溃
             }
@@ -137,7 +137,7 @@ public class InstructionDecoder {
     public static void registerStrategy(DecodeStrategy strategy) {
         strategyChain.add(strategy);
         strategyChain.sort(Comparator.comparingInt(DecodeStrategy::priority));
-        log.info("[InstructionDecoder] Strategy registered: name={}, priority={}, pipeline={}",
+        log.info("[InstructionDecoder] 策略已注册: name={}, priority={}, pipeline={}",
                 strategy.name(), strategy.priority(),
                 strategyChain.stream().map(DecodeStrategy::name).toList());
     }
@@ -151,7 +151,7 @@ public class InstructionDecoder {
     public static boolean removeStrategy(String name) {
         boolean removed = strategyChain.removeIf(s -> s.name().equals(name));
         if (removed) {
-            log.info("[InstructionDecoder] Strategy removed: name={}, pipeline={}",
+            log.info("[InstructionDecoder] 策略已移除: name={}, pipeline={}",
                     name, strategyChain.stream().map(DecodeStrategy::name).toList());
         }
         return removed;

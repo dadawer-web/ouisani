@@ -105,7 +105,7 @@ public class PluginLoader {
                 registry.unregisterPlugin(pluginId);
                 it.remove();
                 changes++;
-                log.info("[PluginLoader] Plugin '{}' directory removed, unregistered", pluginId);
+                log.info("[PluginLoader] Plugin '{}' 插件目录已移除，已注销", pluginId);
             }
         }
 
@@ -151,8 +151,8 @@ public class PluginLoader {
         loadPluginClass(dir, pluginId, api);
 
         loadedTimestamps.put(pluginId, lastModified);
-        log.info("[PluginLoader] Plugin '{}' v{} loaded", pluginId, meta.version());
-        System.out.printf("[PluginLoader] Plugin '%s' v%s loaded%n", pluginId, meta.version());
+        log.info("[PluginLoader] Plugin '{}' v{} 插件已加载", pluginId, meta.version());
+        System.out.printf("[PluginLoader] Plugin '%s' v%s 插件已加载%n", pluginId, meta.version());
         return true;
     }
 
@@ -201,16 +201,16 @@ public class PluginLoader {
 
                 if (instance instanceof OperatorPlugin plugin) {
                     plugin.register(api);
-                    log.info("[PluginLoader] Plugin '{}' class loaded: {}", pluginId, mainClass);
+                    log.info("[PluginLoader] Plugin '{}' 插件类已加载: {}", pluginId, mainClass);
                 } else {
                     log.warn("[PluginLoader] Plugin '{}' class {} does not implement OperatorPlugin", pluginId, mainClass);
                 }
             }
             // 如果没有 mainClass，仅注册元数据，工具由外部代码通过 api 注册
         } catch (ClassNotFoundException e) {
-            log.warn("[PluginLoader] Plugin '{}' mainClass not found, registering metadata only", pluginId);
+            log.warn("[PluginLoader] Plugin '{}' 插件 mainClass 未找到，仅注册元数据", pluginId);
         } catch (Exception e) {
-            log.warn("[PluginLoader] Plugin '{}' class loading failed: {}, registering metadata only", pluginId, e.getMessage());
+            log.warn("[PluginLoader] Plugin '{}' 插件类加载失败: {}，仅注册元数据", pluginId, e.getMessage());
         }
     }
 

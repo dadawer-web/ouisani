@@ -162,31 +162,31 @@ public class IntentGate {
 
         // ── 1. 显式关键词检测（最高优先级） ──
         if (ULTRAWORK_PATTERN.matcher(userInput).find()) {
-            log.info("[IntentGate] ULTRAWORK keyword detected");
+            log.info("[IntentGate] 检测到 ULTRAWORK 关键词");
             SemanticEtw.getInstance().logEvent("INTENT_GATE", "ULTRAWORK", "input=" + truncate(userInput, 80));
             return buildResult(ExecutionMode.ULTRAWORK, "ultrawork keyword");
         }
 
         if (HYPERPLAN_PATTERN.matcher(userInput).find()) {
-            log.info("[IntentGate] HYPERPLAN keyword detected");
+            log.info("[IntentGate] 检测到 HYPERPLAN 关键词");
             SemanticEtw.getInstance().logEvent("INTENT_GATE", "HYPERPLAN", "input=" + truncate(userInput, 80));
             return buildResult(ExecutionMode.HYPERPLAN, "hyperplan keyword");
         }
 
         if (TEAM_PATTERN.matcher(userInput).find()) {
-            log.info("[IntentGate] TEAM keyword detected");
+            log.info("[IntentGate] 检测到 TEAM 关键词");
             SemanticEtw.getInstance().logEvent("INTENT_GATE", "TEAM", "input=" + truncate(userInput, 80));
             return buildResult(ExecutionMode.TEAM, "team keyword");
         }
 
         if (QUICK_PATTERN.matcher(userInput).find()) {
-            log.info("[IntentGate] QUICK keyword detected");
+            log.info("[IntentGate] 检测到 QUICK 关键词");
             return buildResult(ExecutionMode.QUICK, "quick keyword");
         }
 
         // ── 2. 任务复杂度推断 ──
         if (COMPLEX_TASK_PATTERN.matcher(userInput).find()) {
-            log.info("[IntentGate] Complex task detected → auto-routing to TEAM mode");
+            log.info("[IntentGate] 检测到复杂任务 → 自动路由至 TEAM 模式");
             SemanticEtw.getInstance().logEvent("INTENT_GATE", "AUTO_TEAM", "input=" + truncate(userInput, 80));
             return buildResult(ExecutionMode.TEAM, "complex task auto-detection");
         }

@@ -36,7 +36,7 @@ public class UnstableAgentBabysitterRecovery implements RecoveryStrategy {
         int loopCount = loopCounts.getOrDefault(context.agentId(), 0) + 1;
         loopCounts.put(context.agentId(), loopCount);
 
-        log.warn("[UnstableAgentBabysitter] Loop detected for agent {} (count: {})",
+        log.warn("[UnstableAgentBabysitter] 检测到 Agent 循环 {} (count: {})",
                 context.agentId(), loopCount);
 
         String modifier;

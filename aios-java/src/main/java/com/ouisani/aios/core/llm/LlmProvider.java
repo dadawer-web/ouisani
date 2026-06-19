@@ -55,6 +55,31 @@ public interface LlmProvider {
     }
 
     /**
+     * 向 LLM 发送流式推理请求 — 逐 token 回调，借鉴 CopilotKit 的 SSE 流式渲染。
+     * <p>
+     * 默认实现降级为同步调用 think()，然后一次性回调完整结果。
+     * 支持 streaming 的 Provider（如 OpenAI）应重写此方法实现真正的逐 token 推送。
+     *
+     * @param prompt       用户提示词
+     * @param systemPrompt 系统提示词
+     * @param onDelta      每个 token 片段的回调
+     * @return 完整的文本回复（所有 delta 拼接后的结果）
+     */
+    default String thinkStream(String prompt, String systemPrompt, java.util.function.Consumer<String> onDelta) {
+        // 默认降级：同步调用，一次性回调
+        String result = think(prompt, systemPrompt);
+        if (result != null && !result.isEmpty()) {
+            onDelta.accept(result);
+        }
+        return result;
+    }
+
+    /** 流式推理（无系统提示词） */
+    default String thinkStream(String prompt, java.util.function.Consumer<String> onDelta) {
+        return thinkStream(prompt, "", onDelta);
+    }
+
+    /**
      * 聊天消息记录，支持纯文本和多模态内容。
      * <p>
      * content 可以是纯文本字符串，也可以是 OpenAI 多模态格式的 JsonArray

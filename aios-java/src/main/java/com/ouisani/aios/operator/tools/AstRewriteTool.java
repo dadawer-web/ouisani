@@ -123,7 +123,7 @@ public class AstRewriteTool implements Tool<AstRewriteTool.Input> {
 
         } catch (RuntimeException e) {
             // 替换失败 — 这个异常会被 OmniMotherAgent 的自愈循环捕获！
-            log.warn("[AstRewrite] Rewrite failed: {}", e.getMessage());
+            log.warn("[AstRewrite] 重写失败: {}", e.getMessage());
             throw e; // 重新抛出，让自愈引擎处理
         } catch (Exception e) {
             return ToolOutput.fail("AST rewrite error: " + e.getMessage());

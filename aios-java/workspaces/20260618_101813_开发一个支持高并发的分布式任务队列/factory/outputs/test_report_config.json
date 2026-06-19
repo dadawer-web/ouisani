@@ -1,0 +1,12 @@
+{
+  "test_file": "/home/xmy/tryaios/aios-java/workspaces/20260618_101813_开发一个支持高并发的分布式任务队列/factory/outputs/task_queue_tests.py",
+  "test_count": 7,
+  "coverage_areas": [
+    "concurrent_task_submission",
+    "task_priority_handling",
+    "worker_failure_recovery",
+    "queue_persistence",
+    "load_balancing",
+    "timeout_handling"
+  ]
+}

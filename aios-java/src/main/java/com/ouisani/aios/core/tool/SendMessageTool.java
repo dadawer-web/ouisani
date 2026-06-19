@@ -79,26 +79,54 @@ public class SendMessageTool implements Tool<SendMessageTool.Input> {
 
         log.info("[SendMessageTool] 发送消息: from={}, to={}, summary={}", from, to, summary);
 
-        // 构造包含发送方信息的完整消息载荷
-        String payload = buildPayload(from, to, message, summary);
+        // ── 数据面统一收口：所有 Agent 间消息通过 AgentMailbox 投递 ──
+        // EventBus 降级为控制面，只负责系统级事件（UI 状态同步、告警等）
+        // Agent 间通信统一走 TeamRegistry → AgentMailbox → MailMessage
+        com.ouisani.aios.core.team.TeamRegistry registry = com.ouisani.aios.core.team.TeamRegistry.getInstance();
 
         if ("*".equals(to)) {
-            // 广播模式：通过 agent.broadcast 频道发送
-            EventBus.instance().broadcast("agent.broadcast", payload);
-            log.info("[SendMessageTool] 广播消息: from={}, summary={}", from, summary);
+            // 广播模式：通过 TeamRegistry.broadcast 向所有 Agent 投递
+            registry.broadcast(
+                com.ouisani.aios.core.team.MailMessage.MessageType.STATUS_UPDATE,
+                buildPayload(from, to, message, summary),
+                from
+            );
+            log.info("[SendMessageTool] 广播消息（经 Mailbox）: from={}, summary={}", from, summary);
         } else {
-            // 定向模式：通过 agent.message.{to} 频道路由
-            String channel = "agent.message." + to;
-            EventBus.instance().broadcast(channel, payload);
-            log.info("[SendMessageTool] 定向消息: from={}, to={}, channel={}", from, to, channel);
+            // 定向模式：通过 TeamRegistry.dispatch 精准投递
+            // 先检查目标 Agent 是否在线
+            if (!registry.isOnline(to)) {
+                log.warn("[SendMessageTool] 目标 Agent '{}' 未在线，消息可能丢失", to);
+                // 仍然尝试投递（TeamRegistry 内部会记录警告）
+            }
+            com.ouisani.aios.core.team.MailMessage mail = new com.ouisani.aios.core.team.MailMessage(
+                from, to,
+                com.ouisani.aios.core.team.MailMessage.MessageType.STATUS_UPDATE,
+                buildPayload(from, to, message, summary)
+            );
+            registry.dispatch(mail);
+            log.info("[SendMessageTool] 定向消息（经 Mailbox）: from={}, to={}", from, to);
         }
+
+        // 控制面通知：仅用于前端 UI 动效渲染（不作为 Agent 间通信通道）
+        try {
+            String uiPayload = String.format(
+                "{\"from\":\"%s\",\"to\":\"%s\",\"summary\":\"%s\",\"timestamp\":%d}",
+                from.replace("\"", "\\\""),
+                to.replace("\"", "\\\""),
+                summary.replace("\"", "\\\""),
+                System.currentTimeMillis()
+            );
+            EventBus.instance().broadcast("agent.message.ui", uiPayload);
+        } catch (Exception ignore) {}
 
         // 记录遥测
         TelemetryService.instance().logEvent("agent.message_sent", Map.of(
                 "from", from,
                 "to", to,
                 "isBroadcast", "*".equals(to),
-                "summary", summary
+                "summary", summary,
+                "channel", "mailbox"
         ));
 
         String target = "*".equals(to) ? "所有 Agent（广播）" : to;

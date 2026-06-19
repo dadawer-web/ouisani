@@ -72,6 +72,34 @@ public final class SignalInterceptor {
                     // 不通过 Prompt 注入。Agent 应在收到此信号后
                     // 检查其 SemanticMemoryBlock。
                 }
+                // ── SIGSTOP/SIGCONT 进程控制（借鉴 Agent Zero 的 Pause/Resume） ──
+                case SIGSTOP -> {
+                    task.setPaused(true);
+                    task.setStatus(AgentTask.TaskStatus.BLOCKED);
+                    // 阻塞等待 SIGCONT
+                    while (task.isPaused()) {
+                        try {
+                            synchronized (task) {
+                                task.wait(1000); // 每秒检查一次
+                            }
+                        } catch (InterruptedException e) {
+                            // 检查是否有 SIGCONT
+                            SignalType nextSignal = task.pollSignal();
+                            if (nextSignal == SignalType.SIGCONT) {
+                                task.setPaused(false);
+                                task.setStatus(AgentTask.TaskStatus.RUNNING);
+                                break;
+                            }
+                        }
+                    }
+                    // 恢复后继续排空剩余信号
+                    continue;
+                }
+                case SIGCONT -> {
+                    task.setPaused(false);
+                    task.setStatus(AgentTask.TaskStatus.RUNNING);
+                    continue; // SIGCONT 不需要抛异常
+                }
             }
         }
 

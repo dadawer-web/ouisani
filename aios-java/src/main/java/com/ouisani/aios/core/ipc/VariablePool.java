@@ -2,8 +2,11 @@ package com.ouisani.aios.core.ipc;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -37,19 +40,50 @@ public class VariablePool {
     // Scope -> (SessionId/TaskId -> (VariableKey -> Value))
     private final Map<Scope, Map<String, Map<String, Object>>> memory = new ConcurrentHashMap<>();
 
+    // ── LRU 缓存层（借鉴 Langflow ThreadingInMemoryCache） ──
+    private static final int DEFAULT_LRU_MAX_SIZE = 256;
+    private static final long DEFAULT_EXPIRATION_MS = 3600_000L; // 1小时
+
+    private final LinkedHashMap<String, CacheEntry> lruCache;
+    private final int lruMaxSize;
+    private final long defaultExpirationMs;
+
+    /**
+     * LRU 缓存条目 — 借鉴 Langflow 的 ThreadingInMemoryCache。
+     * 支持过期时间和创建时间记录。
+     */
+    private static class CacheEntry {
+        final Object value;
+        final long createdAt;
+        final long expirationMs; // 0 表示永不过期
+
+        CacheEntry(Object value, long expirationMs) {
+            this.value = value;
+            this.createdAt = System.currentTimeMillis();
+            this.expirationMs = expirationMs;
+        }
+
+        boolean isExpired() {
+            return expirationMs > 0 && (System.currentTimeMillis() - createdAt) > expirationMs;
+        }
+    }
+
     private static final VariablePool INSTANCE = new VariablePool();
 
     private VariablePool() {
         for (Scope scope : Scope.values()) {
             memory.put(scope, new ConcurrentHashMap<>());
         }
+        this.lruMaxSize = DEFAULT_LRU_MAX_SIZE;
+        this.defaultExpirationMs = DEFAULT_EXPIRATION_MS;
+        this.lruCache = new LinkedHashMap<>(16, 0.75f, true); // accessOrder=true
     }
 
     public static VariablePool getInstance() { return INSTANCE; }
 
     public void set(Scope scope, String contextId, String key, Object value) {
         memory.get(scope).computeIfAbsent(contextId, k -> new ConcurrentHashMap<>()).put(key, value);
-        log.debug("[VariablePool] [{}] WRITE: {}/{} = (type: {})", scope, contextId, key, value.getClass().getSimpleName());
+        log.debug("[VariablePool] [{}] 写入: {}/{} = (类型: {})", scope, contextId, key, value.getClass().getSimpleName());
     }
 
     public Object get(Scope scope, String contextId, String key) {
@@ -65,7 +99,7 @@ public class VariablePool {
         Object value = get(scope, contextId, key);
         if (value == null) return null;
         if (type.isInstance(value)) return (T) value;
-        log.warn("[VariablePool] Type mismatch for {}/{}: expected {}, got {}",
+        log.warn("[VariablePool] 类型不匹配 {}/{}: 期望 {}, 实际 {}",
                 contextId, key, type.getSimpleName(), value.getClass().getSimpleName());
         return null;
     }
@@ -122,7 +156,7 @@ public class VariablePool {
      */
     public void cleanupTask(String taskId) {
         memory.get(Scope.TASK).remove(taskId);
-        log.debug("[VariablePool] TASK scope cleaned up for: {}", taskId);
+        log.debug("[VariablePool] TASK 作用域已清理: {}", taskId);
     }
 
     /**
@@ -130,7 +164,7 @@ public class VariablePool {
      */
     public void cleanupSession(String sessionId) {
         memory.get(Scope.SESSION).remove(sessionId);
-        log.debug("[VariablePool] SESSION scope cleaned up for: {}", sessionId);
+        log.debug("[VariablePool] SESSION 作用域已清理: {}", sessionId);
     }
 
     /**
@@ -139,5 +173,92 @@ public class VariablePool {
     public int size(Scope scope, String contextId) {
         Map<String, Object> scopedMemory = memory.get(scope).get(contextId);
         return scopedMemory != null ? scopedMemory.size() : 0;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  LRU 缓存方法（借鉴 Langflow ThreadingInMemoryCache）
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * LRU 缓存写入 — 借鉴 Langflow 的 ThreadingInMemoryCache.upsert()。
+     * 当缓存满时，自动淘汰最久未访问的条目。
+     */
+    public synchronized void cacheSet(String key, Object value) {
+        cacheSet(key, value, defaultExpirationMs);
+    }
+
+    public synchronized void cacheSet(String key, Object value, long expirationMs) {
+        // 淘汰过期条目
+        lruCache.entrySet().removeIf(e -> e.getValue().isExpired());
+        // LRU 淘汰
+        while (lruCache.size() >= lruMaxSize) {
+            Iterator<String> it = lruCache.keySet().iterator();
+            if (it.hasNext()) {
+                it.next();
+                it.remove();
+            }
+        }
+        lruCache.put(key, new CacheEntry(value, expirationMs));
+        log.debug("[VariablePool] LRU 缓存写入: key={}, expirationMs={}", key, expirationMs);
+    }
+
+    /**
+     * LRU 缓存读取 — 借鉴 Langflow 的 ThreadingInMemoryCache.get()。
+     * 过期条目自动淘汰并返回 null。
+     */
+    public synchronized Object cacheGet(String key) {
+        CacheEntry entry = lruCache.get(key);
+        if (entry == null) return null;
+        if (entry.isExpired()) {
+            lruCache.remove(key);
+            log.debug("[VariablePool] LRU 缓存过期: key={}", key);
+            return null;
+        }
+        return entry.value;
+    }
+
+    /**
+     * 类型安全的缓存读取。
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T cacheGet(String key, Class<T> type) {
+        Object value = cacheGet(key);
+        if (value == null) return null;
+        if (type.isInstance(value)) return (T) value;
+        log.warn("[VariablePool] 缓存类型不匹配 key={}: 期望 {}, 实际 {}", key, type.getSimpleName(), value.getClass().getSimpleName());
+        return null;
+    }
+
+    /**
+     * Get-or-Set 原子操作 — 借鉴 Langflow 的 get_or_set()。
+     * 如果缓存中存在且未过期则返回，否则用 supplier 生成并缓存。
+     */
+    public synchronized <T> T cacheGetOrSet(String key, Supplier<T> supplier) {
+        Object existing = cacheGet(key);
+        if (existing != null) {
+            return (T) existing;
+        }
+        T value = supplier.get();
+        cacheSet(key, value);
+        return value;
+    }
+
+    /**
+     * 获取 LRU 缓存大小（供遥测监控）。
+     */
+    public synchronized int cacheSize() {
+        return lruCache.size();
+    }
+
+    /**
+     * 清理 LRU 缓存中的过期条目。
+     */
+    public synchronized int cacheEvictExpired() {
+        int[] count = {0};
+        lruCache.entrySet().removeIf(e -> {
+            if (e.getValue().isExpired()) { count[0]++; return true; }
+            return false;
+        });
+        return count[0];
     }
 }

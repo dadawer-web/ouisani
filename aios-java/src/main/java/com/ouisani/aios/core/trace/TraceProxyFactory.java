@@ -70,12 +70,12 @@ public class TraceProxyFactory {
             if (mode == TraceMode.REPLAY) {
                 String historicalResponse = traceManager.replayEvent(agentId, eventType, requestPayload);
                 if (historicalResponse != null) {
-                    System.out.printf("  ⏪ [Time Machine] Replaying intercepted call to method: %s → returning cached result%n", methodName);
-                    log.info("[Time Machine] REPLAY: agentId={}, method={}, eventType={}", agentId, methodName, eventType);
+                    System.out.printf("  ⏪ [Time Machine] 正在回放拦截的方法调用: %s → 返回缓存结果%n", methodName);
+                    log.info("[Time Machine] 回放: agentId={}, method={}, eventType={}", agentId, methodName, eventType);
                     return deserializeResult(method, historicalResponse);
                 }
-                log.warn("[Time Machine] REPLAY miss: agentId={}, method={}, falling through to real call", agentId, methodName);
-                System.out.printf("  ⏪ [Time Machine] Replay miss for method: %s, executing real call%n", methodName);
+                log.warn("[Time Machine] 回放未命中: agentId={}, method={}, 回退至真实调用", agentId, methodName);
+                System.out.printf("  ⏪ [Time Machine] 方法 %s 回放未命中，执行真实调用%n", methodName);
             }
 
             // ── Semantic eBPF Firewall: intercept LLM calls ──
@@ -104,22 +104,22 @@ public class TraceProxyFactory {
                     float[] queryVector = ((com.ouisani.aios.core.llm.LlmProvider) target).embed(prompt);
                     SemanticCacheManager.instance().putCache(prompt, queryVector, responseText);
                 } catch (Exception e) {
-                    log.debug("[Semantic Cache] Failed to cache response: {}", e.getMessage());
+                    log.debug("[Semantic Cache] 缓存响应失败: {}", e.getMessage());
                 }
             }
 
             if (mode == TraceMode.RECORD) {
                 String responsePayload = serializeResult(result);
                 traceManager.recordEvent(agentId, eventType, requestPayload, responsePayload);
-                System.out.printf("  ⏺ [Time Machine] Recording intercepted call to method: %s → taped%n", methodName);
-                log.info("[Time Machine] RECORD: agentId={}, method={}, eventType={}, responseLen={}",
+                System.out.printf("  ⏺ [Time Machine] 正在记录拦截的方法调用: %s → 已录入%n", methodName);
+                log.info("[Time Machine] 记录: agentId={}, method={}, eventType={}, responseLen={}",
                         agentId, methodName, eventType, responsePayload.length());
             }
 
             if (result instanceof String textResult) {
                 long tokens = CgroupManager.instance().estimateAndConsumeForCurrentThread(textResult);
                 if (tokens > 0) {
-                    log.debug("[Cgroup] Consumed {} tokens for {}.{} (responseLen={})",
+                    log.debug("[Cgroup] 为 {}.{} 消耗了 {} tokens (responseLen={})",
                             tokens, interfaceType.getSimpleName(), methodName, textResult.length());
                 }
             }

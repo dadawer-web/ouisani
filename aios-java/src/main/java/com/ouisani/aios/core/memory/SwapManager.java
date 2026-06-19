@@ -50,9 +50,9 @@ public class SwapManager {
     private SwapManager() {
         try {
             Files.createDirectories(Path.of(SWAP_DIR));
-            log.info("[SwapManager] Swap directory ready: {}", SWAP_DIR);
+            log.info("[SwapManager] Swap 目录已就绪: {}", SWAP_DIR);
         } catch (IOException e) {
-            log.error("[SwapManager] Failed to create swap directory: {}", e.getMessage());
+            log.error("[SwapManager] 创建 Swap 目录失败: {}", e.getMessage());
         }
     }
 
@@ -65,7 +65,7 @@ public class SwapManager {
      */
     public String swapOut(String agentId, List<String> coldContext) {
         if (coldContext == null || coldContext.isEmpty()) {
-            log.warn("[SwapManager] swapOut called with empty context for agent={}", agentId);
+            log.warn("[SwapManager] swapOut 调用时上下文为空 agent={}", agentId);
             return "";
         }
 
@@ -87,11 +87,11 @@ public class SwapManager {
 
             String pointer = POINTER_PREFIX + pageId + POINTER_SUFFIX;
             long bytesOnDisk = Files.size(swapFile);
-            log.info("[SwapManager] swapOut: agent={}, pageId={}, entries={}, bytesOnDisk={}",
+            log.info("[SwapManager] swapOut: Agent={}, pageId={}, entries={}, bytesOnDisk={}",
                     agentId, pageId, coldContext.size(), bytesOnDisk);
             return pointer;
         } catch (IOException e) {
-            log.error("[SwapManager] swapOut failed: agent={}, pageId={}, error={}",
+            log.error("[SwapManager] swapOut 失败: Agent={}, pageId={}, error={}",
                     agentId, pageId, e.getMessage());
             return "";
         }
@@ -106,7 +106,7 @@ public class SwapManager {
     public List<String> swapIn(String pageId) {
         Path swapFile = pageRegistry.remove(pageId);
         if (swapFile == null) {
-            log.warn("[SwapManager] swapIn: pageId={} not found in registry", pageId);
+            log.warn("[SwapManager] swapIn: pageId={} 未找到", pageId);
             return List.of();
         }
 
@@ -117,7 +117,7 @@ public class SwapManager {
             log.info("[SwapManager] swapIn: pageId={}, entries={}, fileDeleted=true", pageId, restored.size());
             return restored;
         } catch (IOException e) {
-            log.error("[SwapManager] swapIn failed: pageId={}, error={}", pageId, e.getMessage());
+            log.error("[SwapManager] swapIn 失败: pageId={}, error={}", pageId, e.getMessage());
             return List.of();
         }
     }

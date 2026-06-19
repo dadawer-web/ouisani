@@ -33,7 +33,7 @@ public class AuthProfileManager {
 
     public void addProfile(AuthProfile profile) {
         profiles.add(profile);
-        log.info("[Auth Manager] Loaded profile: {} ({}, weight={})", profile.getProfileId(), profile.getProvider(), profile.getWeight());
+        log.info("[Auth Manager] 已加载 Profile: {} ({}, 权重={})", profile.getProfileId(), profile.getProvider(), profile.getWeight());
     }
 
     /**
@@ -41,7 +41,7 @@ public class AuthProfileManager {
      */
     public void removeProfile(String profileId) {
         profiles.removeIf(p -> p.getProfileId().equals(profileId));
-        log.info("[Auth Manager] Removed profile: {}", profileId);
+        log.info("[Auth Manager] 已移除 Profile: {}", profileId);
     }
 
     /**
@@ -64,7 +64,7 @@ public class AuthProfileManager {
 
         if (candidates.isEmpty()) {
             // 绝境：所有 Key 都挂了或被限流了！
-            log.error("[Auth Manager] ALL PROFILES EXHAUSTED OR IN COOLDOWN for provider '{}'!", provider);
+            log.error("[Auth Manager] 提供商 '{}' 的所有 Profile 已耗尽或处于冷却中！", provider);
             throw new RuntimeException("No healthy API keys available for provider: " + provider + ". Please wait for cooldown.");
         }
 
@@ -78,7 +78,7 @@ public class AuthProfileManager {
         for (AuthProfile candidate : candidates) {
             accumulated += candidate.getWeight();
             if (counter < accumulated) {
-                log.debug("[Auth Manager] Weighted Round-Robin selected profile {} (weight={}) for provider {}",
+                log.debug("[Auth Manager] 加权轮询选中 Profile {} (权重={})，提供商 {}",
                         candidate.getProfileId(), candidate.getWeight(), provider);
                 return candidate;
             }
@@ -86,7 +86,7 @@ public class AuthProfileManager {
 
         // 兜底：返回第一个候选者（理论上不会走到这里）
         AuthProfile selected = candidates.get(0);
-        log.debug("[Auth Manager] Fallback selected profile {} for provider {}", selected.getProfileId(), provider);
+        log.debug("[Auth Manager] 兜底选中 Profile {}，提供商 {}", selected.getProfileId(), provider);
         return selected;
     }
 

@@ -152,6 +152,38 @@ public final class MemoryDir {
 
     // ── 单例模式 ──
 
+    /**
+     * 记忆巩固决策 — 借鉴 Agent Zero 的 memory_consolidation 机制。
+     * <p>
+     * 写入新记忆前，先检索相似记忆，用 LLM 决定如何处理：
+     * <ul>
+     *   <li>MERGE — 合并：新记忆与旧记忆有重叠，合并成一条</li>
+     *   <li>REPLACE — 替换：新记忆是旧记忆的更新版本</li>
+     *   <li>KEEP_SEPARATE — 保持独立：记忆内容不同，各自存储</li>
+     *   <li>UPDATE — 更新：在旧记忆上追加新信息</li>
+     *   <li>SKIP — 跳过：新记忆是旧记忆的重复，不需要存储</li>
+     * </ul>
+     */
+    public enum ConsolidationAction {
+        MERGE, REPLACE, KEEP_SEPARATE, UPDATE, SKIP
+    }
+
+    /**
+     * 记忆巩固决策器 — 借鉴 Agent Zero 的 LLM 记忆巩固。
+     * <p>
+     * 比较新记忆与已有相似记忆，决定如何处理。
+     * 这是一个函数式接口，避免硬依赖 LLM，允许注入不同的决策器。
+     */
+    @FunctionalInterface
+    public interface ConsolidationDecider {
+        /**
+         * @param newEntry 新记忆条目
+         * @param similarEntries 相似的已有记忆列表（按相似度降序）
+         * @return 巩固决策
+         */
+        ConsolidationAction decide(MemoryEntry newEntry, List<MemoryEntry> similarEntries);
+    }
+
     private static final class Holder {
         static final MemoryDir INSTANCE = new MemoryDir();
     }
@@ -168,6 +200,17 @@ public final class MemoryDir {
 
     /** 是否已完成初始扫描 */
     private volatile boolean scanned = false;
+
+    // ── 记忆巩固（借鉴 Agent Zero memory_consolidation） ──
+    private volatile ConsolidationDecider consolidationDecider = null;
+
+    /**
+     * 设置记忆巩固决策器。
+     * 设置后，save() 方法会在写入前先检查相似记忆并做巩固决策。
+     */
+    public void setConsolidationDecider(ConsolidationDecider decider) {
+        this.consolidationDecider = decider;
+    }
 
     private MemoryDir() {
     }
@@ -203,6 +246,147 @@ public final class MemoryDir {
             log.warn("[MemoryDir] 记忆保存失败：id='{}', path='{}'", entry.id(), vfsPath);
         }
         return ok;
+    }
+
+    /**
+     * 带记忆巩固的保存 — 借鉴 Agent Zero 的 memory_consolidation。
+     * <p>
+     * 写入前先检索相似记忆，用决策器判断如何处理：
+     * <ul>
+     *   <li>SKIP — 跳过，不写入</li>
+     *   <li>REPLACE — 删除旧记忆，写入新记忆</li>
+     *   <li>MERGE — 合并新旧记忆内容</li>
+     *   <li>UPDATE — 在旧记忆上追加新信息</li>
+     *   <li>KEEP_SEPARATE — 直接写入新记忆</li>
+     * </ul>
+     *
+     * @param entry 要保存的记忆条目
+     * @return true 如果记忆被保存（或合并/更新成功）
+     */
+    public boolean saveWithConsolidation(MemoryEntry entry) {
+        if (entry == null || entry.id() == null || entry.id().isBlank()) {
+            log.warn("[MemoryDir] saveWithConsolidation 失败：entry 或 id 为空");
+            return false;
+        }
+
+        // 无决策器时，回退到普通 save
+        if (consolidationDecider == null) {
+            return save(entry);
+        }
+
+        // 确保缓存已加载
+        ensureScanned();
+
+        // 检索相似记忆（用内容关键词匹配）
+        List<MemoryEntry> similar = findRelevant(entry.content(), 3);
+
+        if (similar.isEmpty()) {
+            // 无相似记忆，直接保存
+            return save(entry);
+        }
+
+        // 决策
+        ConsolidationAction action = consolidationDecider.decide(entry, similar);
+        log.info("[MemoryDir] 记忆巩固决策: id='{}', action={}, similarCount={}",
+                entry.id(), action, similar.size());
+
+        switch (action) {
+            case SKIP:
+                log.info("[MemoryDir] 记忆被跳过（重复）: id='{}'", entry.id());
+                return true; // 视为成功（已存在）
+
+            case REPLACE:
+                // 删除旧记忆，写入新记忆
+                for (MemoryEntry old : similar) {
+                    delete(old.id());
+                }
+                return save(entry);
+
+            case MERGE: {
+                // 合并新旧记忆内容
+                MemoryEntry oldest = similar.get(0);
+                String mergedContent = oldest.content() + "\n\n---\n\n" + entry.content();
+                MemoryEntry merged = new MemoryEntry(
+                        oldest.id(), oldest.type(), mergedContent,
+                        System.currentTimeMillis(),
+                        mergeTags(oldest.tags(), entry.tags())
+                );
+                // 删除其他相似记忆
+                for (int i = 1; i < similar.size(); i++) {
+                    delete(similar.get(i).id());
+                }
+                return save(merged);
+            }
+
+            case UPDATE: {
+                // 在旧记忆上追加新信息
+                MemoryEntry oldest = similar.get(0);
+                String updatedContent = oldest.content() + "\n[Update " +
+                        new java.text.SimpleDateFormat("yyyy-MM-dd").format(new java.util.Date()) + "] " +
+                        entry.content();
+                MemoryEntry updated = new MemoryEntry(
+                        oldest.id(), oldest.type(), updatedContent,
+                        System.currentTimeMillis(),
+                        mergeTags(oldest.tags(), entry.tags())
+                );
+                return save(updated);
+            }
+
+            case KEEP_SEPARATE:
+            default:
+                // 保持独立，直接写入
+                return save(entry);
+        }
+    }
+
+    /** 合并标签数组 */
+    private String[] mergeTags(String[] a, String[] b) {
+        java.util.Set<String> merged = new java.util.LinkedHashSet<>();
+        if (a != null) for (String t : a) merged.add(t);
+        if (b != null) for (String t : b) merged.add(t);
+        return merged.toArray(new String[0]);
+    }
+
+    /**
+     * 创建默认的 LLM 记忆巩固决策器 — 借鉴 Agent Zero 的 memory_consolidation。
+     * <p>
+     * 使用 LLM 比较新旧记忆，决定 MERGE/REPLACE/KEEP_SEPARATE/UPDATE/SKIP。
+     *
+     * @param llmThink LLM 思考函数（agentId, prompt）→ response
+     * @return 巩固决策器实例
+     */
+    public static ConsolidationDecider createLlmDecider(
+            java.util.function.BiFunction<String, String, String> llmThink) {
+        return (newEntry, similarEntries) -> {
+            try {
+                StringBuilder prompt = new StringBuilder();
+                prompt.append("Compare the new memory with existing similar memories and decide how to handle it.\n\n");
+                prompt.append("New Memory:\n").append(newEntry.content()).append("\n\n");
+                prompt.append("Existing Similar Memories:\n");
+                for (int i = 0; i < similarEntries.size(); i++) {
+                    prompt.append(i + 1).append(". ").append(similarEntries.get(i).content()).append("\n");
+                }
+                prompt.append("\nDecide one of: MERGE, REPLACE, KEEP_SEPARATE, UPDATE, SKIP\n");
+                prompt.append("- MERGE: combine into one memory\n");
+                prompt.append("- REPLACE: new memory supersedes old\n");
+                prompt.append("- KEEP_SEPARATE: different topics, keep both\n");
+                prompt.append("- UPDATE: append new info to existing\n");
+                prompt.append("- SKIP: duplicate, no need to save\n");
+                prompt.append("\nAnswer with exactly one word:");
+
+                String response = llmThink.apply("memory-consolidation", prompt.toString());
+                if (response == null) return ConsolidationAction.KEEP_SEPARATE;
+
+                String upper = response.trim().toUpperCase();
+                if (upper.contains("MERGE")) return ConsolidationAction.MERGE;
+                if (upper.contains("REPLACE")) return ConsolidationAction.REPLACE;
+                if (upper.contains("SKIP")) return ConsolidationAction.SKIP;
+                if (upper.contains("UPDATE")) return ConsolidationAction.UPDATE;
+                return ConsolidationAction.KEEP_SEPARATE;
+            } catch (Exception e) {
+                return ConsolidationAction.KEEP_SEPARATE; // 失败时保持独立
+            }
+        };
     }
 
     /**

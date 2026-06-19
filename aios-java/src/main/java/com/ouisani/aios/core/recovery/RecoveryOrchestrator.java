@@ -54,8 +54,16 @@ public class RecoveryOrchestrator {
     /** 每个 Agent 的冷却状态（熔断后进入冷却期） */
     private final Map<String, Long> cooldownUntil = new ConcurrentHashMap<>();
 
+    /** 等待人类干预的节点（nodeId → HumanInterventionRequest） */
+    private final ConcurrentHashMap<String, HumanInterventionRequest> pendingHumanInterventions =
+            new ConcurrentHashMap<>();
+
     private RecoveryOrchestrator() {
         registerBuiltinStrategies();
+
+        // ── 订阅语义崩溃事件 — 全局自愈的入口 ──
+        EventBus.instance().subscribe("sys.semantic.crash", this::handleSemanticCrash);
+        log.info("[RecoveryOrchestrator] 已订阅 sys.semantic.crash 事件通道");
     }
 
     public static RecoveryOrchestrator instance() {
@@ -174,14 +182,14 @@ public class RecoveryOrchestrator {
         ErrorCategory category = classify(context.exception());
         context = context.withCategory(category);
 
-        log.info("[RecoveryOrchestrator] Agent={}, Error={}, Category={}, Attempt={}/{}",
+        log.info("[RecoveryOrchestrator] Agent={}, 错误={}, 类别={}, 尝试={}/{}",
                 context.agentId(), context.exception().getMessage(),
                 category, context.attempt(), MAX_GLOBAL_ATTEMPTS);
 
         // ── 检查熔断状态 ──
         Long cooldownEnd = cooldownUntil.get(context.agentId());
         if (cooldownEnd != null && System.currentTimeMillis() < cooldownEnd) {
-            log.warn("[RecoveryOrchestrator] Agent {} is in circuit-breaker cooldown until {}",
+            log.warn("[RecoveryOrchestrator] Agent {} 处于熔断冷却期，直至 {}",
                     context.agentId(), new Date(cooldownEnd));
             return RecoveryResult.failed("Circuit breaker active. Agent " + context.agentId()
                     + " is in cooldown. Escalating to human intervention.");
@@ -189,7 +197,7 @@ public class RecoveryOrchestrator {
 
         // ── 检查全局尝试上限 ──
         if (context.attempt() > MAX_GLOBAL_ATTEMPTS) {
-            log.error("[RecoveryOrchestrator] Max global attempts ({}) exceeded for agent {}",
+            log.error("[RecoveryOrchestrator] Agent {} 的全局最大尝试次数 ({}) 已超限",
                     MAX_GLOBAL_ATTEMPTS, context.agentId());
             triggerCircuitBreaker(context.agentId());
             return RecoveryResult.failed("Max recovery attempts exceeded. Escalating to human intervention.");
@@ -201,18 +209,18 @@ public class RecoveryOrchestrator {
         // ── 逐个尝试恢复策略 ──
         for (RecoveryStrategy strategy : chain) {
             if (!strategy.shouldApply(context)) {
-                log.debug("[RecoveryOrchestrator] Strategy {} skipped (conditions not met)", strategy.name());
+                log.debug("[RecoveryOrchestrator] 策略 {} 已跳过（条件不满足）", strategy.name());
                 continue;
             }
 
             try {
-                log.info("[RecoveryOrchestrator] Applying strategy: {} for agent {}", strategy.name(), context.agentId());
+                log.info("[RecoveryOrchestrator] 正在应用策略: {}，Agent {}", strategy.name(), context.agentId());
                 RecoveryResult result = strategy.apply(context);
 
                 if (result.success()) {
                     // 恢复成功 — 重置失败计数器
                     failureCounters.remove(context.agentId());
-                    log.info("[RecoveryOrchestrator] Recovery SUCCESS via {} for agent {}",
+                    log.info("[RecoveryOrchestrator] 通过 {} 恢复成功，Agent {}",
                             strategy.name(), context.agentId());
 
                     // 广播恢复成功事件
@@ -220,11 +228,11 @@ public class RecoveryOrchestrator {
 
                     return result;
                 } else {
-                    log.warn("[RecoveryOrchestrator] Strategy {} failed for agent {}: {}",
+                    log.warn("[RecoveryOrchestrator] 策略 {} 对 Agent {} 失败: {}",
                             strategy.name(), context.agentId(), result.message());
                 }
             } catch (Exception e) {
-                log.warn("[RecoveryOrchestrator] Strategy {} threw exception for agent {}: {}",
+                log.warn("[RecoveryOrchestrator] 策略 {} 对 Agent {} 抛出异常: {}",
                         strategy.name(), context.agentId(), e.getMessage());
             }
         }
@@ -256,7 +264,7 @@ public class RecoveryOrchestrator {
         long cooldownMs = 5 * 60 * 1000;
         cooldownUntil.put(agentId, System.currentTimeMillis() + cooldownMs);
 
-        log.error("[RecoveryOrchestrator] CIRCUIT BREAKER triggered for agent {}. Cooldown for {}ms.",
+        log.error("[RecoveryOrchestrator] Agent {} 的熔断器已触发。冷却 {}ms。",
                 agentId, cooldownMs);
 
         // 广播内核恐慌事件 → AutoMedic 和前端大屏都会响应
@@ -307,7 +315,7 @@ public class RecoveryOrchestrator {
      */
     public void registerStrategy(ErrorCategory category, RecoveryStrategy strategy) {
         strategies.computeIfAbsent(category, k -> new ArrayList<>()).add(strategy);
-        log.debug("[RecoveryOrchestrator] Registered strategy '{}' for category {}",
+        log.debug("[RecoveryOrchestrator] 已注册策略 '{}' 到类别 {}",
                 strategy.name(), category);
     }
 
@@ -337,8 +345,17 @@ public class RecoveryOrchestrator {
         registerStrategy(ErrorCategory.UNSTABLE_BEHAVIOR, new UnstableAgentBabysitterRecovery());
         // ── 11. 兜底策略 ──
         registerStrategy(ErrorCategory.UNKNOWN, new FallbackRecovery());
+        // ── 12. 代码手术策略（CODE_ERROR → LLM 修复 + 热重启） ──
+        registerStrategy(ErrorCategory.TOOL_ERROR, new CodeSurgeryStrategy());
+        registerStrategy(ErrorCategory.EDIT_ERROR, new CodeSurgeryStrategy());
+        registerStrategy(ErrorCategory.PARSE_ERROR, new CodeSurgeryStrategy());
+        // ── 13. 拓扑突变策略（CAPABILITY_MISMATCH → 替代节点） ──
+        registerStrategy(ErrorCategory.VERIFICATION_FAILED, new TopologyMutationStrategy());
+        // ── 14. 资源补充策略（RESOURCE_EXHAUSTED → 增加限额 + 反思注入） ──
+        registerStrategy(ErrorCategory.CONTEXT_WINDOW_EXCEEDED, new ResourceRefillStrategy());
+        registerStrategy(ErrorCategory.RATE_LIMITED, new ResourceRefillStrategy());
 
-        log.info("[RecoveryOrchestrator] Built-in recovery strategies registered (11 layers)");
+        log.info("[RecoveryOrchestrator] 内置恢复策略已注册（14 层）");
     }
 
     // ── 遥测广播 ──
@@ -355,6 +372,236 @@ public class RecoveryOrchestrator {
             );
             EventBus.instance().broadcast("sys.telemetry.events", payload);
         } catch (Exception ignore) {}
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  语义崩溃事件处理 — 全局自愈的异步调度中心
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 人类干预请求 — 当 AutoMedic 无法修复时，挂起等待人类介入。
+     *
+     * @param nodeId    挂起的节点 ID
+     * @param workflowId 工作流 ID
+     * @param dumpPath  Core Dump 路径
+     * @param diagnosis AutoMedic 的诊断信息
+     * @param timestamp 请求时间
+     */
+    public record HumanInterventionRequest(
+            String nodeId,
+            String workflowId,
+            String dumpPath,
+            String diagnosis,
+            long timestamp
+    ) {}
+
+    /**
+     * 处理语义崩溃事件 — 异步调度 AutoMedic 进行修复。
+     * <p>
+     * 这是全局自愈的入口。任何组件（不只是 WorkflowEngine）只要
+     * 向 sys.semantic.crash 抛出事件，Orchestrator 就会派 Medic 去修。
+     * <p>
+     * 流程：
+     * 1. 解析崩溃事件 JSON
+     * 2. 在虚拟线程中异步执行修复（不阻塞 EventBus 线程）
+     * 3. 调用 AutoMedic 进行诊断
+     * 4. 根据诊断结果路由到对应的 RecoveryStrategy
+     * 5. 如果修复成功 → resumeNode
+     * 6. 如果修复失败 → 触发 Human-in-the-Loop
+     */
+    public void handleSemanticCrash(String crashJson) {
+        log.info("[RecoveryOrchestrator] 收到语义崩溃事件: {}",
+                crashJson.substring(0, Math.min(crashJson.length(), 200)));
+
+        // 解析事件
+        String nodeId = extractField(crashJson, "nodeId");
+        String workflowId = extractField(crashJson, "workflowId");
+        String dumpPath = extractField(crashJson, "dumpPath");
+        String error = extractField(crashJson, "error");
+        String role = extractField(crashJson, "role");
+
+        if (nodeId == null || workflowId == null) {
+            log.error("[RecoveryOrchestrator] 崩溃事件缺少 nodeId 或 workflowId，忽略");
+            return;
+        }
+
+        // ── 异步执行修复（虚拟线程，不阻塞 EventBus） ──
+        Thread.startVirtualThread(() -> {
+            try {
+                performCrashRecovery(nodeId, workflowId, dumpPath, error, role);
+            } catch (Exception e) {
+                log.error("[RecoveryOrchestrator] 崩溃恢复异常: nodeId={}, error={}",
+                        nodeId, e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * 执行崩溃恢复 — 在虚拟线程中运行。
+     */
+    private void performCrashRecovery(String nodeId, String workflowId,
+                                        String dumpPath, String error, String role) {
+        log.info("[RecoveryOrchestrator] 开始崩溃恢复: nodeId={}, workflowId={}", nodeId, workflowId);
+
+        // 1. 构造 RecoveryContext
+        Exception crashException = new RuntimeException(error != null ? error : "Unknown crash");
+        RecoveryContext context = new RecoveryContext(nodeId, crashException, 1, "")
+                .withMetadata("dumpPath", dumpPath)
+                .withMetadata("workflowId", workflowId)
+                .withMetadata("role", role);
+
+        // 2. 分类错误
+        ErrorCategory category = classify(crashException);
+        context = context.withCategory(category);
+
+        // 3. 尝试使用策略链恢复
+        RecoveryResult result = orchestrate(context);
+
+        if (result.success()) {
+            log.info("[RecoveryOrchestrator] 崩溃恢复成功: nodeId={}, message={}", nodeId, result.message());
+
+            // ── 关键：恢复成功后必须 resumeNode，否则节点永远 SUSPENDED ──
+            // RecoveryOrchestrator 是"分诊台"，它只负责诊断和开药方，
+            // 真正让病人"复活"的是 WorkflowEngine.resumeNode()
+            try {
+                java.util.Map<String, Object> resumeContext = new java.util.HashMap<>();
+                if (result.modifiedPrompt() != null) {
+                    resumeContext.put("_reflection_hint", result.modifiedPrompt());
+                }
+                boolean resumed = com.ouisani.aios.user.apps.omnifactory.WorkflowEngine.instance()
+                        .resumeNode(nodeId, workflowId, resumeContext);
+                if (resumed) {
+                    log.info("[RecoveryOrchestrator] 节点 '{}' 已通过 resumeNode 复活", nodeId);
+                } else {
+                    log.warn("[RecoveryOrchestrator] resumeNode 返回 false，节点 '{}' 可能已不处于 SUSPENDED 状态", nodeId);
+                }
+            } catch (Exception e) {
+                log.error("[RecoveryOrchestrator] resumeNode 失败: nodeId={}, error={}", nodeId, e.getMessage());
+            }
+
+            // 广播恢复成功事件
+            broadcastRecoveryEvent(nodeId, "crash_recovery", true, result.message());
+        } else {
+            // 4. 所有策略都失败 → 触发 Human-in-the-Loop
+            log.warn("[RecoveryOrchestrator] 崩溃恢复失败，触发 Human-in-the-Loop: nodeId={}", nodeId);
+            triggerHumanIntervention(nodeId, workflowId, dumpPath,
+                    "All recovery strategies failed: " + result.message());
+        }
+    }
+
+    /**
+     * 触发人类干预 — 挂起节点，等待人类在前端 UI 修改后点击 Resume。
+     * <p>
+     * OS 类比：Linux 的 Kernel Panic → kdump 生成转储 →
+     * 管理员收到告警 → 手动分析并修复 → 重启系统。
+     */
+    private void triggerHumanIntervention(String nodeId, String workflowId,
+                                            String dumpPath, String diagnosis) {
+        // 1. 记录干预请求
+        HumanInterventionRequest request = new HumanInterventionRequest(
+                nodeId, workflowId, dumpPath, diagnosis, System.currentTimeMillis());
+        pendingHumanInterventions.put(nodeId, request);
+
+        // 2. 广播人类干预事件 → 前端 UI 会收到并显示告警
+        String alertPayload = String.format(
+                "{\"eventType\":\"HUMAN_INTERVENTION_REQUIRED\","
+                        + "\"nodeId\":\"%s\",\"workflowId\":\"%s\","
+                        + "\"dumpPath\":\"%s\",\"diagnosis\":\"%s\","
+                        + "\"timestamp\":%d}",
+                nodeId.replace("\"", "\\\""),
+                workflowId.replace("\"", "\\\""),
+                dumpPath != null ? dumpPath.replace("\"", "\\\"") : "",
+                diagnosis.replace("\"", "'").replace("\n", " ").substring(0, Math.min(diagnosis.length(), 500)),
+                System.currentTimeMillis()
+        );
+        EventBus.instance().broadcast("sys.human_intervention_required", alertPayload);
+
+        // 3. 触发 Hook
+        try {
+            HookManager.instance().trigger(
+                    HookManager.HookEvent.STOP_FAILURE,
+                    java.util.Map.of(
+                            "nodeId", nodeId,
+                            "workflowId", workflowId,
+                            "reason", "human_intervention",
+                            "diagnosis", diagnosis
+                    ));
+        } catch (Exception ignored) {}
+
+        log.warn("[RecoveryOrchestrator] 人类干预已请求: nodeId={}, 等待前端 Resume", nodeId);
+    }
+
+    /**
+     * 人类干预恢复 — 前端 UI 调用此方法恢复挂起的节点。
+     * <p>
+     * 当人类在前端修改了 Prompt 或上下文后，点击 Resume，
+     * 前端调用此方法，Orchestrator 会唤醒挂起的节点。
+     *
+     * @param nodeId        挂起的节点 ID
+     * @param humanGuidance 人类提供的指导（修改后的 Prompt 或上下文）
+     * @return true=恢复成功, false=恢复失败
+     */
+    public boolean resumeFromHumanIntervention(String nodeId, String humanGuidance) {
+        HumanInterventionRequest request = pendingHumanInterventions.remove(nodeId);
+        if (request == null) {
+            log.warn("[RecoveryOrchestrator] 找不到节点 '{}' 的人类干预请求", nodeId);
+            return false;
+        }
+
+        log.info("[RecoveryOrchestrator] 人类干预恢复: nodeId={}, guidanceLen={}",
+                nodeId, humanGuidance != null ? humanGuidance.length() : 0);
+
+        try {
+            // 构造 MedicalReport（人类指导作为反思提示）
+            com.ouisani.aios.user.apps.omnifactory.AutoMedicAgent.MedicalReport report =
+                    new com.ouisani.aios.user.apps.omnifactory.AutoMedicAgent.MedicalReport(
+                    com.ouisani.aios.user.apps.omnifactory.AutoMedicAgent.Outcome.HEALED,
+                    "Human intervention: " + request.diagnosis(),
+                    null, null,
+                    humanGuidance,
+                    null
+            );
+
+            boolean resumed = com.ouisani.aios.user.apps.omnifactory.WorkflowEngine.getInstance()
+                    .resumeNode(nodeId, report, request.workflowId());
+
+            if (resumed) {
+                log.info("[RecoveryOrchestrator] 人类干预恢复成功: nodeId={}", nodeId);
+                broadcastRecoveryEvent(nodeId, "human_intervention", true, "Node resumed by human");
+            } else {
+                log.warn("[RecoveryOrchestrator] 人类干预恢复失败: nodeId={}", nodeId);
+                // 重新放入等待队列
+                pendingHumanInterventions.put(nodeId, request);
+            }
+
+            return resumed;
+        } catch (Exception e) {
+            log.error("[RecoveryOrchestrator] 人类干预恢复异常: nodeId={}, error={}", nodeId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 获取所有等待人类干预的节点。
+     */
+    public java.util.Map<String, HumanInterventionRequest> getPendingHumanInterventions() {
+        return java.util.Collections.unmodifiableMap(pendingHumanInterventions);
+    }
+
+    // ── JSON 字段提取 ──
+
+    private static String extractField(String json, String key) {
+        if (json == null || key == null) return null;
+        java.util.regex.Pattern stringPattern = java.util.regex.Pattern.compile(
+                "\"" + key + "\"\\s*:\\s*\"([^\"]*?)\"");
+        java.util.regex.Matcher m = stringPattern.matcher(json);
+        if (m.find()) return m.group(1);
+        // 尝试数字值
+        java.util.regex.Pattern rawPattern = java.util.regex.Pattern.compile(
+                "\"" + key + "\"\\s*:\\s*([^,}\\s]+)");
+        java.util.regex.Matcher rawMatcher = rawPattern.matcher(json);
+        if (rawMatcher.find()) return rawMatcher.group(1).trim();
+        return null;
     }
 
     // ════════════════════════════════════════════════════════════════

@@ -55,6 +55,15 @@ public class PrivilegeSyscallFilter implements SyscallFilter {
     public void preFilter(String agentId, SyscallRequest request) throws SecurityException {
         String action = request.fullAction();
 
+        // 动态工具锻造是低风险操作（代码在沙箱中执行），不需要 HIGH 权限
+        // 工具名称在 ToolPayload 中，需要检查 payload 类型
+        if (request.payload() instanceof com.ouisani.aios.core.syscall.schema.ToolPayload toolPayload) {
+            String toolName = toolPayload.toolName();
+            if ("kernel.register_tool".equals(toolName) || "kernel.forge_tool".equals(toolName)) {
+                return; // 放行
+            }
+        }
+
         // 只检查高危操作
         if (!isHighRisk(action)) {
             return;

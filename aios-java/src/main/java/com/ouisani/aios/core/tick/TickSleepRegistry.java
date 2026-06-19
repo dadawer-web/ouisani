@@ -166,7 +166,7 @@ public final class TickSleepRegistry {
 
         AgentTask task = scheduler.getTask(pid);
         if (task == null) {
-            log.debug("[TickSleep] PID {} no longer active, skipping SIG_ALRM", pid);
+            log.debug("[TickSleep] PID {} 不再活跃，跳过 SIG_ALRM", pid);
             pidToWakeTick.remove(pid);
             return false;
         }

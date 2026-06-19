@@ -1,0 +1,16 @@
+{
+  "workflow": {
+    "name": "task_queue_design",
+    "description": "设计分布式任务队列系统的核心组件",
+    "version": "1.0.0"
+  },
+  "nodes": [
+    {
+      "nodeId": "design_core_components",
+      "scriptPath": "design_core_components.py",
+      "dependsOn": [],
+      "description": "基于调研结果，设计任务队列的核心组件：生产者、消费者、任务存储、状态管理、协调服务",
+      "outputFile": "outputs/design_core_components_output.json"
+    }
+  ]
+}

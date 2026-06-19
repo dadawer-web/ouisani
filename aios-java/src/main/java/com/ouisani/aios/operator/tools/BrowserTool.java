@@ -148,7 +148,7 @@ public class BrowserTool implements Tool<BrowserTool.Input> {
                 default -> ToolOutput.fail("Unknown browser action: " + action);
             };
         } catch (Exception e) {
-            log.error("[BrowserTool] Action '{}' failed: {}", action, e.getMessage());
+            log.error("[BrowserTool] 动作 '{}' 失败: {}", action, e.getMessage());
             return ToolOutput.fail("Browser action '" + action + "' failed: " + e.getMessage());
         }
     }
@@ -283,7 +283,7 @@ public class BrowserTool implements Tool<BrowserTool.Input> {
             return ToolOutput.ok(response);
         } catch (TimeoutException e) {
             pendingResponse = null;
-            log.warn("[BrowserTool] Timeout waiting for browser response: action={}", actionName);
+            log.warn("[BrowserTool] 等待浏览器响应超时: action={}", actionName);
             return ToolOutput.fail("Browser response timeout for action: " + actionName
                     + " (waited " + RESPONSE_TIMEOUT_SECONDS + "s). "
                     + "The Chrome extension may be unresponsive.");

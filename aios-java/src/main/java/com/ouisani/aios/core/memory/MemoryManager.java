@@ -76,9 +76,9 @@ public final class MemoryManager {
             currentProvider = new TokenZramProvider();
         }
 
-        log.info("[Memory Subsystem] Unified Memory Provider initialized. Current backend: {}",
+        log.info("[Memory Subsystem] 统一内存 Provider 已初始化。当前后端: {}",
                 currentProvider.providerName());
-        System.out.println("[Memory Subsystem] Unified Memory Provider initialized. Current backend: "
+        System.out.println("[Memory Subsystem] 统一内存 Provider 已初始化。当前后端: "
                 + currentProvider.providerName() + ".");
     }
 
@@ -97,8 +97,8 @@ public final class MemoryManager {
     public void switchProvider(MemoryProvider provider) {
         MemoryProvider old = this.currentProvider;
         this.currentProvider = provider;
-        log.info("[Memory Subsystem] Provider switched: {} → {}", old.providerName(), provider.providerName());
-        System.out.println("[Memory Subsystem] Provider switched: " + old.providerName()
+        log.info("[Memory Subsystem] Provider 已切换: {} → {}", old.providerName(), provider.providerName());
+        System.out.println("[Memory Subsystem] Provider 已切换: " + old.providerName()
                 + " → " + provider.providerName());
     }
 
@@ -114,7 +114,7 @@ public final class MemoryManager {
         }
 
         String operation = payload.operation();
-        log.info("[MemoryManager] Processing syscall: operation='{}', provider='{}'",
+        log.info("[MemoryManager] 正在处理 Syscall: operation='{}', provider='{}'",
                 operation, currentProvider.providerName());
 
         return switch (operation) {
@@ -145,7 +145,7 @@ public final class MemoryManager {
         }
 
         String operation = payload.operation();
-        log.info("[MemoryManager] Processing syscall: agent='{}', operation='{}', provider='{}'",
+        log.info("[MemoryManager] 正在处理 Syscall: agent='{}', operation='{}', provider='{}'",
                 agentId, operation, currentProvider.providerName());
 
         return switch (operation) {

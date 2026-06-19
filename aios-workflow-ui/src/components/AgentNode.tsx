@@ -1,7 +1,31 @@
 import { memo, useState, useCallback, useEffect, useRef, type FC } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { Bot, Trash2, Radio, ArrowRightFromLine, Sliders, ChevronDown, ChevronUp } from "lucide-react";
+import { Bot, Trash2, Radio, ArrowRightFromLine, Sliders, ChevronDown, ChevronUp, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { useWorkflowStore, type AgentNodeData } from "@/store/workflowStore";
+
+/** 状态对应的样式映射 */
+const STATUS_STYLES: Record<string, { border: string; shadow: string; icon: FC<{ className?: string }> }> = {
+  running: {
+    border: "border-amber-500/60",
+    shadow: "shadow-[0_0_25px_rgba(245,158,11,0.2)]",
+    icon: Loader2,
+  },
+  succeeded: {
+    border: "border-emerald-500/60",
+    shadow: "shadow-[0_0_20px_rgba(52,211,153,0.15)]",
+    icon: CheckCircle2,
+  },
+  failed: {
+    border: "border-red-500/60",
+    shadow: "shadow-[0_0_25px_rgba(239,68,68,0.2)]",
+    icon: AlertCircle,
+  },
+  idle: {
+    border: "border-cyan-500/30",
+    shadow: "shadow-[0_0_20px_rgba(0,240,255,0.08)]",
+    icon: Bot,
+  },
+};
 
 /** 自定义智能体节点 — 深色极客风格卡片 + God Hand 控制面板 */
 const AgentNode: FC<NodeProps> = memo(({ id, data }) => {
@@ -59,8 +83,12 @@ const AgentNode: FC<NodeProps> = memo(({ id, data }) => {
     };
   }, []);
 
+  const status = d.status ?? "idle";
+  const style = STATUS_STYLES[status] ?? STATUS_STYLES.idle;
+  const StatusIcon = style.icon;
+
   return (
-    <div className="group relative min-w-[220px] rounded-lg border border-cyan-500/30 bg-[#0d1117]/95 shadow-[0_0_20px_rgba(0,240,255,0.08)] backdrop-blur-sm transition-all duration-300 hover:border-cyan-400/60 hover:shadow-[0_0_30px_rgba(0,240,255,0.15)]">
+    <div className={`group relative min-w-[220px] rounded-lg border ${style.border} bg-[#0d1117]/95 ${style.shadow} backdrop-blur-sm transition-all duration-300 hover:border-cyan-400/60 hover:shadow-[0_0_30px_rgba(0,240,255,0.15)]`}>
       {/* 左侧输入 Handle */}
       <Handle
         type="target"
@@ -70,10 +98,19 @@ const AgentNode: FC<NodeProps> = memo(({ id, data }) => {
 
       {/* 顶部标题栏 */}
       <div className="flex items-center gap-2 rounded-t-lg border-b border-cyan-500/20 bg-cyan-500/5 px-3 py-2">
-        <Bot className="h-4 w-4 text-cyan-400" />
+        <StatusIcon className={`h-4 w-4 text-cyan-400 ${status === "running" ? "animate-spin" : ""}`} />
         <span className="flex-1 text-xs font-semibold tracking-wider text-cyan-300 uppercase">
           {d.label || "Agent"}
         </span>
+        {status !== "idle" && (
+          <span className={`rounded px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase ${
+            status === "running" ? "bg-amber-900/40 text-amber-300" :
+            status === "succeeded" ? "bg-emerald-900/40 text-emerald-300" :
+            status === "failed" ? "bg-red-900/40 text-red-300" : ""
+          }`}>
+            {status}
+          </span>
+        )}
         <button
           onClick={() => setPanelOpen(!panelOpen)}
           className="rounded p-0.5 text-amber-400/60 opacity-0 transition-all hover:bg-amber-500/20 hover:text-amber-300 group-hover:opacity-100"
@@ -136,6 +173,18 @@ const AgentNode: FC<NodeProps> = memo(({ id, data }) => {
             className="rounded border border-zinc-700/50 bg-zinc-900/50 px-2 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 outline-none transition-colors focus:border-cyan-500/50 focus:ring-1 focus:ring-cyan-500/20"
           />
         </label>
+
+        {/* 运行状态输出/错误 */}
+        {status === "succeeded" && d.output && (
+          <div className="rounded border border-emerald-800/30 bg-emerald-900/10 px-2 py-1.5 text-[10px] text-emerald-300">
+            {d.output}
+          </div>
+        )}
+        {status === "failed" && d.error && (
+          <div className="rounded border border-red-800/30 bg-red-900/10 px-2 py-1.5 text-[10px] text-red-300 break-all">
+            {d.error}
+          </div>
+        )}
       </div>
 
       {/* ════════════════════════════════════════════════════════════════

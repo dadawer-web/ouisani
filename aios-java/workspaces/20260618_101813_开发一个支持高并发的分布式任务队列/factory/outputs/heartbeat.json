@@ -1,0 +1,40 @@
+{
+  "heartbeats": [
+    {
+      "timestamp": 1781749267.0170434,
+      "agent_id": "test_task_consumer",
+      "active_tasks": 0,
+      "completed_tasks": 0,
+      "failed_tasks": 0,
+      "queue_size": 0,
+      "status": "alive"
+    },
+    {
+      "timestamp": 1781749272.0178273,
+      "agent_id": "test_task_consumer",
+      "active_tasks": 0,
+      "completed_tasks": 10,
+      "failed_tasks": 0,
+      "queue_size": 0,
+      "status": "alive"
+    },
+    {
+      "timestamp": 1781749277.0204868,
+      "agent_id": "test_task_consumer",
+      "active_tasks": 0,
+      "completed_tasks": 10,
+      "failed_tasks": 0,
+      "queue_size": 0,
+      "status": "alive"
+    },
+    {
+      "timestamp": 1781749282.022825,
+      "agent_id": "test_task_consumer",
+      "active_tasks": 0,
+      "completed_tasks": 10,
+      "failed_tasks": 0,
+      "queue_size": 0,
+      "status": "alive"
+    }
+  ]
+}

@@ -99,8 +99,8 @@ public non-sealed class HostSourceNode implements VfsNode {
                 Files.createDirectories(physical.getParent());
             }
             Files.writeString(physical, payload, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-            System.out.printf("  💾 [HostSourceNode] Written %d chars to physical path: %s%n", payload.length(), realPhysicalPath);
-            log.info("[HostSourceNode] Written to physical path '{}': {} chars", realPhysicalPath, payload.length());
+            System.out.printf("  💾 [HostSourceNode] 已写入 %d 字符至物理路径: %s%n", payload.length(), realPhysicalPath);
+            log.info("[HostSourceNode] 已写入 {} 字符至物理路径 '{}'", payload.length(), realPhysicalPath);
             return true;
         } catch (Exception e) {
             log.error("[HostSourceNode] Write failed for '{}': {}", realPhysicalPath, e.getMessage());
