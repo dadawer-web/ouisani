@@ -1,0 +1,47 @@
+═══════════════════════════════════════════════════
+  AIOS Semantic Core Dump
+  Node: generate_spring_boot_backend
+  Role: 创建Spring Boot番茄钟REST API后端
+  Executor: omni
+  Timestamp: 2026-06-20T11:41:35.508089275Z
+  Duration: 2185378ms
+  Trace ID: (none)
+═══════════════════════════════════════════════════
+
+── CRASH INFO ──
+Exception: java.util.concurrent.CompletionException
+Message: java.lang.RuntimeException: Agent 在 3 次自愈尝试后失败。最后错误: Node generate_spring_boot_backend 未验证通过。LLM 响应: 
+[RECOVERY STRATEGY APPLIED: Fallback recovery: generic retry prompt injected]
+Cause: java.lang.RuntimeException: Agent 在 3 次自愈尝试后失败。最后错误: Node generate_spring_boot_backend 未验证通过。LLM 响应: 
+[RECOVERY STRATEGY APPLIED: Fallback recovery: generic retry prompt injected]
+
+StackTrace:
+  at java.base/java.util.concurrent.CompletableFuture.reportJoin(CompletableFuture.java:413)
+  at java.base/java.util.concurrent.CompletableFuture.join(CompletableFuture.java:2118)
+  at com.ouisani.aios.user.apps.omnifactory.WorkflowEngine.executeNode(WorkflowEngine.java:545)
+  at com.ouisani.aios.user.apps.omnifactory.WorkflowEngine.lambda$executeDagInternal$2(WorkflowEngine.java:275)
+  at java.base/java.util.concurrent.CompletableFuture.uniHandle(CompletableFuture.java:934)
+  at java.base/java.util.concurrent.CompletableFuture$UniHandle.tryFire(CompletableFuture.java:911)
+  at java.base/java.util.concurrent.CompletableFuture$Completion.run(CompletableFuture.java:482)
+  at java.base/java.util.concurrent.ThreadPerTaskExecutor$TaskRunner.run(ThreadPerTaskExecutor.java:314)
+  at java.base/java.lang.VirtualThread.run(VirtualThread.java:329)
+
+── VARIABLE SNAPSHOT ──
+  (empty)
+
+── UPSTREAM OUTPUTS ──
+
+── NODE BLUEPRINT ──
+  BlueprintId: agentNode
+  Role: 创建Spring Boot番茄钟REST API后端
+  Subscribe: 
+  Publish: topic_generate_spring_boot_backend_generate_html_frontend
+
+── BOULDER CHECKPOINT HISTORY ──
+  (no previous checkpoint)
+
+── VFS MOUNT STATE ──
+
+═══════════════════════════════════════════════════
+  END OF CORE DUMP
+═══════════════════════════════════════════════════
