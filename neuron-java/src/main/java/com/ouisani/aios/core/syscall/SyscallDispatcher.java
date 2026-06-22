@@ -193,6 +193,31 @@ public final class SyscallDispatcher {
         SemanticEtw.getInstance().logEvent("SYSCALL", "ENTER",
                 "agent=" + agentId + " namespace=" + request.namespace() + " action=" + fullAction);
 
+        // ── PreToolUse Hook (前置钩子) ──
+        // 在工具真正执行前触发，允许钩子修改参数或拒绝执行。
+        // 借鉴 ECC 的 4 层架构：Agents(委托层) → Rules(规则层) → Hooks(触发层) → Skills(工作流层)
+        // 映射到 PrivilegeSyscallFilter 之外，提供 AOP 式的切面扩展点。
+        if ("tool".equals(request.namespace())) {
+            java.util.Map<String, Object> hookData = new java.util.HashMap<>();
+            hookData.put("agentId", agentId);
+            hookData.put("action", fullAction);
+            hookData.put("request", request);
+            if (request.payload() instanceof com.ouisani.aios.core.syscall.schema.ToolPayload tool) {
+                hookData.put("toolName", tool.toolName());
+                hookData.put("args", tool.arguments());
+            }
+            com.ouisani.aios.core.hook.HookManager.HookResult preResult =
+                    com.ouisani.aios.core.hook.HookManager.instance()
+                            .trigger(com.ouisani.aios.core.hook.HookManager.HookEvent.PRE_TOOL_USE, hookData);
+            if (!preResult.proceed()) {
+                log.info("[Syscall Hook] PreToolUse 钩子拒绝执行: agent={}, action={}, reason={}",
+                        agentId, fullAction, preResult.message());
+                SemanticEtw.getInstance().logEvent("HOOK", "PRE_TOOL_USE_DENIED",
+                        "agent=" + agentId + " action=" + fullAction + " reason=" + preResult.message());
+                return SyscallResponse.fail("HOOK_DENIED: " + preResult.message());
+            }
+        }
+
         try {
             response = switch (request.namespace()) {
                 case "llm"     -> routeLlm(agentId, request);
@@ -207,6 +232,23 @@ public final class SyscallDispatcher {
             response = SyscallResponse.fail("SECURITY: " + e.getMessage());
         } catch (Exception e) {
             response = SyscallResponse.fail(e);
+        }
+
+        // ── PostToolUse Hook (后置钩子) ──
+        // 工具执行完成后触发，允许钩子进行后处理（如语法检查、状态同步）。
+        // 借鉴 ECC：当 FileWriteTool 成功写入后，触发后置 Hook 进行实时语法树检查。
+        if ("tool".equals(request.namespace())) {
+            java.util.Map<String, Object> postHookData = new java.util.HashMap<>();
+            postHookData.put("agentId", agentId);
+            postHookData.put("action", fullAction);
+            postHookData.put("response", response);
+            postHookData.put("success", response.success());
+
+            com.ouisani.aios.core.hook.HookManager.HookEvent postEvent = response.success()
+                    ? com.ouisani.aios.core.hook.HookManager.HookEvent.POST_TOOL_USE
+                    : com.ouisani.aios.core.hook.HookManager.HookEvent.POST_TOOL_USE_FAILURE;
+
+            com.ouisani.aios.core.hook.HookManager.instance().trigger(postEvent, postHookData);
         }
 
         long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000;

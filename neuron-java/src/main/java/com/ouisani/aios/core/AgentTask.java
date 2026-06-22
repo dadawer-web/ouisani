@@ -23,10 +23,14 @@ public final class AgentTask {
 
     private static final Logger log = LoggerFactory.getLogger(AgentTask.class);
 
-    /** 任务状态 — 类比 Linux 进程状态（READY/RUNNING/BLOCKED/KILLED 等） */
+    /** 任务状态 — 类比 Linux 进程状态 + OpenHarness Autopilot 看板状态机 */
     public enum TaskStatus {
         READY,
         RUNNING,
+        /** 验证中 — Agent 完成代码生成后，自动转入此状态触发 Security_Auditor 红队扫描 */
+        VERIFYING,
+        /** 等待人工审查 — 红队扫描通过后，等待人类确认或 CI 通过 */
+        WAITING_REVIEW,
         BLOCKED,
         KILLED,
         OOM_KILLED,

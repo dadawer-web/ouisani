@@ -46,6 +46,9 @@ module com.ouisani.aios {
     exports com.ouisani.aios.core.sandbox;
     // core.sandbox.rpa 已迁移至 user.bridge.rpa（物理级沙箱逃逸后门降级）
     exports com.ouisani.aios.core.security;
+    exports com.ouisani.aios.core.security.crypto;
+    exports com.ouisani.aios.core.security.redteam;
+    exports com.ouisani.aios.core.security.risk;
     exports com.ouisani.aios.core.skill;
     exports com.ouisani.aios.core.snapshot;
     exports com.ouisani.aios.core.swarm;
@@ -61,6 +64,7 @@ module com.ouisani.aios {
     exports com.ouisani.aios.user;
     exports com.ouisani.aios.user.apps.omnifactory;
     exports com.ouisani.aios.user.apps.omnifactory.tools;
+    exports com.ouisani.aios.user.apps.redteam;
     exports com.ouisani.aios.user.bin;
     exports com.ouisani.aios.user.bridge.rpa;
     exports com.ouisani.aios.user.cli;
@@ -107,6 +111,9 @@ module com.ouisani.aios {
     opens com.ouisani.aios.core.sandbox;
     // opens com.ouisani.aios.core.sandbox.rpa; // 已迁移至 user.bridge.rpa
     opens com.ouisani.aios.core.security;
+    opens com.ouisani.aios.core.security.crypto;
+    opens com.ouisani.aios.core.security.redteam;
+    opens com.ouisani.aios.core.security.risk;
     opens com.ouisani.aios.core.skill;
     opens com.ouisani.aios.core.snapshot;
     opens com.ouisani.aios.core.swarm;
@@ -121,6 +128,7 @@ module com.ouisani.aios {
     opens com.ouisani.aios.core.vfs;
     opens com.ouisani.aios.user;
     opens com.ouisani.aios.user.apps.omnifactory;
+    opens com.ouisani.aios.user.apps.redteam;
     opens com.ouisani.aios.user.bin;
     opens com.ouisani.aios.user.cli;
     opens com.ouisani.aios.user.container;

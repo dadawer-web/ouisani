@@ -195,8 +195,66 @@ public final class BpfManager implements SyscallFilter {
             }
         }
 
+        // ── 四维风险评分引擎 ──
+        // 在规则引擎之后执行，作为定量补充。
+        // 规则引擎处理已知威胁模式（定性），评分引擎处理未知组合风险（定量）。
+        evaluateRiskScore(agentId, request, token);
+
         // 执行 JS 探针（兼容旧接口）
         evaluateJsProbes(agentId, request);
+    }
+
+    /**
+     * 四维风险评分 — 对工具调用进行定量风险评估。
+     * <p>
+     * 借鉴 ECC 的 compute_risk() 设计，在规则引擎之后执行。
+     * 当规则引擎未拦截时，评分引擎可能基于组合风险触发拦截或审批。
+     * <p>
+     * 映射规则：
+     * - ALLOW → 放行
+     * - REVIEW → 放行但记录审计
+     * - REQUIRE_CONFIRMATION → 由 PrivilegeSyscallFilter 的 HITL 审批门处理
+     * - BLOCK → 直接拦截
+     *
+     * @see com.ouisani.aios.core.security.risk.ToolRiskScorer
+     * @see com.ouisani.aios.core.security.risk.RiskAction
+     */
+    private void evaluateRiskScore(String agentId, SyscallRequest request, SecurityToken token) {
+        // 内核级令牌跳过评分（信任内核 Agent）
+        if (token != null && token.privilegeLevel() == 0) {
+            return;
+        }
+
+        com.ouisani.aios.core.security.risk.ToolRiskScore score =
+                com.ouisani.aios.core.security.risk.ToolRiskScorer.score(request);
+        com.ouisani.aios.core.security.risk.RiskAction action = score.recommendedAction();
+
+        // 记录审计（REVIEW 及以上）
+        if (action.shouldAudit()) {
+            String auditPayload = String.format(
+                    "agent=%s action=%s risk=%s score=%s token=%s",
+                    agentId, request.fullAction(), action,
+                    score.diagnosticReport(),
+                    token != null ? token.ownerId() + "(level=" + token.privilegeLevel() + ")" : "null");
+            SemanticEtw.getInstance().logEvent("SECURITY", "RISK_SCORED", auditPayload);
+        }
+
+        // BLOCK 直接拦截
+        if (action.shouldBlock()) {
+            interceptStats.computeIfAbsent("RISK_SCORE_BLOCK", k -> new AtomicLong(0)).incrementAndGet();
+            log.warn("[BpfManager] 风险评分拦截: Agent={}, 操作={}, {}",
+                    agentId, request.fullAction(), score.diagnosticReport());
+            throw new SecurityException(String.format(
+                    "[风险评分] Agent '%s' 的操作 '%s' 风险分过高被拦截: %s",
+                    agentId, request.fullAction(), score.diagnosticReport()));
+        }
+
+        // REQUIRE_CONFIRMATION 记录审计，实际审批由 PrivilegeSyscallFilter 处理
+        if (action.requiresHumanConfirmation()) {
+            interceptStats.computeIfAbsent("RISK_SCORE_REVIEW", k -> new AtomicLong(0)).incrementAndGet();
+            log.info("[BpfManager] 风险评分建议审批: Agent={}, 操作={}, {}",
+                    agentId, request.fullAction(), score.diagnosticReport());
+        }
     }
 
     // ════════════════════════════════════════════════════════════════

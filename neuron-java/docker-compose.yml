@@ -40,6 +40,32 @@ services:
       start_period: 20s
       retries: 3
 
+  # ── Security_Auditor 物理隔离舱 (HackingTool 185+ 渗透测试工具) ──
+  aios_hackingtool:
+    image: z4nzu/hackingtool:latest
+    container_name: aios_hackingtool
+    networks:
+      - restricted_bridge
+    # 切断公网 — 仅允许访问测试网络中的目标应用
+    # 不暴露任何端口到宿主机
+    volumes:
+      # 共享扫描报告到 AIOS 内核 VFS
+      - aios-security-reports:/reports
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "which", "nmap"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
 volumes:
   aios-workspace:
     driver: local
+  aios-security-reports:
+    driver: local
+
+networks:
+  restricted_bridge:
+    driver: bridge
+    internal: true
+    description: "隔离网络 — 仅限 Security_Auditor 与测试目标通信"

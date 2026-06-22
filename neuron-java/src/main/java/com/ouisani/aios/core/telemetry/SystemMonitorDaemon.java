@@ -161,6 +161,8 @@ public final class SystemMonitorDaemon {
                     case READY -> "Sleeping";
                     case BLOCKED -> "Blocked";
                     case CRASHED -> "Crashed";
+                    case VERIFYING -> "Verifying";
+                    case WAITING_REVIEW -> "Waiting Review";
                     case KILLED, OOM_KILLED, DEADLINE_EXCEEDED -> "Killed";
                 };
                 String sandboxType = t.cgroup() != null && t.cgroup().contains("wasm") ? "Wasm" : "Docker";

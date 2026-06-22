@@ -3,6 +3,10 @@ package com.ouisani.aios.user.apps.omnifactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -27,6 +31,11 @@ public class WorkflowContext {
 
     // 外层 Key: 节点 ID, 内层 Map: 该节点输出的变量集合
     private final Map<String, Map<String, Object>> globalMemory = new ConcurrentHashMap<>();
+
+    // ── Carryover State（携带状态机）— 借鉴 OpenHarness 的 tool_metadata ──
+    // 跨上下文压缩持久化的工作记忆：即使 TokenZram 压缩了对话历史，
+    // Agent 也不会"失忆"——记住自己读过什么文件、做过什么操作。
+    private final CarryoverState carryoverState = new CarryoverState();
 
     /** 根上下文构造（顶层 DAG 使用） */
     public WorkflowContext(String workflowId) {
@@ -157,5 +166,213 @@ public class WorkflowContext {
      */
     public int getMemorySize() {
         return globalMemory.size();
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Carryover State — 携带状态机（借鉴 OpenHarness tool_metadata）
+    //  跨上下文压缩持久化的工作记忆，cleanupIntermediateNodes 不会清理它。
+    //  当 TokenZram 压缩上下文时，把 carryoverState 注入到压缩后的 prompt 头部。
+    // ════════════════════════════════════════════════════════════════
+
+    /** 获取携带状态机 */
+    public CarryoverState getCarryoverState() {
+        return carryoverState;
+    }
+
+    /**
+     * 记录文件读取操作 — Agent 读过的文件不会因压缩而遗忘。
+     *
+     * @param filePath 文件路径
+     * @param lineRange 读取的行范围（如 "1-50"），可为 null
+     */
+    public void recordFileRead(String filePath, String lineRange) {
+        carryoverState.recordFileRead(filePath, lineRange);
+    }
+
+    /**
+     * 记录工具调用 — Agent 用过的工具不会因压缩而遗忘。
+     *
+     * @param toolName 工具名称
+     * @param summary 调用摘要
+     */
+    public void recordToolInvocation(String toolName, String summary) {
+        carryoverState.recordToolInvocation(toolName, summary);
+    }
+
+    /**
+     * 记录工作日志 — Agent 做过的操作按时间顺序记录。
+     *
+     * @param action 操作描述
+     */
+    public void recordWorkLog(String action) {
+        carryoverState.recordWorkLog(action);
+    }
+
+    /**
+     * 更新任务焦点状态 — 当前目标、下一步等。
+     *
+     * @param key 状态键（如 "current_goal", "next_step"）
+     * @param value 状态值
+     */
+    public void updateTaskFocus(String key, String value) {
+        carryoverState.updateTaskFocus(key, value);
+    }
+
+    /**
+     * 生成携带状态的摘要文本 — 供 TokenZram 压缩后注入到 prompt 头部。
+     * <p>
+     * 格式示例：
+     * <pre>
+     * === CARRYOVER STATE (跨压缩持久化) ===
+     * [任务焦点]
+     *   current_goal: 实现用户登录功能
+     *   next_step: 编写单元测试
+     * [已读文件]
+     *   - src/main/java/Login.java (1-50)
+     *   - pom.xml (1-30)
+     * [工具调用]
+     *   - file_read: 读取 Login.java
+     *   - bash: 运行 mvn compile
+     * [工作日志]
+     *   1. 读取了 Login.java 源码
+     *   2. 编译项目，发现 2 个错误
+     *   3. 修复了 import 缺失
+     * === END CARRYOVER ===
+     * </pre>
+     *
+     * @return 携带状态的文本摘要，如果没有状态则返回空字符串
+     */
+    public String renderCarryoverState() {
+        return carryoverState.render();
+    }
+
+    /**
+     * 携带状态机 — 借鉴 OpenHarness 的 tool_metadata 字典。
+     * <p>
+     * 维护跨上下文压缩持久化的工作记忆，包含：
+     * <ul>
+     *   <li>taskFocus: 任务焦点状态（当前目标、下一步等）</li>
+     *   <li>readFiles: 已读文件列表（路径 + 行范围 + 预览）</li>
+     *   <li>invokedTools: 已调用工具列表（工具名 + 摘要）</li>
+     *   <li>workLog: 工作日志（按时间顺序的操作记录）</li>
+     * </ul>
+     * cleanupIntermediateNodes 不会清理这些状态。
+     * 当 TokenZram 压缩上下文时，调用 render() 生成摘要文本注入到压缩后的 prompt 头部。
+     */
+    public static class CarryoverState {
+
+        /** 任务焦点状态 — 当前目标、下一步等 */
+        private final Map<String, String> taskFocus = new ConcurrentHashMap<>();
+
+        /** 已读文件 — 路径 → 行范围（如 "1-50"） */
+        private final Map<String, String> readFiles = new ConcurrentHashMap<>();
+
+        /** 已调用工具 — 工具名 → 调用摘要列表 */
+        private final Map<String, List<String>> invokedTools = new ConcurrentHashMap<>();
+
+        /** 工作日志 — 按时间顺序的操作记录 */
+        private final List<String> workLog = Collections.synchronizedList(new ArrayList<>());
+
+        /** 最大工作日志条数 — 超过后自动裁剪旧条目 */
+        private static final int MAX_WORK_LOG = 50;
+
+        /** 最大已读文件数 — 超过后自动裁剪最旧的 */
+        private static final int MAX_READ_FILES = 100;
+
+        void recordFileRead(String filePath, String lineRange) {
+            if (filePath == null || filePath.isBlank()) return;
+            readFiles.put(filePath, lineRange != null ? lineRange : "all");
+            // 裁剪：超过上限时移除最早的条目
+            if (readFiles.size() > MAX_READ_FILES) {
+                String oldest = readFiles.keySet().iterator().next();
+                readFiles.remove(oldest);
+            }
+        }
+
+        void recordToolInvocation(String toolName, String summary) {
+            if (toolName == null || toolName.isBlank()) return;
+            invokedTools.computeIfAbsent(toolName, k -> Collections.synchronizedList(new ArrayList<>()))
+                    .add(summary != null ? summary : "");
+        }
+
+        void recordWorkLog(String action) {
+            if (action == null || action.isBlank()) return;
+            String entry = String.format("[%tT] %s", System.currentTimeMillis(), action);
+            workLog.add(entry);
+            // 裁剪：超过上限时移除最早的条目
+            while (workLog.size() > MAX_WORK_LOG) {
+                workLog.remove(0);
+            }
+        }
+
+        void updateTaskFocus(String key, String value) {
+            if (key == null || key.isBlank()) return;
+            if (value == null || value.isBlank()) {
+                taskFocus.remove(key);
+            } else {
+                taskFocus.put(key, value);
+            }
+        }
+
+        /**
+         * 渲染为文本摘要 — 供注入到压缩后的 prompt 头部。
+         */
+        String render() {
+            if (taskFocus.isEmpty() && readFiles.isEmpty() && invokedTools.isEmpty() && workLog.isEmpty()) {
+                return "";
+            }
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("=== CARRYOVER STATE (跨压缩持久化) ===\n");
+
+            // 任务焦点
+            if (!taskFocus.isEmpty()) {
+                sb.append("[任务焦点]\n");
+                for (Map.Entry<String, String> e : taskFocus.entrySet()) {
+                    sb.append("  ").append(e.getKey()).append(": ").append(e.getValue()).append("\n");
+                }
+            }
+
+            // 已读文件
+            if (!readFiles.isEmpty()) {
+                sb.append("[已读文件]\n");
+                for (Map.Entry<String, String> e : readFiles.entrySet()) {
+                    sb.append("  - ").append(e.getKey());
+                    if (!"all".equals(e.getValue())) {
+                        sb.append(" (").append(e.getValue()).append(")");
+                    }
+                    sb.append("\n");
+                }
+            }
+
+            // 工具调用
+            if (!invokedTools.isEmpty()) {
+                sb.append("[工具调用]\n");
+                for (Map.Entry<String, List<String>> e : invokedTools.entrySet()) {
+                    for (String s : e.getValue()) {
+                        sb.append("  - ").append(e.getKey()).append(": ").append(s).append("\n");
+                    }
+                }
+            }
+
+            // 工作日志
+            if (!workLog.isEmpty()) {
+                sb.append("[工作日志]\n");
+                int start = Math.max(0, workLog.size() - 20); // 最多展示最近 20 条
+                for (int i = start; i < workLog.size(); i++) {
+                    sb.append("  ").append(i + 1).append(". ").append(workLog.get(i)).append("\n");
+                }
+            }
+
+            sb.append("=== END CARRYOVER ===");
+            return sb.toString();
+        }
+
+        // ── Getters ──
+
+        public Map<String, String> getTaskFocus() { return taskFocus; }
+        public Map<String, String> getReadFiles() { return readFiles; }
+        public Map<String, List<String>> getInvokedTools() { return invokedTools; }
+        public List<String> getWorkLog() { return workLog; }
     }
 }
