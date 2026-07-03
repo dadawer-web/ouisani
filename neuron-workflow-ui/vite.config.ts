@@ -8,6 +8,9 @@ export default defineConfig({
   build: {
     sourcemap: 'hidden',
   },
+  server: {
+    host: true,
+  },
   plugins: [
     react({
       babel: {

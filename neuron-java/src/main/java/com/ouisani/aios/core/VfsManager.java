@@ -18,10 +18,13 @@ import com.ouisani.aios.vfs.RegistryFsNode;
 import com.ouisani.aios.vfs.GuiDomNode;
 import com.ouisani.aios.vfs.GuiActionNode;
 import com.ouisani.aios.vfs.RemoteDeviceMountNode;
-import com.ouisani.aios.vfs.DeviceOfflineException;
 import com.ouisani.aios.vfs.DesktopNotifyNode;
 import com.ouisani.aios.vfs.ChromeBridgeNode;
+import com.ouisani.aios.vfs.IndexNode;
+import com.ouisani.aios.vfs.OverlayNode;
 import com.ouisani.aios.core.vfs.VfsJournal;
+import com.ouisani.aios.core.vfs.VfsLockManager;
+import com.ouisani.aios.core.vfs.FileAccessRecorder;
 import io.javalin.Javalin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,9 +61,9 @@ public final class VfsManager {
     }
 
     /** 读写锁 — 保护路径树的并发访问，读多写少场景 */
-    private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
+    final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
     /** 路径树 — VFS 核心数据结构，绝对路径 → VfsNode 映射 */
-    private final Map<String, VfsNode> pathTree = new ConcurrentHashMap<>();
+    final Map<String, VfsNode> pathTree = new ConcurrentHashMap<>();
     /** Agent 命名空间映射 — agentId → VFS 根路径 */
     private final Map<Integer, String> agentNamespaces = new ConcurrentHashMap<>();
     /** 物理工作目录映射 — VFS 路径前缀 → 物理目录路径，用于将 VFS 写入桥接到物理磁盘 */
@@ -73,7 +76,17 @@ public final class VfsManager {
     // ── 磁盘降级模式标志（借鉴 Langflow Noop 设计） ──
     private volatile boolean diskDegraded = false;
 
+    // ── 文件访问记录器（注入式，借鉴 CompactCutoffGuard 注入模式） ──
+    // null 时所有 hook 跳过，零回归
+    private volatile FileAccessRecorder fileAccessRecorder;
+
     public boolean isDiskDegraded() { return diskDegraded; }
+
+    /** 注入文件访问记录器；传 null 关闭 hook */
+    public void configureFileAccessRecorder(FileAccessRecorder recorder) {
+        this.fileAccessRecorder = recorder;
+        log.info("FileAccessRecorder 已配置: {}", recorder == null ? "<disabled>" : "enabled");
+    }
 
     private VfsManager() {
     }
@@ -86,6 +99,31 @@ public final class VfsManager {
     public void configureTaskScheduler(TaskScheduler scheduler) {
         this.taskScheduler = scheduler;
         log.info("TaskScheduler 已配置，用于 /proc 文件系统");
+    }
+
+    /**
+     * 获取 VFS 路径锁管理器 — 提供树状细粒度文件锁，防止多 Agent 并发冲突。
+     * <p>
+     * 借鉴 Apix 的 {@code file_system_manager.py}，支持：
+     * <ul>
+     *   <li>祖先破坏性锁检测（DELETE/MOVE 阻塞后代）</li>
+     *   <li>后代锁检测（DELETE/MOVE 等待后代解锁）</li>
+     *   <li>多文件有序加锁（避免 AB-BA 死锁）</li>
+     * </ul>
+     * <p>
+     * 用法：
+     * <pre>{@code
+     * try (var lock = VfsManager.instance().lockManager().fileLock(
+     *         "/factory/app.py", "agent_1", VfsLockManager.LockEvent.MODIFY)) {
+     *     VfsManager.instance().writeText("/factory/app.py", content);
+     * }
+     * }</pre>
+     *
+     * @return VFS 锁管理器单例
+     * @see VfsLockManager
+     */
+    public VfsLockManager lockManager() {
+        return VfsLockManager.instance();
     }
 
     /**
@@ -638,106 +676,40 @@ public final class VfsManager {
     /**
      * Dynamically mount a remote device into the VFS.
      * <p>
-     * Called by {@code SyscallServer} when a new remote device connects
-     * via the {@code /ws/remote/{deviceId}} WebSocket endpoint. Creates
-     * a {@link RemoteDeviceMountNode} and mounts it at
-     * {@code /dev/remote/{deviceId}}.
-     * <p>
-     * If a node already exists at that path (e.g., the device
-     * reconnected), the existing node is returned instead.
+     * Delegates to {@link VfsDeviceManager#mountRemoteDevice}.
      *
      * @param deviceId   unique identifier for the remote device
      * @param deviceType type hint (e.g., "sensor", "actuator", "vcp_node")
      * @return the mounted RemoteDeviceMountNode
      */
     public RemoteDeviceMountNode mountRemoteDevice(String deviceId, String deviceType) {
-        rwLock.writeLock().lock();
-        try {
-            if (!initialized) {
-                throw new IllegalStateException("VFS 未初始化，无法挂载远程设备");
-            }
-
-            String vfsPath = "/dev/remote/" + deviceId;
-
-            // Check if the node already exists (device reconnection)
-            VfsNode existing = pathTree.get(vfsPath);
-            if (existing instanceof RemoteDeviceMountNode existingNode) {
-                log.info("[VFS] 远程设备 '{}' 已挂载于 {}，返回已有节点", deviceId, vfsPath);
-                return existingNode;
-            }
-
-            // Create and mount the new remote device node
-            RemoteDeviceMountNode node = new RemoteDeviceMountNode(
-                    vfsPath, deviceId, deviceType, 512, 0, 0666);
-            pathTree.put(vfsPath, node);
-
-            log.info("[VFS] Remote device mounted: {} [REMOTE_DEVICE] type={}", vfsPath, deviceType);
-            System.out.println("  \u001B[36m[VFS] Remote device '" + deviceId + "' mounted at " + vfsPath
-                    + " (type=" + deviceType + ")\u001B[0m");
-
-            return node;
-        } finally {
-            rwLock.writeLock().unlock();
-        }
+        return VfsDeviceManager.mountRemoteDevice(pathTree, rwLock, initialized, deviceId, deviceType);
     }
 
     /**
      * Look up an existing remote device node by deviceId.
+     * <p>
+     * Delegates to {@link VfsDeviceManager#getRemoteDevice}.
      *
      * @param deviceId the device identifier
      * @return the RemoteDeviceMountNode, or null if not found
      */
     public RemoteDeviceMountNode getRemoteDevice(String deviceId) {
-        String vfsPath = "/dev/remote/" + deviceId;
-        VfsNode node = pathTree.get(vfsPath);
-        if (node instanceof RemoteDeviceMountNode rdmn) {
-            return rdmn;
-        }
-        return null;
+        return VfsDeviceManager.getRemoteDevice(pathTree, deviceId);
     }
 
     /**
      * Unmount a remote device from the VFS.
      * <p>
-     * Called by {@code SyscallServer} when a remote device disconnects.
-     * Marks the node as permanently unmounted (which causes subsequent
-     * reads to return EOF and writes to fail), then removes it from
-     * the VFS path tree.
-     * <p>
-     * The Agent process will receive a {@link DeviceOfflineException}
-     * on its next {@code sys_read}, or EOF if the node has been
-     * permanently removed.
+     * Delegates to {@link VfsDeviceManager#unmountRemoteDevice}.
      *
      * @param deviceId the device identifier to unmount
      * @return true if the device was found and unmounted
      */
     public boolean unmountRemoteDevice(String deviceId) {
-        rwLock.writeLock().lock();
-        try {
-            String vfsPath = "/dev/remote/" + deviceId;
-            VfsNode node = pathTree.get(vfsPath);
-
-            if (node instanceof RemoteDeviceMountNode rdmn) {
-                rdmn.markPermanentlyUnmounted();
-                pathTree.remove(vfsPath);
-
-                log.info("[VFS] 远程设备已卸载: {} [REMOTE_DEVICE]", vfsPath);
-                System.out.println("  \u001B[31m[VFS] Remote device '" + deviceId + "' unmounted from " + vfsPath + "\u001B[0m");
-                return true;
-            }
-
-            log.warn("[VFS] 远程设备卸载失败: '{}' 未找到或非 RemoteDeviceMountNode", vfsPath);
-            return false;
-        } finally {
-            rwLock.writeLock().unlock();
-        }
+        return VfsDeviceManager.unmountRemoteDevice(pathTree, rwLock, deviceId);
     }
 
-    /**
-     * List all currently mounted remote devices.
-     *
-     * @return map of deviceId → vfsPath for all remote device nodes
-     */
     /**
      * 便捷读取方法 — 从 VFS 读取文本内容。
      * <p>
@@ -757,7 +729,12 @@ public final class VfsManager {
             log.warn("[VFS] readText 被拒绝: 无读取权限 '{}'", path);
             return null;
         }
-        return node.read();
+        String result = node.read();
+        // hook FileAccessRecorder：仅记录非空成功读取
+        if (fileAccessRecorder != null && result != null) {
+            fileAccessRecorder.touchRead(path, System.currentTimeMillis());
+        }
+        return result;
     }
 
     /**
@@ -828,10 +805,16 @@ public final class VfsManager {
                     memNode.write(content);
                     pathTree.put(resolved, memNode);
                     log.info("[VFS] writeText: 磁盘写入失败，已回退至 MutableFileNode '{}'，字符数 {}", resolved, content.length());
+                    if (fileAccessRecorder != null) {
+                        fileAccessRecorder.touchEdit(resolved, System.currentTimeMillis());
+                    }
                     return true;
                 }
                 pathTree.put(resolved, hostNode);
                 log.info("[VFS] writeText: 已创建 HostSourceNode '{}'，字符数 {} → 物理路径: {}", resolved, content.length(), physicalFilePath);
+                if (fileAccessRecorder != null) {
+                    fileAccessRecorder.touchEdit(resolved, System.currentTimeMillis());
+                }
                 return ok;
             }
 
@@ -844,6 +827,9 @@ public final class VfsManager {
             newNode.write(content);
             pathTree.put(resolved, newNode);
             log.info("[VFS] writeText: 已创建新 MutableFileNode '{}'，字符数 {}", resolved, content.length());
+            if (fileAccessRecorder != null) {
+                fileAccessRecorder.touchEdit(resolved, System.currentTimeMillis());
+            }
             return true;
         } finally {
             rwLock.writeLock().unlock();
@@ -873,14 +859,7 @@ public final class VfsManager {
     }
 
     public Map<String, String> listRemoteDevices() {
-        Map<String, String> devices = new LinkedHashMap<>();
-        String prefix = "/dev/remote/";
-        for (Map.Entry<String, VfsNode> entry : pathTree.entrySet()) {
-            if (entry.getKey().startsWith(prefix) && entry.getValue() instanceof RemoteDeviceMountNode rdmn) {
-                devices.put(rdmn.deviceId(), entry.getKey());
-            }
-        }
-        return devices;
+        return VfsDeviceManager.listRemoteDevices(pathTree);
     }
 
     /**
@@ -905,5 +884,74 @@ public final class VfsManager {
             rwLock.readLock().unlock();
         }
         return files;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  渐进式披露 (Progressive Disclosure) — IndexNode 支持
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 为指定目录生成或刷新 IndexNode（渐进式披露索引）。
+     * <p>
+     * Delegates to {@link VfsDeviceManager#indexDirectory}.
+     *
+     * @param dirPath 目录路径
+     * @return 生成的索引内容，目录不存在则返回 null
+     */
+    public String indexDirectory(String dirPath) {
+        return VfsDeviceManager.indexDirectory(pathTree, rwLock, this, dirPath);
+    }
+
+    /**
+     * 读取目录的索引内容（如果存在）。如果索引不存在，自动生成。
+     * <p>
+     * Delegates to {@link VfsDeviceManager#readDirectoryIndex}.
+     *
+     * @param dirPath 目录路径
+     * @return 索引内容，目录不存在则返回 null
+     */
+    public String readDirectoryIndex(String dirPath) {
+        return VfsDeviceManager.readDirectoryIndex(pathTree, rwLock, this, dirPath);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  VFS OverlayFS — 上下文覆盖层（借鉴 Docker 镜像层）
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 创建 OverlayFS 挂载点 — 借鉴 Docker 镜像层和 Linux OverlayFS。
+     * <p>
+     * Delegates to {@link VfsDeviceManager#createOverlay}.
+     *
+     * @param mountPath 挂载路径（如 /containers/agent_1001/workspace）
+     * @param lowerDir  底层只读目录（如 /factory/myproject）
+     * @param upperDir  上层读写目录（如 /containers/agent_1001/overlay）
+     * @return 创建的 OverlayNode
+     */
+    public OverlayNode createOverlay(String mountPath, String lowerDir, String upperDir) {
+        return VfsDeviceManager.createOverlay(pathTree, rwLock, this, mountPath, lowerDir, upperDir);
+    }
+
+    /**
+     * 销毁 OverlayFS 挂载点。
+     * <p>
+     * Delegates to {@link VfsDeviceManager#destroyOverlay}.
+     *
+     * @param mountPath 挂载路径
+     */
+    public void destroyOverlay(String mountPath) {
+        VfsDeviceManager.destroyOverlay(pathTree, rwLock, mountPath);
+    }
+
+    /**
+     * 获取指定挂载点的 OverlayNode。
+     * <p>
+     * Delegates to {@link VfsDeviceManager#getOverlay}.
+     *
+     * @param mountPath 挂载路径
+     * @return OverlayNode，不存在则返回 null
+     */
+    public OverlayNode getOverlay(String mountPath) {
+        return VfsDeviceManager.getOverlay(pathTree, rwLock, mountPath);
     }
 }

@@ -12,8 +12,11 @@ import org.slf4j.LoggerFactory;
  *   <li>代码块（```...```）是否正确闭合</li>
  *   <li>括号（()、{}、[]）是否匹配（考虑字符串字面量）</li>
  * </ul>
- * 这不是完整的语法分析器，仅做轻量级的结构性检查，
- * 用于拦截明显残缺的代码输出。
+ * <p>
+ * 【重要】Markdown 格式瑕疵（如代码块未闭合、括号轻微不匹配）
+ * 只打印 WARN 日志，不拦截！大模型可能生成了 7000 字的正确代码，
+ * 仅仅因为外层 Markdown 代码块少写了一个反引号就被没收，
+ * 这会导致 LLM 陷入死循环。只要提取器能用正则抠出代码就行。
  */
 public class CodeSyntaxGuardrail implements Guardrail.OutputGuardrail {
 
@@ -28,11 +31,11 @@ public class CodeSyntaxGuardrail implements Guardrail.OutputGuardrail {
         }
 
         int fenceCount = countOccurrences(output, CODE_FENCE);
-        // 代码块必须成对出现（偶数个 ```）
+        // 代码块未成对 — 只警告，不拦截！
         if (fenceCount % 2 != 0) {
             String info = "代码块未正确闭合（检测到 " + fenceCount + " 个 ``` 标记）";
-            log.warn("[CodeSyntaxGuardrail] agent={}, {}", agentId, info);
-            return Guardrail.GuardrailResult.tripped(info, Guardrail.GuardrailAction.REJECT_CONTENT);
+            log.warn("[CodeSyntaxGuardrail] agent={}, {} — 放行（Markdown 瑕疵不拦截）", agentId, info);
+            return Guardrail.GuardrailResult.allowed();
         }
 
         // 逐个检查代码块的括号匹配
@@ -45,13 +48,14 @@ public class CodeSyntaxGuardrail implements Guardrail.OutputGuardrail {
             int codeStart = langEnd >= 0 ? langEnd + 1 : fenceStart + CODE_FENCE.length();
 
             int fenceEnd = output.indexOf(CODE_FENCE, codeStart);
-            if (fenceEnd < 0) break; // 已被上面的奇偶检查覆盖
+            if (fenceEnd < 0) break;
 
             String code = output.substring(codeStart, fenceEnd);
             if (!checkBracketBalance(code)) {
+                // 括号不匹配 — 只警告，不拦截！
                 String info = "代码块括号不匹配";
-                log.warn("[CodeSyntaxGuardrail] agent={}, {}", agentId, info);
-                return Guardrail.GuardrailResult.tripped(info, Guardrail.GuardrailAction.REJECT_CONTENT);
+                log.warn("[CodeSyntaxGuardrail] agent={}, {} — 放行（括号瑕疵不拦截，提取器可处理）", agentId, info);
+                return Guardrail.GuardrailResult.allowed();
             }
 
             searchStart = fenceEnd + CODE_FENCE.length();

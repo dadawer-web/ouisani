@@ -1,5 +1,6 @@
 package com.ouisani.aios.core.dream;
 
+import com.ouisani.aios.core.AgentTask;
 import com.ouisani.aios.user.sdk.AiosSdk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 自动梦境整合 — 对标 Claude Code 的 autoDream。
@@ -18,7 +20,13 @@ import java.time.Instant;
  * - 4 阶段 Prompt（Orient → Gather → Consolidate → Prune）
  * - 文件锁防并发
  * <p>
+ * <b>失败学习集成（借鉴 Headroom learn）：</b>
+ * 新增 {@link #learnFromFailures} 方法 — 从失败会话中提取修正规则，
+ * 检测循环（canonical signature），LLM 分析后写入持久化规则文件。
+ * 番茄钟死循环跑了几十轮，系统现在能自动生成"下次别这么干"的规则。
+ * <p>
  * OS 类比：相当于 Linux 的 kswapd 后台回收 — 空闲时整理内存。
+ * learnFromFailures = panic 日志分析器 — 从崩溃中提取修复规则。
  */
 public class AutoDreamService {
 
@@ -108,6 +116,91 @@ public class AutoDreamService {
      */
     public static void recordNewSession() {
         sessionsSinceLastConsolidation++;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  失败学习 — 借鉴 Headroom learn
+    //
+    //  从失败会话中提取修正规则：
+    //  1. LoopDetector 检测循环（canonical signature + 分页参数剥离）
+    //  2. SessionAnalyzer LLM 分析失败原因
+    //  3. LearnRuleWriter 写入持久化规则文件
+    //
+    //  不破坏现有 consolidate() 逻辑 — 独立的新方法，可按需调用。
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 从失败会话中学习 — 借鉴 Headroom headroom learn。
+     * <p>
+     * 分析 AgentTask 的会话历史，检测循环，LLM 分析后写入持久化规则文件。
+     * <p>
+     * <b>不破坏现有逻辑：</b>此方法独立于 {@link #consolidate}，可按需调用。
+     * 建议在 {@link #consolidate} 之前或之后调用，作为梦境整合的补充。
+     *
+     * @param task      Agent 任务（包含 contextHistory）
+     * @param sdk       AIOS SDK（用于 LLM 分析）
+     * @param agentId   Agent ID
+     * @param memoryDir 记忆目录（规则文件写入位置）
+     * @return 学习结果摘要
+     */
+    public static String learnFromFailures(AgentTask task, AiosSdk sdk,
+                                            String agentId, String memoryDir) {
+        log.info("[AutoDream] 启动失败学习: agent={}", agentId);
+        System.out.println("[AutoDream] 正在从失败会话中学习...");
+
+        if (task == null) {
+            return "learnFromFailures skipped: task is null";
+        }
+
+        List<String> contextHistory = task.contextHistory();
+        if (contextHistory == null || contextHistory.isEmpty()) {
+            log.info("[AutoDream] 无会话历史，跳过失败学习");
+            return "learnFromFailures skipped: no session history";
+        }
+
+        // 1. SessionAnalyzer 分析失败会话
+        List<LearnRecommendation> recommendations = SessionAnalyzer.analyze(
+                contextHistory, sdk, agentId);
+
+        if (recommendations.isEmpty()) {
+            log.info("[AutoDream] 未生成推荐规则（无失败或无循环）");
+            return "learnFromFailures: no recommendations generated (no failures or loops detected)";
+        }
+
+        // 2. LearnRuleWriter 写入持久化规则文件
+        LearnRuleWriter.WriteResult result = LearnRuleWriter.writeToDefault(
+                memoryDir, recommendations, false);
+
+        if (!result.success()) {
+            log.error("[AutoDream] 规则写入失败: {}", result.error);
+            return "learnFromFailures failed: " + result.error;
+        }
+
+        int loopCount = (int) recommendations.stream()
+                .filter(LearnRecommendation::isLoopGuardrail).count();
+
+        String summary = String.format(
+                "learnFromFailures: generated %d rules (%d loop guardrails), written to %s",
+                result.recommendationCount, loopCount, result.fileWritten);
+
+        log.info("[AutoDream] {}", summary);
+        System.out.println("[AutoDream] 失败学习完成: " + result.recommendationCount
+                + " 条规则 (" + loopCount + " 个循环护栏)");
+
+        return summary;
+    }
+
+    /**
+     * 便捷方法：只检测循环不调用 LLM（快速诊断）。
+     *
+     * @param task Agent 任务
+     * @return 检测到的循环列表（可能为空）
+     */
+    public static List<LoopDetector.LoopPattern> detectLoops(AgentTask task) {
+        if (task == null) return List.of();
+        List<LoopDetector.ToolCallRecord> toolCalls =
+                SessionAnalyzer.extractToolCalls(task.contextHistory());
+        return LoopDetector.detectLoops(toolCalls);
     }
 
     private static String buildConsolidationPrompt(String existingMemory) {

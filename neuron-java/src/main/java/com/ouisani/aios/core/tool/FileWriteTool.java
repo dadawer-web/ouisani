@@ -3,6 +3,10 @@ package com.ouisani.aios.core.tool;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.security.ContainmentZoneManager;
 
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
 /**
  * 文件写入工具 — 对标 Claude Code 的 FileWriteTool。
  * <p>
@@ -59,5 +63,32 @@ public class FileWriteTool implements Tool<FileWriteTool.Input> {
 
     @Override public String prompt() {
         return "Use file_write to create new files or completely rewrite existing ones in the virtual filesystem. For small edits, prefer file_edit.";
+    }
+
+    // ── 强类型 I/O 契约 ──
+    @Override
+    public List<Port> inputPorts() {
+        return List.of(
+            new Port("path", DataTypes.FILE_PATH, "VFS 虚拟文件路径"),
+            new Port("content", DataTypes.PLAIN_TEXT, "要写入文件的完整内容")
+        );
+    }
+
+    @Override
+    public List<Port> outputPorts() {
+        return List.of(
+            new Port("result", DataTypes.PLAIN_TEXT, "写入确认信息（字符数 + 路径）")
+        );
+    }
+
+    @Override
+    public Optional<ToolExample> example() {
+        return Optional.of(new ToolExample(
+            "如果你想把分析结果保存到文件",
+            Map.of(
+                "path", "/vfs/workspace/result.md",
+                "content", "# 分析报告\n\n这是分析结果..."
+            )
+        ));
     }
 }

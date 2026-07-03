@@ -3,6 +3,8 @@ package com.ouisani.aios.vfs;
 import com.ouisani.aios.core.VfsNode;
 import com.ouisani.aios.core.llm.LlmProvider;
 import com.ouisani.aios.core.llm.VectorMath;
+import com.ouisani.aios.core.tool.DataTypes;
+import com.ouisani.aios.core.tool.Port;
 import com.ouisani.aios.core.vfs.VfsJournal;
 
 import java.util.*;
@@ -108,6 +110,19 @@ public non-sealed class VectorNode implements VfsNode {
 
     @Override
     public VfsNodeType nodeType() { return VfsNodeType.VECTOR; }
+
+    // ── 强类型 I/O 契约 ──
+    @Override
+    public List<Port> inputPorts() {
+        return List.of(new Port("text", DataTypes.PLAIN_TEXT,
+                "待向量化的文本片段（write 入口）", true));
+    }
+
+    @Override
+    public List<Port> outputPorts() {
+        return List.of(new Port("search_result", DataTypes.JSON_DATA,
+                "向量搜索结果 JSON（search/read 出口）", true));
+    }
 
     @Override
     public String path() { return path; }
@@ -366,15 +381,16 @@ public non-sealed class VectorNode implements VfsNode {
      * 暴力搜索（降级方案）。
      */
     private String bruteForceSearch(String query, float[] queryVec, int topK) {
-        List<WaveSearchResult> results = new ArrayList<>();
-        for (int i = 0; i < records.size(); i++) {
-            VectorRecord record = records.get(i);
-            float similarity = VectorMath.cosineSimilarity(queryVec, record.vector);
-            results.add(new WaveSearchResult(i, record.text, similarity, record.clusterId, 0, 0));
+        List<float[]> vectors = new ArrayList<>(records.size());
+        for (VectorRecord r : records) vectors.add(r.vector());
+        // O(N log K) 有界堆 top-k — 镜像 jcode find_similar；维度不匹配的候选被跳过
+        List<VectorMath.ScoredIndex> top = VectorMath.findSimilar(queryVec, vectors, -1.0f, topK);
+        List<WaveSearchResult> results = new ArrayList<>(top.size());
+        for (VectorMath.ScoredIndex si : top) {
+            VectorRecord record = records.get(si.index());
+            results.add(new WaveSearchResult(si.index(), record.text(), si.score(), record.clusterId(), 0, 0));
         }
-
-        results.sort(Comparator.comparingDouble(WaveSearchResult::similarity).reversed());
-        int count = Math.min(topK, results.size());
+        int count = results.size();
 
         StringBuilder sb = new StringBuilder();
         sb.append("{\"query\":\"").append(escape(query)).append("\",");

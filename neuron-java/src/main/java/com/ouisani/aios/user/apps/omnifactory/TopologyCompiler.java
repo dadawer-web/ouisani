@@ -1,13 +1,10 @@
 package com.ouisani.aios.user.apps.omnifactory;
 
-import com.ouisani.aios.core.network.AppGateway;
 import com.ouisani.aios.user.sdk.AiosSdk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * 意图转拓扑编译器 — 将用户自然语言需求编译为事件驱动的智能体网格。
@@ -82,32 +79,36 @@ public class TopologyCompiler {
         // 3. 构建 Dify 风格的强约束 LLM 提示词
         StringBuilder fullPrompt = new StringBuilder();
         fullPrompt.append("""
-                你是一个顶级的 AGI 操作系统工作流编译器。你的任务是将用户的自然语言意图，拆解为带有严格依赖关系的有向无环图 (DAG)。
+                你是 AIOS 通用神经符号编译器 (Universal Neuro-Symbolic Compiler)。你的任务是将用户的自然语言意图——无论领域——拆解为带有严格依赖关系的有向无环图 (DAG)。
+                用户输入可能是写代码、写小说、查股票、做数学题、发送邮件、做调研报告等任何领域。
 
                 【核心架构规范】
                 1. 节点级动态分发 (Executor):
                    - 对于每个节点，你必须指定最合适的 `executor`。
-                   - 填写 "omni"：当任务涉及逻辑推理、代码编写、搜索引擎、爬虫、文件读写、Bash 系统命令等无需物理视觉的任务。
+                   - 填写 "omni"：当任务涉及逻辑推理、内容创作、搜索引擎、爬虫、文件读写、Bash 系统命令等无需物理视觉的任务。
                    - 填写 "operator"：【仅当】任务必须移动真实的物理鼠标、敲击键盘、或调用宿主机 GUI 打开真实软件时使用。
                    - 填写 "external"：当任务需要调用外部成熟 Agent CLI（如 Claude Code、Codex、SWE-agent、Aider）时使用。也可指定具体类型："external:claude-code"、"external:codex"、"external:swe-agent"、"external:aider"。
 
                 2. 内存状态流转与变量引用 (Memory Context):
                    - 节点之间通过内存总线传递数据，而不是写死在硬盘。
                    - 如果下游节点需要使用上游节点的数据，请在下游节点的 `userParams` 中使用 Dify 风格的占位符：`{{上游节点ID.变量名}}`。
-                   - 例如：节点 `search_github` 的输出将被下游节点引用为 `{{search_github.trending_url}}`。
+                   - 例如：节点 `search_news` 的输出将被下游节点引用为 `{{search_news.url_list}}`。
 
                 3. 严格的拓扑依赖 (Upstream Dependencies):
                    - 并发原则：没有任何依赖的节点，将在底层被引擎高并发同时拉起。
                    - 阻塞原则：必须等待前置任务完成的节点，必须在 `upstreamDependencies` 数组中明确声明前置节点的 ID。
 
                 4. 批处理与迭代节点 (Iteration / Child Engine) 【极度重要】:
-                   - 当任务需要对一个列表/数组中的多个元素进行重复操作时（例如："分别总结 5 篇文章"、"批量测试 3 个接口"），**绝对不要**在单节点的代码里写 for 循环！
+                   - 当任务需要对一个列表/数组中的多个元素进行重复操作时（例如："分别总结 5 篇文章"、"批量爬取 3 个网页"），**绝对不要**在单节点的代码里写 for 循环！
                    - 你必须生成一个特殊的迭代节点，设置 `"isIteration": true`。
-                   - 必须指定 `"iteratorDataVariable"`，即你要遍历的数组变量（通常引用上游，如 `"{{spider_node.article_list}}"`）。
+                   - 必须指定 `"iteratorDataVariable"`，即你要遍历的数组变量（通常引用上游，如 `"{{search_node.url_list}}"`）。
                    - 必须指定 `"iteratorItemAlias"`，即当前循环元素的局部别名（例如 `"item"`）。
                    - 必须在 `"childNodes"` 数组中，定义这个循环内部要执行的子任务流。在子任务流中，你可以通过 `{{item}}` 来引用当前遍历到的元素！
 
                 """);
+
+        // ── 通用神经符号编译器指令 — 强制领域不可知论 + ETL 流水线 + I/O 倒推 + 微任务原子化 ──
+        fullPrompt.append(universalCompilerDirective());
 
         fullPrompt.append("【用户需求】: ").append(prompt).append("\n\n");
 
@@ -162,7 +163,7 @@ public class TopologyCompiler {
 
                 规则：
                 1. 每个节点必须有 instanceId、role、executor（'omni'、'operator' 或 'external'）
-                2. executor='omni'：逻辑思考、写代码、文件读写、网页搜索、Bash 命令等纯数字任务（默认）
+                2. executor='omni'：逻辑思考、内容创作、文件读写、网页搜索、Bash 命令等纯数字任务（默认）
                 3. executor='operator'：仅当必须操作物理鼠标、键盘、查看屏幕截图时使用
                 3.1 executor='external'：调用外部成熟 Agent CLI（Claude Code/Codex/SWE-agent/Aider）。可指定具体类型如 "external:claude-code"、"external:codex"、"external:swe-agent"、"external:aider"
                 4. upstreamDependencies 数组声明该节点必须等待哪些上游节点完成后才能启动
@@ -171,8 +172,8 @@ public class TopologyCompiler {
                 7. 非迭代节点必须设置 "isIteration": false（或省略）
                 8. 迭代节点必须设置 "isIteration": true，并包含 iteratorDataVariable、iteratorItemAlias、childNodes
                 9. childNodes 中的子节点可通过 {{iteratorItemAlias值}} 引用当前遍历到的元素
-                10. 节点数量必须与任务的真实并发需求匹配
-                11. 只输出 JSON，不要任何其他文字！
+                10. 节点数量必须与任务的真实复杂度匹配 — 复杂任务至少 10 个节点，简单任务至少 4 个节点，严禁只生成 3 个粗放节点！
+                11. 先用 think 标签写出数据流转倒推逻辑，然后输出纯 JSON，不要任何其他文字！
                 """);
 
         // 4. 调用 LLM
@@ -365,6 +366,77 @@ public class TopologyCompiler {
         return cleaned;
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  通用神经符号编译器指令 (Universal Neuro-Symbolic Compiler Directive)
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 通用神经符号编译器指令 — 4 条核心法则。
+     * <p>
+     * 将编译器从"软件工程专用"升级为"领域不可知的通用 AGI 调度器"。
+     * 适用于写代码、写小说、查股票、做数学题、发送邮件等一切任务。
+     * <p>
+     * 四大核心指令：
+     * <ol>
+     *   <li>领域不可知论 — 根据 ExpertDomain SOP 切换思维，不预设是写代码</li>
+     *   <li>万物皆 ETL — Extract(获取) → Transform(处理) → Load(落地)</li>
+     *   <li>I/O 逆向倒推 — 从最终产物开始，严格匹配 ToolRegistry 的 InputSchema/OutputSchema</li>
+     *   <li>微任务原子化 — 严禁宏大节点，10-20 个细碎动作</li>
+     * </ol>
+     */
+    private static String universalCompilerDirective() {
+        // 使用字符串拼接构建 think 标签，避免被编辑器吞掉
+        String thinkOpen = "<" + "think" + ">";
+        String thinkClose = "</" + "think" + ">";
+        return """
+                【通用神经符号编译器指令 — 4 条核心法则 — 极度重要，违反即失败】
+
+                法则 1: 领域不可知论 (Domain Agnosticism)
+                - 你不是一个纯粹的程序员。你是 AIOS 的内核调度器 (Kernel Scheduler)。
+                - 用户输入可能是：写代码、写小说、查股票、做数学题、发送邮件、做调研报告、翻译文档、分析数据、系统运维……任何领域。
+                - 你必须根据注入的 ExpertDomain (专家领域 SOP) 来切换拆解思维。如果没有注入 SOP，则从用户需求中推断领域。
+                - 严禁预设"这是一个软件工程项目"。不要默认生成 pom.xml、Controller、Service 等代码节点，除非用户明确要求写代码。
+                - 示例：用户说"调研丰田固态电池最新进展" → 你的节点应该是 WebSearch → WebScrape → 总结对比 → 生成报告，而不是"创建项目结构"。
+
+                法则 2: 万物皆 ETL 流水线 (Everything is ETL)
+                - 无论什么任务，你都必须将其抽象为数据的流转：
+                  a) Extract (获取信息)：WebSearch 搜索、WebScrape 爬取、FileRead 读取本地文件、Bash 执行命令获取输出、用户输入。
+                  b) Transform (处理信息)：LLM 推理总结、数据清洗、格式转换、翻译、计算、对比分析、内容生成。
+                  c) Load (落地/发送信息)：FileWrite 保存文件、SendMessage 发送消息、Bash 执行落地命令、输出到终端。
+                - 每个节点必须明确属于 E、T、L 中的某一类，并在 role 中体现（例如："[E] 搜索丰田固态电池新闻"、"[T] 对比三篇文章的技术参数"、"[L] 保存调研报告为 Markdown"）。
+
+                法则 3: 严格的 I/O 逆向倒推 (Backward Chaining with Schema Matching)
+                - 你必须从最终目标产物开始倒推，而不是从用户需求正向分解。
+                - 思考链示例（通用领域）：
+                  要发邮件 → 需要邮件正文(Transform) → 需要调研数据(Extract) → 需要 WebSearch 查询。
+                  要保存报告 → 需要报告内容(Transform) → 需要原始资料(Extract) → 需要 WebScrape 爬取。
+                  要运行程序 → 需要启动脚本(L) → 需要源码文件(T) → 需要项目结构(E)。
+                - 严格匹配 ToolRegistry 中可用工具的 InputSchema 和 OutputSchema：
+                  上游节点的 OutputPort 类型必须与下游节点的 InputPort 类型兼容。
+                  例如：WebSearch 输出 UrlList → WebScrape 接受 UrlList 输入 → 输出 WebPageContent → LLM 总结接受 WebPageContent 输入 → 输出 MarkdownText → FileWrite 接受 MarkdownText 输入。
+                - 每条数据流必须有明确的类型契约（PlainText → PlainText, JsonData → JsonData, UrlList → UrlList, WebPageContent → MarkdownText 等）。
+
+                法则 4: 微任务原子化 (Micro-Tasking Atomization)
+                - 严禁出现类似"撰写调研报告"、"开发整个系统"、"分析数据"这种宏大节点。
+                - 必须拆分为极其细碎的动作，每个节点只做一件事：
+                  好的示例："节点1: WebSearch(query='丰田 固态电池 2026')"、"节点2: WebScrape(urls=节点1.output)"、"节点3: 总结三篇文章的核心技术参数"、"节点4: 对比参数生成表格"、"节点5: FileWrite(path='/report.md', content=节点4.output)"
+                - 一个节点最好只对应一次工具调用或一个 LLM 推理步骤。
+                - 自检：如果一个节点的 role 描述超过 15 个字，或包含"和"/"并"/"以及"等连接词，说明它不够原子化，必须继续拆分。
+                - 复杂任务应该生成 10-20 个节点。简单任务至少 4 个节点。如果你的节点数 < 4，说明拆解粒度太粗。
+
+                法则 5: 强制思考过程 (Mandatory Thinking Process)
+                - 在输出最终的 JSON 之前，你必须先使用 %s 标签，详细写出你的"数据流转倒推逻辑"。
+                - 在 %s 标签内，你必须按以下格式思考：
+                  1) 领域判定：这是什么领域的任务？（代码/调研/创作/运维/邮件/数学/翻译/...）
+                  2) 最终产物：用户想要的最终结果是什么？（文件? 消息? 终端输出? 邮件?）
+                  3) ETL 倒推：从最终产物开始倒推，每一步需要什么上游数据？
+                  4) 工具匹配：每一步应该用 ToolRegistry 中的哪个工具？输入输出类型是否匹配？
+                  5) 节点列表：按依赖顺序列出所有微任务节点（10-20 个），标注 E/T/L 类型。
+                - %s 标签内的内容不会被解析为 JSON，你可以自由思考。
+                - 完成思考后，紧接着输出纯 JSON（不要包裹在 %s 中，直接以 { 开头）。
+                """.formatted(thinkOpen, thinkOpen, thinkOpen, thinkClose);
+    }
+
     /** 蓝图注册表 — blueprintId → AgentBlueprint */
     private final Map<String, AgentBlueprint> blueprintRegistry = new HashMap<>();
 
@@ -400,12 +472,13 @@ public class TopologyCompiler {
     /**
      * 核心编译逻辑 — 将用户自然语言需求编译为 WorkflowManifest。
      * <p>
-     * 编译步骤：
+     * 采用逆向推导 (Backward Chaining) + 强类型 I/O 契约 + 自旋反馈机制：
      * <ol>
-     *   <li>调用 LLM 将用户意图解析为拓扑 JSON</li>
-     *   <li>正则解析 JSON 为 WorkflowNode 列表</li>
-     *   <li>校验蓝图引用，自动补全缺失蓝图</li>
-     *   <li>构建 WorkflowManifest 并部署</li>
+     *   <li>向 LLM 发送需求，要求使用逆向推导思维生成包含 nodes 和 edges 的 DAG</li>
+     *   <li>将 LLM 的 JSON 解析为 WorkflowManifest（含端口级连线）</li>
+     *   <li>调用 GraphValidator.validate(manifest) 进行静态类型校验</li>
+     *   <li>校验通过则返回；失败则将异常信息追加到 Prompt 中重新生成</li>
+     *   <li>最多重试 maxCompileAttempts=3 次，全部失败则快速失败拒绝执行</li>
      * </ol>
      *
      * @param userRequest 用户自然语言需求
@@ -417,78 +490,182 @@ public class TopologyCompiler {
         log.info("[OmniFactory] TopologyCompiler: Compiling user intent: {}", userRequest);
 
         AiosSdk sdk = AiosSdk.getInstance();
+        final int maxCompileAttempts = 3;
 
-        // ── Step 1: LLM 编译 — 将用户意图解析为拓扑 JSON ──
-        String compilePrompt = """
-                你是一个顶级的 AGI 操作系统工作流编译器。请分析用户需求，将其拆解为带有严格依赖关系的 DAG。
+        // ── 基础编译 Prompt（逆向推导 + 强类型 I/O 契约） ──
+        String basePrompt = buildCompilePrompt(userRequest);
+        String currentPrompt = basePrompt;
 
-                【核心架构规范】
-                1. 每个节点必须指定 executor: "omni"（逻辑/代码/搜索/Bash）、"operator"（物理鼠标/键盘/GUI）或 "external"（外部 Agent CLI，如 "external:claude-code"/"external:codex"/"external:swe-agent"/"external:aider"）
-                2. 节点间通过内存总线传递数据，下游用 {{上游节点ID.变量名}} 引用上游输出
-                3. upstreamDependencies 数组声明该节点必须等待的上游节点 ID
-                4. 批处理与迭代节点 (Iteration) 【极度重要】:
-                   - 当任务需要对列表/数组中的多个元素进行重复操作时，**绝对不要**在单节点代码里写 for 循环！
-                   - 必须生成迭代节点，设置 "isIteration": true
-                   - 必须指定 "iteratorDataVariable"（遍历的数组变量，如 "{{fetch_node.data_list}}"）
-                   - 必须指定 "iteratorItemAlias"（当前循环元素的别名，如 "item"）
-                   - 必须在 "childNodes" 中定义循环内的子任务流，子节点通过 {{item}} 引用当前元素
+        WorkflowManifest manifest = null;
 
-                用户需求: [""" + userRequest + "]\n\n"
-                + "请严格输出如下格式的 JSON（不要 Markdown 标记）：\n"
-                + "{\n"
-                + "  \"workflowName\": \"任务流名称\",\n"
-                + "  \"nodes\": [\n"
-                + "    { \"instanceId\": \"fetch_list\", \"role\": \"获取数据列表\", \"executor\": \"omni\", \"upstreamDependencies\": [], \"isIteration\": false },\n"
-                + "    { \"instanceId\": \"batch_loop\", \"role\": \"批量处理每个元素\", \"executor\": \"omni\", \"upstreamDependencies\": [\"fetch_list\"],\n"
-                + "      \"isIteration\": true, \"iteratorDataVariable\": \"{{fetch_list.data_array}}\", \"iteratorItemAlias\": \"item\",\n"
-                + "      \"childNodes\": [\n"
-                + "        { \"instanceId\": \"process_item\", \"role\": \"处理单个元素\", \"executor\": \"omni\", \"upstreamDependencies\": [], \"userParams\": { \"target\": \"{{item}}\" } }\n"
-                + "      ]\n"
-                + "    }\n"
-                + "  ]\n"
-                + "}\n"
-                + "只输出 JSON，不要其他文字。";
+        for (int attempt = 1; attempt <= maxCompileAttempts; attempt++) {
+            System.out.printf("[OmniFactory]   ═══ 编译尝试 %d/%d ═══%n", attempt, maxCompileAttempts);
+            log.info("[TopologyCompiler] Compile attempt {}/{}", attempt, maxCompileAttempts);
 
-        String topologyJson = sdk.think("topology_compiler", compilePrompt);
-        System.out.printf("[OmniFactory]   已收到拓扑 JSON (%d chars).%n", topologyJson.length());
-        log.debug("[OmniFactory] Topology JSON: {}", topologyJson);
+            // ── Step 1: LLM 生成（逆向推导 Backward Chaining） ──
+            long startMs = System.currentTimeMillis();
+            String topologyJson = sdk.think("topology_compiler", currentPrompt);
+            long elapsedMs = System.currentTimeMillis() - startMs;
+            System.out.printf("[OmniFactory]   [Step 1] LLM 生成拓扑 JSON: %d chars (%dms)%n",
+                    topologyJson.length(), elapsedMs);
+            log.info("[TopologyCompiler] Attempt {}: LLM generated {} chars ({}ms)",
+                    attempt, topologyJson.length(), elapsedMs);
 
-        // ── Step 2: 解析 JSON 为 WorkflowNode 列表 ──
-        List<WorkflowNode> nodes = parseTopologyJson(topologyJson);
-        System.out.printf("[OmniFactory]   已解析 %d 个工作流节点.%n", nodes.size());
-        log.info("[OmniFactory] 已解析 {} 个工作流节点 from LLM output.", nodes.size());
+            // ── Step 2: 反序列化为 WorkflowManifest ──
+            manifest = TopologyJsonParser.parseTopologyToManifest(topologyJson, userRequest);
+            if (manifest.nodes().isEmpty()) {
+                System.out.printf("[OmniFactory]   [Step 2] ⚠ 解析产生 0 个节点%n");
+                log.warn("[TopologyCompiler] Attempt {}: 0 nodes parsed", attempt);
+                if (attempt < maxCompileAttempts) {
+                    currentPrompt = basePrompt
+                            + "\n\n【上次输出错误】\n你上一次的输出没有产生任何有效节点。"
+                            + "请确保输出包含 'nodes' 数组，且每个节点有 instanceId 字段。";
+                    continue;
+                }
+                break;
+            }
+            System.out.printf("[OmniFactory]   [Step 2] ✓ 解析成功: %d 个节点, %d 条边%n",
+                    manifest.nodes().size(), manifest.edges().size());
 
-        if (nodes.isEmpty()) {
-            System.out.println("[OmniFactory]   ⚠ No nodes parsed. Returning empty manifest.");
-            log.warn("[OmniFactory] 拓扑解析产生 0 个节点。");
-            return new WorkflowManifest("empty_workflow", List.of());
+            // ── Step 3: 静态校验 (GraphValidator) ──
+            try {
+                GraphValidator.getInstance().validate(manifest);
+                System.out.printf("[OmniFactory]   [Step 3] ✓ 图验证通过！%n");
+                log.info("[TopologyCompiler] Attempt {} passed graph validation", attempt);
+
+                // ── Step 4a: 校验通过，跳出循环 ──
+                break;
+
+            } catch (TopologyCompileException e) {
+                System.out.printf("[OmniFactory]   [Step 3] ⚠ 图验证失败: %s%n", e.getMessage());
+                log.error("[TopologyCompiler] Attempt {} graph validation failed: {}", attempt, e.getMessage());
+
+                if (attempt < maxCompileAttempts) {
+                    // ── Step 4b: 自旋反馈 — 将异常信息追加到 Prompt ──
+                    currentPrompt = basePrompt
+                            + "\n\n你的图纸存在类型不匹配或连线错误：\n"
+                            + e.toString()
+                            + "\n\n请修正 I/O 端口并重新生成图纸。";
+                    System.out.printf("[OmniFactory]   [Step 4] → 反馈错误给 LLM，准备重试...%n");
+                    continue;
+                }
+
+                // ── Step 4c: 3 次都失败，快速失败 ──
+                System.out.printf("[OmniFactory]   ✗ 编译失败：%d 次尝试均未通过图验证，拒绝执行%n",
+                        maxCompileAttempts);
+                throw new RuntimeException(String.format(
+                        "拓扑编译失败：%d 次尝试均未通过 GraphValidator 校验。最后错误: %s",
+                        maxCompileAttempts, e.getMessage()), e);
+            }
         }
 
-        // ── Step 3: 构建 WorkflowManifest ──
-        // 优先使用 LLM 在 JSON 中生成的 workflowName（保留语义），
-        // 回退到基于用户输入的简短摘要
-        String workflowName = extractJsonValue(topologyJson, "workflowName");
-        if (workflowName == null || workflowName.isBlank()) {
-            // 从用户原始输入中提取前 20 字符作为摘要
-            workflowName = userRequest.length() > 20
-                    ? userRequest.substring(0, 20).trim()
-                    : userRequest.trim();
+        if (manifest == null || manifest.nodes().isEmpty()) {
+            throw new RuntimeException("拓扑编译失败：未能生成有效的工作流节点");
         }
-        WorkflowManifest manifest = new WorkflowManifest(workflowName, nodes);
 
-        // ── Step 4: 蓝图校验 + 自动补全 ──
+        // ── 蓝图校验 + 自动补全 ──
         validate(manifest);
 
-        // ── Step 5: 部署 ──
+        // ── 部署 ──
         WorkflowEngine.getInstance().executeWorkflow(manifest, blueprintRegistry);
 
         System.out.println("[OmniFactory] Topology Compiler engaged. "
                 + "User intent successfully compiled into event-driven agent mesh.");
         log.info("[OmniFactory] Topology compilation complete. Workflow '{}' deployed with {} nodes.",
-                workflowName, nodes.size());
+                manifest.workflowName(), manifest.nodes().size());
 
         return manifest;
     }
+
+    /**
+     * 构建编译 Prompt — 逆向推导 (Backward Chaining) + 强类型 I/O 契约。
+     * <p>
+     * 逆向推导思维：从最终目标出发，反向推导需要哪些前置节点和数据，
+     * 确保每条数据流都有明确的类型契约。
+     *
+     * @param userRequest 用户自然语言需求
+     * @return 完整的编译提示词
+     */
+    private String buildCompilePrompt(String userRequest) {
+        return """
+                你是 AIOS 通用神经符号编译器 (Universal Neuro-Symbolic Compiler)。请使用逆向推导 (Backward Chaining) 思维分析用户需求——无论领域——将其拆解为带有严格依赖关系和强类型 I/O 契约的 DAG。
+                用户输入可能是写代码、写小说、查股票、做数学题、发送邮件、做调研报告等任何领域。
+
+                【逆向推导思维 (Backward Chaining)】
+                1. 首先确定最终目标：用户想要什么最终结果？（文件? 消息? 终端输出? 邮件? 报告?）
+                2. 从最终结果反向推导：要产出这个结果，需要什么输入数据？
+                3. 继续反向推导：这些输入数据从哪里来？需要哪些前置节点？
+                4. 重复直到所有输入都可以从初始状态（用户输入/文件系统/网络）获取
+                5. 确保每一步的数据流转都有明确的类型契约
+
+                【核心架构规范】
+                1. 每个节点必须指定 executor: "omni"（逻辑/创作/搜索/Bash）、"operator"（物理鼠标/键盘/GUI）或 "external"（外部 Agent CLI，如 "external:claude-code"）
+                2. 节点间通过内存总线传递数据，下游用 {{上游节点ID.变量名}} 引用上游输出
+                3. upstreamDependencies 数组声明该节点必须等待的上游节点 ID
+                4. 批处理与迭代节点 (Iteration)：当需要对列表中的多个元素重复操作时，生成迭代节点，设置 "isIteration": true
+
+                【强类型 I/O 契约 — 极度重要】
+                每个节点必须声明 inputPorts 和 outputPorts，描述"吃进去什么"和"吐出来什么"：
+                - inputPorts: [{"name": "端口名", "dataType": "数据类型", "description": "描述", "required": true}]
+                - outputPorts: [{"name": "端口名", "dataType": "数据类型", "description": "描述", "required": true}]
+
+                标准数据类型: PlainText, MarkdownText, JsonData, UrlList, FilePath, FilePathList, ShellCommand, CommandOutput, WebPageContent, Url, HtmlText, CodeSnippet
+
+                同时必须声明 edges 数组，显式连接上游输出端口到下游输入端口：
+                - edges: [{"sourceNodeId": "节点A", "sourcePortName": "输出端口名", "targetNodeId": "节点B", "targetPortName": "输入端口名"}]
+
+                """ + universalCompilerDirective() + "\n用户需求: [" + userRequest + "]\n\n"
+                + """
+                【输出 JSON 格式要求 — 必须严格遵守】
+                你必须严格输出如下格式的 JSON（不要包含任何 Markdown 标记）：
+                {
+                  "workflowName": "任务流名称",
+                  "nodes": [
+                    {
+                      "instanceId": "fetch_data",
+                      "role": "获取数据",
+                      "executor": "omni",
+                      "upstreamDependencies": [],
+                      "isIteration": false,
+                      "inputPorts": [],
+                      "outputPorts": [
+                        {"name": "raw_data", "dataType": "JsonData", "description": "获取的原始JSON数据", "required": true}
+                      ]
+                    },
+                    {
+                      "instanceId": "process_data",
+                      "role": "处理数据",
+                      "executor": "omni",
+                      "upstreamDependencies": ["fetch_data"],
+                      "isIteration": false,
+                      "inputPorts": [
+                        {"name": "data", "dataType": "JsonData", "description": "待处理的JSON数据", "required": true}
+                      ],
+                      "outputPorts": [
+                        {"name": "result", "dataType": "MarkdownText", "description": "处理结果报告", "required": true}
+                      ]
+                    }
+                  ],
+                  "edges": [
+                    {"sourceNodeId": "fetch_data", "sourcePortName": "raw_data", "targetNodeId": "process_data", "targetPortName": "data"}
+                  ]
+                }
+
+                规则：
+                1. 使用逆向推导：从最终目标出发，反向推导所需节点
+                2. 每个节点必须声明 inputPorts 和 outputPorts
+                3. 下游节点的 inputPort 类型必须与上游节点的 outputPort 类型兼容
+                4. 必填 inputPort（required=true）必须有对应的 edge 连线
+                5. edges 数组必须显式连接所有端口级数据流
+                6. 起始节点（无上游依赖）的 inputPorts 可以为空数组 []
+                7. 节点数量必须与任务的真实复杂度匹配 — 复杂任务至少 10 个节点，简单任务至少 4 个节点，严禁只生成 3 个粗放节点！
+                8. 先用 think 标签写出数据流转倒推逻辑，然后输出纯 JSON，不要任何其他文字！
+                """;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  蓝图校验 + 自动补全 (Blueprint Validation & Auto-Completion)
+    // ════════════════════════════════════════════════════════════════
 
     /**
      * 蓝图校验器 — 遍历节点，检查 blueprintId 是否在注册表中存在。
@@ -586,266 +763,4 @@ public class TopologyCompiler {
         return sb.isEmpty() ? blueprintId + " 智能体" : sb.toString();
     }
 
-    // ════════════════════════════════════════════════════════════════
-    //  Topology JSON Parser — 正则提取，兼容 LLM 输出
-    // ════════════════════════════════════════════════════════════════
-
-    /**
-     * 从 LLM 返回的拓扑 JSON 中提取 WorkflowNode 列表。
-     * <p>
-     * 支持两种格式：
-     * - 新格式：{ "workflowName": "...", "nodes": [...] }（Dify 风格，含 upstreamDependencies）
-     * - 旧格式：直接返回节点数组或 edges 数组
-     * <p>
-     * 支持迭代节点（Iteration Node）的递归解析：
-     * - isIteration, iteratorDataVariable, iteratorItemAlias
-     * - childNodes 数组递归解析为子 WorkflowNode 列表
-     */
-    private List<WorkflowNode> parseTopologyJson(String json) {
-        List<WorkflowNode> nodes = new ArrayList<>();
-
-        // 去除 Markdown 代码块包裹和 <think/> 标签
-        String cleaned = json.replaceAll("```json\\s*", "").replaceAll("```\\s*", "").trim();
-        cleaned = cleaned.replaceAll("(?s)<think.*?</think*>", "").trim();
-
-        // 提取 nodes 数组内容
-        String nodesArray = extractNodesArray(cleaned);
-        if (nodesArray == null || nodesArray.isBlank()) {
-            log.warn("[TopologyCompiler] LLM 输出中未找到 'nodes' 数组");
-            return nodes;
-        }
-
-        // 使用安全的深度感知分割器提取每个 JSON 对象
-        List<String> rawNodes = AppGateway.splitJsonObjectsSafe(nodesArray);
-
-        for (String obj : rawNodes) {
-            WorkflowNode node = parseSingleNode(obj);
-            if (node != null) {
-                nodes.add(node);
-            }
-        }
-
-        // ── 解析 edges 数组（借鉴 Langflow Edge 路由） ──
-        String edgesArray = AppGateway.extractJsonArray(cleaned, "edges");
-        if (edgesArray != null && !edgesArray.isBlank()) {
-            List<WorkflowEdge> edges = parseEdges(edgesArray);
-            if (!edges.isEmpty()) {
-                WorkflowEngine.getInstance().setEdges(edges);
-                log.info("[TopologyCompiler] 已解析 {} 条 Edge，已设置到 WorkflowEngine。", edges.size());
-            }
-        }
-
-        return nodes;
-    }
-
-    /**
-     * 解析单个节点 JSON 对象为 WorkflowNode（含迭代节点递归解析）。
-     */
-    private WorkflowNode parseSingleNode(String obj) {
-        String instanceId = extractJsonValue(obj, "instanceId");
-        // 兼容旧格式：id → instanceId
-        if (instanceId == null) instanceId = extractJsonValue(obj, "id");
-        String blueprintId = extractJsonValue(obj, "blueprintId");
-        String role = extractJsonValue(obj, "role");
-        String executor = extractJsonValue(obj, "executor");
-        String subscribeTopic = extractJsonValue(obj, "subscribeTopic");
-        String publishTopic = extractJsonValue(obj, "publishTopic");
-
-        // 解析 userParams 对象
-        Map<String, String> userParams = extractUserParams(obj);
-
-        // 解析 upstreamDependencies 数组
-        List<String> upstreamDeps = extractUpstreamDependencies(obj);
-
-        if (instanceId == null || instanceId.isBlank()) {
-            return null;
-        }
-
-        WorkflowNode node = new WorkflowNode(
-                instanceId.trim(),
-                role != null ? role.trim() : "",
-                blueprintId != null ? blueprintId.trim() : instanceId.trim(),
-                userParams,
-                subscribeTopic != null ? subscribeTopic.trim() : "",
-                publishTopic != null ? publishTopic.trim() : "",
-                executor != null ? executor.trim() : "omni"
-        );
-
-        // 注入上游依赖
-        for (String dep : upstreamDeps) {
-            node.addDependency(dep.trim());
-        }
-
-        // ── 条件路由字段解析 ──
-        String condition = extractJsonValue(obj, "condition");
-        if (condition != null && !condition.isBlank()) {
-            node.setCondition(condition.trim());
-        }
-
-        // ── Frozen 字段解析 ──
-        String frozenStr = extractJsonValue(obj, "frozen");
-        if ("true".equalsIgnoreCase(frozenStr)) {
-            node.setFrozen(true);
-        }
-
-        // ── 声明式端口解析（借鉴 Langflow Edge 端口路由） ──
-        String inputPortsArray = AppGateway.extractJsonArray(obj, "inputPorts");
-        if (inputPortsArray != null && !inputPortsArray.isBlank()) {
-            List<Port> inputPorts = parsePorts(inputPortsArray);
-            node.setInputPorts(inputPorts);
-        }
-
-        String outputPortsArray = AppGateway.extractJsonArray(obj, "outputPorts");
-        if (outputPortsArray != null && !outputPortsArray.isBlank()) {
-            List<Port> outputPorts = parsePorts(outputPortsArray);
-            node.setOutputPorts(outputPorts);
-        }
-
-        // ── 迭代节点专属字段解析 ──
-        String isIterationStr = extractJsonValue(obj, "isIteration");
-        if ("true".equalsIgnoreCase(isIterationStr)) {
-            node.setIteration(true);
-
-            String iteratorDataVariable = extractJsonValue(obj, "iteratorDataVariable");
-            if (iteratorDataVariable != null) {
-                node.setIteratorDataVariable(iteratorDataVariable.trim());
-            }
-
-            String iteratorItemAlias = extractJsonValue(obj, "iteratorItemAlias");
-            if (iteratorItemAlias != null) {
-                node.setIteratorItemAlias(iteratorItemAlias.trim());
-            }
-
-            // 递归解析 childNodes 数组
-            String childNodesArray = AppGateway.extractJsonArray(obj, "childNodes");
-            if (childNodesArray != null && !childNodesArray.isBlank()) {
-                List<String> rawChildNodes = AppGateway.splitJsonObjectsSafe(childNodesArray);
-                for (String childObj : rawChildNodes) {
-                    WorkflowNode childNode = parseSingleNode(childObj);
-                    if (childNode != null) {
-                        node.getChildNodes().add(childNode);
-                    }
-                }
-            }
-
-            log.info("[TopologyCompiler] Iteration node parsed: id={}, dataVar={}, itemAlias={}, childCount={}",
-                    instanceId, iteratorDataVariable, iteratorItemAlias, node.getChildNodes().size());
-        }
-
-        return node;
-    }
-
-    /**
-     * 从 JSON 中提取 "nodes" 数组的内部内容。
-     */
-    private String extractNodesArray(String json) {
-        // 先尝试 Dify 格式：{ "workflowName": "...", "nodes": [...] }
-        String nodesArray = AppGateway.extractJsonArray(json, "nodes");
-        if (nodesArray != null) return nodesArray;
-
-        // 如果整个 JSON 就是一个数组 [...]
-        String trimmed = json.trim();
-        if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-            return trimmed.substring(1, trimmed.length() - 1);
-        }
-
-        return null;
-    }
-
-    /**
-     * 从 JSON 对象中提取 upstreamDependencies 数组。
-     * <p>
-     * 匹配 "upstreamDependencies": ["id1", "id2"] 格式。
-     */
-    private List<String> extractUpstreamDependencies(String jsonObj) {
-        List<String> deps = new ArrayList<>();
-        String arrayContent = AppGateway.extractJsonArray(jsonObj, "upstreamDependencies");
-        if (arrayContent == null || arrayContent.isBlank()) return deps;
-
-        // 提取数组中的每个字符串值
-        Pattern strPattern = Pattern.compile("\"([^\"]+)\"");
-        Matcher m = strPattern.matcher(arrayContent);
-        while (m.find()) {
-            deps.add(m.group(1));
-        }
-        return deps;
-    }
-
-    /**
-     * 从 JSON 对象中提取 userParams 字典。
-     * <p>
-     * 匹配 "userParams":{"key1":"val1","key2":"val2"} 格式。
-     */
-    private Map<String, String> extractUserParams(String jsonObj) {
-        Map<String, String> params = new LinkedHashMap<>();
-
-        // 先提取 userParams 对象的内容
-        Pattern paramsPattern = Pattern.compile("\"userParams\"\\s*:\\s*\\{([^}]*)\\}");
-        Matcher paramsMatcher = paramsPattern.matcher(jsonObj);
-        if (!paramsMatcher.find()) return params;
-
-        String paramsContent = paramsMatcher.group(1);
-
-        // 逐个提取 key:value 对
-        Pattern kvPattern = Pattern.compile("\"([^\"]+)\"\\s*:\\s*\"([^\"]*)\"");
-        Matcher kvMatcher = kvPattern.matcher(paramsContent);
-        while (kvMatcher.find()) {
-            params.put(kvMatcher.group(1), kvMatcher.group(2));
-        }
-
-        return params;
-    }
-
-    /**
-     * 从 JSON 对象中提取指定 key 的字符串值。
-     */
-    private String extractJsonValue(String jsonObj, String key) {
-        Pattern p = Pattern.compile("\"" + key + "\"\\s*:\\s*\"([^\"]*?)\"");
-        Matcher m = p.matcher(jsonObj);
-        if (m.find()) {
-            return m.group(1);
-        }
-        return null;
-    }
-
-    /**
-     * 解析端口数组 JSON 为 Port 列表。
-     * <p>
-     * 匹配格式：[{"name": "data_in", "dataType": "json"}, ...]
-     */
-    private List<Port> parsePorts(String portsArray) {
-        List<Port> ports = new ArrayList<>();
-        List<String> rawPortObjs = AppGateway.splitJsonObjectsSafe(portsArray);
-        for (String portObj : rawPortObjs) {
-            String name = extractJsonValue(portObj, "name");
-            String dataType = extractJsonValue(portObj, "dataType");
-            if (name != null && !name.isBlank()) {
-                ports.add(new Port(name.trim(), dataType != null ? dataType.trim() : "any"));
-            }
-        }
-        return ports;
-    }
-
-    /**
-     * 解析边数组 JSON 为 WorkflowEdge 列表。
-     * <p>
-     * 匹配格式：[{"sourceNodeId": "a", "sourcePortName": "result", "targetNodeId": "b", "targetPortName": "data_in"}, ...]
-     */
-    private List<WorkflowEdge> parseEdges(String edgesArray) {
-        List<WorkflowEdge> edges = new ArrayList<>();
-        List<String> rawEdgeObjs = AppGateway.splitJsonObjectsSafe(edgesArray);
-        for (String edgeObj : rawEdgeObjs) {
-            String sourceNodeId = extractJsonValue(edgeObj, "sourceNodeId");
-            String sourcePortName = extractJsonValue(edgeObj, "sourcePortName");
-            String targetNodeId = extractJsonValue(edgeObj, "targetNodeId");
-            String targetPortName = extractJsonValue(edgeObj, "targetPortName");
-            if (sourceNodeId != null && targetNodeId != null
-                    && sourcePortName != null && targetPortName != null) {
-                edges.add(new WorkflowEdge(
-                        sourceNodeId.trim(), sourcePortName.trim(),
-                        targetNodeId.trim(), targetPortName.trim()));
-            }
-        }
-        return edges;
-    }
 }

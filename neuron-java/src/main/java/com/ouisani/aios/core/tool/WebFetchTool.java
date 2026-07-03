@@ -9,6 +9,9 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * 网页抓取工具 — 对标 Claude Code 的 WebFetchTool。
@@ -86,5 +89,32 @@ public class WebFetchTool implements Tool<WebFetchTool.Input> {
 
     @Override public String prompt() {
         return "Use web_fetch to retrieve web content. Results are truncated to 50KB. For search, prefer the web_search tool.";
+    }
+
+    // ── 强类型 I/O 契约 ──
+    @Override
+    public List<Port> inputPorts() {
+        return List.of(
+            new Port("url", DataTypes.URL, "要抓取的网页 URL"),
+            new Port("prompt", DataTypes.PLAIN_TEXT, "可选：从页面中提取什么内容")
+        );
+    }
+
+    @Override
+    public List<Port> outputPorts() {
+        return List.of(
+            new Port("content", DataTypes.WEB_PAGE_CONTENT, "网页内容（纯文本，最多 50KB）")
+        );
+    }
+
+    @Override
+    public Optional<ToolExample> example() {
+        return Optional.of(new ToolExample(
+            "如果你需要抓取网页内容进行分析",
+            Map.of(
+                "url", "https://example.com/article",
+                "prompt", "提取文章正文内容"
+            )
+        ));
     }
 }

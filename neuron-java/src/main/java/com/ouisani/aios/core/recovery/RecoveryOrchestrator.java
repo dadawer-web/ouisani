@@ -39,8 +39,8 @@ public class RecoveryOrchestrator {
     private static final Logger log = LoggerFactory.getLogger(RecoveryOrchestrator.class);
     private static final RecoveryOrchestrator INSTANCE = new RecoveryOrchestrator();
 
-    /** 最大全局恢复尝试次数（防止无限循环） */
-    private static final int MAX_GLOBAL_ATTEMPTS = 20;
+    /** 最大全局恢复尝试次数 — 从 20 降为 2，大模型前 2 次都没看懂，第 20 次也不会看懂 */
+    private static final int MAX_GLOBAL_ATTEMPTS = 2;
 
     /** 熔断阈值：连续失败 N 次后触发熔断 */
     private static final int CIRCUIT_BREAKER_THRESHOLD = 5;
@@ -463,14 +463,15 @@ public class RecoveryOrchestrator {
             // ── 关键：恢复成功后必须 resumeNode，否则节点永远 SUSPENDED ──
             // RecoveryOrchestrator 是"分诊台"，它只负责诊断和开药方，
             // 真正让病人"复活"的是 WorkflowEngine.resumeNode()
+            boolean nodeResumed = false;
             try {
                 java.util.Map<String, Object> resumeContext = new java.util.HashMap<>();
                 if (result.modifiedPrompt() != null) {
                     resumeContext.put("_reflection_hint", result.modifiedPrompt());
                 }
-                boolean resumed = com.ouisani.aios.user.apps.omnifactory.WorkflowEngine.instance()
+                nodeResumed = com.ouisani.aios.user.apps.omnifactory.WorkflowEngine.instance()
                         .resumeNode(nodeId, workflowId, resumeContext);
-                if (resumed) {
+                if (nodeResumed) {
                     log.info("[RecoveryOrchestrator] 节点 '{}' 已通过 resumeNode 复活", nodeId);
                 } else {
                     log.warn("[RecoveryOrchestrator] resumeNode 返回 false，节点 '{}' 可能已不处于 SUSPENDED 状态", nodeId);
@@ -479,8 +480,27 @@ public class RecoveryOrchestrator {
                 log.error("[RecoveryOrchestrator] resumeNode 失败: nodeId={}, error={}", nodeId, e.getMessage());
             }
 
-            // 广播恢复成功事件
-            broadcastRecoveryEvent(nodeId, "crash_recovery", true, result.message());
+            if (nodeResumed) {
+                // 节点真正复活 → 广播恢复成功
+                broadcastRecoveryEvent(nodeId, "crash_recovery", true, result.message());
+            } else {
+                // ── 兜底：resumeNode 失败，强制将节点标记为 FAILED，避免工作流死锁 ──
+                // 策略修复成功（如模型降级）不等于节点真正复活。
+                // 如果 resumeNode 因竞态返回 false，残留的 SUSPENDED 节点会导致工作流永远等不到它完成。
+                // 此时必须强制降级为 FAILED，让下游被 SKIPPED 的节点继续推进，避免死锁。
+                log.warn("[RecoveryOrchestrator] 策略恢复成功但 resumeNode 失败，强制将节点 '{}' 标记为 FAILED 以避免死锁", nodeId);
+                boolean forced = com.ouisani.aios.user.apps.omnifactory.WorkflowEngine.instance()
+                        .forceFailNode(nodeId);
+                if (forced) {
+                    broadcastRecoveryEvent(nodeId, "crash_recovery", false,
+                            "Strategy succeeded but resumeNode failed — node force-failed to prevent deadlock: " + result.message());
+                } else {
+                    // 节点和工作流都已注销，无法强制失败，只能记录
+                    log.error("[RecoveryOrchestrator] 节点 '{}' 既无法 resume 也无法 forceFail，工作流可能已注销", nodeId);
+                    broadcastRecoveryEvent(nodeId, "crash_recovery", false,
+                            "Node and workflow already unregistered — orphaned SUSPENDED state: " + result.message());
+                }
+            }
         } else {
             // 4. 所有策略都失败 → 触发 Human-in-the-Loop
             log.warn("[RecoveryOrchestrator] 崩溃恢复失败，触发 Human-in-the-Loop: nodeId={}", nodeId);

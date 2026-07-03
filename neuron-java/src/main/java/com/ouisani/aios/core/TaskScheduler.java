@@ -269,6 +269,22 @@ public final class TaskScheduler {
     }
 
     /**
+     * 启动一次 overnight 长跑会话 — 委托给 {@link OvernightRunner}。
+     * <p>
+     * 长跑 agent 在虚拟线程中自主运行，遵循操作契约（已验证低风险进展、
+     * 禁止口味驱动/大重写/支付/push/删数据、先复现后修复、资源感知、
+     * 每任务产出结构化卡片）。阶段机自动驱动调度期→收尾期→汇报期→宽限期→终结。
+     *
+     * @param mission  使命描述（可空，空则用默认使命）
+     * @param duration 持续时长
+     * @return runId
+     */
+    public String startOvernightRun(String mission, java.time.Duration duration) {
+        return com.ouisani.aios.core.overnight.OvernightRunner.instance()
+                .startOvernightRun(mission, duration);
+    }
+
+    /**
      * 关闭调度器 — 类比 Linux shutdown。
      * 停止系统守护进程，中断所有活跃 Agent 线程，清空 PCB，关闭虚拟线程执行器。
      */
@@ -277,6 +293,7 @@ public final class TaskScheduler {
             SystemTickGenerator.instance().stop();
             WatchdogDaemon.instance().stop();
             CognitiveDreamDaemon.instance().stop();
+            com.ouisani.aios.core.plan.VersionedPlanStore.instance().stop();
 
             log.info("TaskScheduler 正在关闭，中断 {} 个活跃 Agent", agentThreads.size());
 

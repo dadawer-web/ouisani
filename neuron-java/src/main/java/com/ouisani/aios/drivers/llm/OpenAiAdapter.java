@@ -112,10 +112,21 @@ public class OpenAiAdapter implements LlmProvider {
      * HttpClient 内部自动管理 Keep-Alive 连接池和 HTTP/2 多路复用，
      * 并发虚拟线程共享同一个实例是线程安全的。
      */
+    /**
+     * 专用虚拟线程执行器 — 让 HttpClient 底层的 I/O 也拥抱虚拟线程。
+     * <p>
+     * 【动刀3】默认 HttpClient 的内部 Selector 和回调使用平台线程，
+     * 并发请求受限于平台线程数。注入虚拟线程执行器后，
+     * 每个 HTTP 请求的 I/O 等待不再占用 OS 线程。
+     */
+    private static final java.util.concurrent.ExecutorService HTTP_VTHREAD_EXECUTOR =
+            java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+
     private HttpClient getOrCreateClient(String url) {
         return CLIENT_POOL.computeIfAbsent(url, k -> {
-            log.info("[OpenAiAdapter] Created shared HttpClient for: {}", k);
+            log.info("[OpenAiAdapter] Created shared HttpClient for: {} (virtual-thread executor)", k);
             return HttpClient.newBuilder()
+                    .executor(HTTP_VTHREAD_EXECUTOR)  // 【动刀3】注入虚拟线程执行器
                     .connectTimeout(Duration.ofSeconds(30))
                     .build();
         });

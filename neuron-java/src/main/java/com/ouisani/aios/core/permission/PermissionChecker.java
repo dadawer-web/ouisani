@@ -49,6 +49,23 @@ public class PermissionChecker {
     );
 
     /**
+     * 工具行为分级 — 镜像 jcode {@code safety.rs:177-184} 的 {@code classify} 主入口。
+     * <p>
+     * 复用 {@link #SAFE_AUTO_TOOLS} 白名单做精确等值匹配（大小写不敏感）：
+     * <ul>
+     *   <li>命中白名单 → {@link ActionTier#AutoAllowed}（免询问自动放行）</li>
+     *   <li>未命中或 null → {@link ActionTier#RequiresPermission}（须询问或异步裁决）</li>
+     * </ul>
+     * 这是 {@link PrivilegeSyscallFilter#askPermission} 的前置分级步骤，
+     * 与既有 7 步流水线 {@link #checkPermission} 旁路共存，互不影响。
+     */
+    public static ActionTier classify(String toolName) {
+        if (toolName == null || toolName.isBlank()) return ActionTier.RequiresPermission;
+        return SAFE_AUTO_TOOLS.contains(toolName.toLowerCase())
+                ? ActionTier.AutoAllowed : ActionTier.RequiresPermission;
+    }
+
+    /**
      * 检查工具调用权限。
      *
      * @return PermissionDecision 包含行为和原因

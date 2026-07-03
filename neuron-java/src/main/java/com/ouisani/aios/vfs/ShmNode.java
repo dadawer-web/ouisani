@@ -2,9 +2,12 @@ package com.ouisani.aios.vfs;
 
 import com.ouisani.aios.core.VfsNode;
 import com.ouisani.aios.core.ipc.SharedMemoryManager;
+import com.ouisani.aios.core.tool.DataTypes;
+import com.ouisani.aios.core.tool.Port;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -53,6 +56,19 @@ public non-sealed class ShmNode implements VfsNode {
     @Override
     public VfsNodeType nodeType() {
         return VfsNodeType.DEVICE;
+    }
+
+    // ── 强类型 I/O 契约 ──
+    @Override
+    public List<Port> inputPorts() {
+        return List.of(new Port("entry", DataTypes.PLAIN_TEXT,
+                "key=value 格式键值对（write 入口）", true));
+    }
+
+    @Override
+    public List<Port> outputPorts() {
+        return List.of(new Port("dump", DataTypes.JSON_DATA,
+                "共享内存段全量 dump（read 出口）", true));
     }
 
     @Override

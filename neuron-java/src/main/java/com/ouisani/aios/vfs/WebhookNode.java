@@ -1,10 +1,13 @@
 package com.ouisani.aios.vfs;
 
 import com.ouisani.aios.core.VfsNode;
+import com.ouisani.aios.core.tool.DataTypes;
+import com.ouisani.aios.core.tool.Port;
 import io.javalin.Javalin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -53,6 +56,19 @@ public non-sealed class WebhookNode implements VfsNode {
     @Override
     public VfsNodeType nodeType() {
         return VfsNodeType.WEBHOOK;
+    }
+
+    // ── 强类型 I/O 契约 ──
+    // WebhookNode 的真正输入端口是外部 HTTP POST，write() 仅为测试辅助口
+    @Override
+    public List<Port> inputPorts() {
+        return List.of(); // 外部 HTTP 触发，非 write() 入口
+    }
+
+    @Override
+    public List<Port> outputPorts() {
+        return List.of(new Port("payload", DataTypes.PLAIN_TEXT,
+                "外部 POST 请求体（read 出口，阻塞等待 5s）", true));
     }
 
     @Override

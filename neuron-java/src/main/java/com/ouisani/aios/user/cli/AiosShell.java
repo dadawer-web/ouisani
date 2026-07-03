@@ -5,8 +5,11 @@ import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.cgroup.CgroupManager;
 import com.ouisani.aios.core.llm.LlmRouter;
+import com.ouisani.aios.core.llm.LlmProvider;
 import com.ouisani.aios.core.mcp.McpServer;
 import com.ouisani.aios.core.network.SyscallServer;
+import com.ouisani.aios.drivers.llm.EmbeddingRoutingProvider;
+import com.ouisani.aios.drivers.llm.LocalOnnxEmbedder;
 import com.ouisani.aios.drivers.llm.OpenAiAdapter;
 import com.ouisani.aios.core.security.ObjectManager;
 import com.ouisani.aios.core.syscall.SyscallDispatcher;
@@ -285,9 +288,19 @@ public class AiosShell extends AbstractAgent {
             // 【安全修复】API Key 注册到 SecretVault，Agent 只拿句柄
             com.ouisani.aios.core.security.SecretVault.instance().registerSecret("llm", "openai", apiKey);
             OpenAiAdapter adapter = new OpenAiAdapter(apiKey, baseUrl, model);
-            llmRouter.registerProvider("fast_model", adapter);
-            llmRouter.registerProvider("smart_model", adapter);
-            VfsManager.instance().configureLlmProvider(adapter);
+            // Embedding 路由：优先本地 ONNX（零外部 API），不可用则回退 adapter
+            LocalOnnxEmbedder localEmbedder = new LocalOnnxEmbedder();
+            LlmProvider embedProvider = adapter;
+            if (localEmbedder.isAvailable()) {
+                embedProvider = localEmbedder;
+                System.out.println("  ✓ 本地 ONNX Embedding：all-MiniLM-L6-v2（384 维，离线）");
+            } else {
+                System.out.println("  ⚠ 本地 ONNX 模型未就绪，embedding 回退 OpenAI（EMBEDDING_API_KEY）");
+            }
+            EmbeddingRoutingProvider composite = new EmbeddingRoutingProvider(adapter, embedProvider);
+            llmRouter.registerProvider("fast_model", composite);
+            llmRouter.registerProvider("smart_model", composite);
+            VfsManager.instance().configureLlmProvider(composite);
             System.out.printf("  ✓ LLM：%s @ %s（密钥 → 保管库句柄：%s）%n", model, baseUrl,
                     com.ouisani.aios.core.security.SecretVault.instance().getHandle("llm", "openai"));
         } else {

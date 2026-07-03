@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import com.ouisani.aios.core.tool.Port;
+
 /**
  * 工作流节点实例 — DAG 状态机中的可执行顶点。
  * <p>
@@ -67,6 +69,11 @@ public class WorkflowNode {
     // ── 声明式端口字段（借鉴 Langflow Component 的 inputs/outputs） ──
     private List<Port> inputPorts = new ArrayList<>();
     private List<Port> outputPorts = new ArrayList<>();
+
+    // ── 强类型契约字段（Type-Safe Graph Validation） ──
+    // 描述该节点的输入/输出数据 Schema，供 GraphValidator 验证类型兼容性
+    private SchemaDefinition inputSchema;
+    private SchemaDefinition outputSchema;
 
     // ════════════════════════════════════════════════════════════════
     //  构造函数
@@ -156,6 +163,13 @@ public class WorkflowNode {
     public Port getInputPort(String name) {
         return inputPorts.stream().filter(p -> p.name().equals(name)).findFirst().orElse(null);
     }
+
+    // ── 强类型契约访问器 ──
+    public SchemaDefinition inputSchema() { return inputSchema; }
+    public void setInputSchema(SchemaDefinition schema) { this.inputSchema = schema; }
+
+    public SchemaDefinition outputSchema() { return outputSchema; }
+    public void setOutputSchema(SchemaDefinition schema) { this.outputSchema = schema; }
 
     @Override
     public String toString() {

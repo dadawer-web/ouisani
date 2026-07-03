@@ -3,6 +3,9 @@ package com.ouisani.aios.core.tool;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -116,5 +119,32 @@ public class BashTool implements Tool<BashTool.Input> {
 
     @Override public String prompt() {
         return "When using bash: prefer absolute paths, avoid interactive commands, use timeout for long-running operations. For file operations, prefer dedicated file tools.";
+    }
+
+    // ── 强类型 I/O 契约 ──
+    @Override
+    public List<Port> inputPorts() {
+        return List.of(
+            new Port("command", DataTypes.SHELL_COMMAND, "要执行的 Shell 命令"),
+            new Port("timeout", DataTypes.PLAIN_TEXT, "超时时间（秒，默认 120）")
+        );
+    }
+
+    @Override
+    public List<Port> outputPorts() {
+        return List.of(
+            new Port("output", DataTypes.COMMAND_OUTPUT, "命令执行结果（stdout + stderr）")
+        );
+    }
+
+    @Override
+    public Optional<ToolExample> example() {
+        return Optional.of(new ToolExample(
+            "如果你需要执行系统命令查看目录结构",
+            Map.of(
+                "command", "ls -la /vfs/workspace/",
+                "workdir", "/vfs/workspace"
+            )
+        ));
     }
 }

@@ -107,12 +107,17 @@ public class SyscallServer {
                 QueuedThreadPool threadPool = (QueuedThreadPool) server.getThreadPool();
                 threadPool.setVirtualThreadsExecutor(Executors.newVirtualThreadPerTaskExecutor());
 
-                // WebSocket idle timeout 设置为 5 分钟，防止 Dashboard/Workflow 控制通道因空闲被断开
+                // HTTP idle timeout 设置为 5 分钟
                 for (var connector : server.getConnectors()) {
                     if (connector instanceof org.eclipse.jetty.server.ServerConnector sc) {
                         sc.setIdleTimeout(300000);
                     }
                 }
+            });
+
+            // WebSocket idle timeout 设置为 10 分钟 — 防止 Dashboard/Workflow 控制通道因空闲被断开
+            config.jetty.modifyWebSocketServletFactory(wsFactory -> {
+                wsFactory.setIdleTimeout(java.time.Duration.ofMinutes(10));
             });
             // Static file hosting for web dashboard HTML
             config.staticFiles.add("src/main/resources/web", io.javalin.http.staticfiles.Location.EXTERNAL);
@@ -349,77 +354,8 @@ public class SyscallServer {
             }
         });
 
-        // ── Migration WebSocket: 双向流式迁移通道 ──
-        app.ws("/ws/migration", ws -> {
-            ws.onConnect(ctx -> {
-                String token = ctx.queryParam("token");
-                if (!authManager.verifyToken(token)) {
-                    log.warn("[Migration WS] 被拒绝: 无效 Token");
-                    ctx.session.close();
-                    return;
-                }
-                log.info("[Migration WS] 客户端已连接，准备热迁移");
-            });
-
-            ws.onMessage(ctx -> {
-                try {
-                    String message = ctx.message();
-                    Map<String, Object> parsed = objectMapper.readValue(message, Map.class);
-                    String action = (String) parsed.get("action");
-
-                    if ("checkpoint".equals(action)) {
-                        int pid = ((Number) parsed.get("pid")).intValue();
-                        AgentTask task = scheduler.getTask(pid);
-                        if (task == null) {
-                            ctx.send("{\"error\":\"PID not found: " + pid + "\"}");
-                            return;
-                        }
-
-                        byte[] data = SnapshotManager.instance().prepareMigration(task);
-                        String base64Data = Base64.getEncoder().encodeToString(data);
-
-                        Map<String, Object> response = new LinkedHashMap<>();
-                        response.put("action", "checkpoint_data");
-                        response.put("snapshotId", "snap-" + pid + "-" + System.currentTimeMillis());
-                        response.put("pid", pid);
-                        response.put("data", base64Data);
-                        response.put("size", data.length);
-                        ctx.send(objectMapper.writeValueAsString(response));
-
-                    } else if ("restore".equals(action)) {
-                        String base64Data = (String) parsed.get("data");
-                        byte[] data = Base64.getDecoder().decode(base64Data);
-
-                        ProcessSnapshot snapshot = SnapshotManager.instance().deserializeFromTransfer(data);
-                        AgentTask restored = SnapshotManager.instance().restore(snapshot);
-
-                        Map<String, Object> response = new LinkedHashMap<>();
-                        response.put("action", "restore_complete");
-                        response.put("newPid", restored.pid());
-                        response.put("snapshotId", snapshot.snapshotId());
-                        response.put("sourceNode", snapshot.sourceNode());
-                        ctx.send(objectMapper.writeValueAsString(response));
-                    }
-
-                } catch (Exception e) {
-                    log.error("[Migration WS] 错误: {}", e.getMessage());
-                    try {
-                        ctx.send("{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
-                    } catch (Exception ignored) {}
-                }
-            });
-
-            ws.onClose(ctx -> {
-                log.info("[Migration WS] 客户端已断开");
-            });
-
-            ws.onError(ctx -> {
-                Throwable err = ctx.error();
-                if (err != null) {
-                    log.warn("[Migration WS] 错误: {}", err.getMessage());
-                }
-            });
-        });
+        // ── Migration WebSocket: 双向流式迁移通道 (extracted → MigrationRoutes) ──
+        MigrationRoutes.attachTo(app, scheduler);
 
         app.sse("/kernel/stream", client -> {
             client.keepAlive();
@@ -489,79 +425,8 @@ public class SyscallServer {
             });
         });
 
-        // ── Remote Device WebSocket: dynamic mount/unmount into /dev/remote/ ──
-        app.ws("/ws/remote/{deviceId}", ws -> {
-            ws.onConnect(ctx -> {
-                // Auth check
-                String token = ctx.queryParam("token");
-                if (!authManager.verifyToken(token)) {
-                    log.warn("[API Gateway] WebSocket /ws/remote 被拒绝: 无效 Token");
-                    ctx.session.close();
-                    return;
-                }
-
-                String deviceId = ctx.pathParam("deviceId");
-                String deviceType = ctx.queryParam("type") != null ? ctx.queryParam("type") : "generic";
-
-                log.info("[RemoteDevice] 设备正在连接: deviceId={}, type={}", deviceId, deviceType);
-
-                // Mount or retrieve the RemoteDeviceMountNode from VFS
-                RemoteDeviceMountNode node = VfsManager.instance().mountRemoteDevice(deviceId, deviceType);
-                node.attachWsContext(ctx);
-
-                remoteDevices.put(deviceId, node);
-
-                EventBus.instance().broadcast("device_mount",
-                        "{\"deviceId\":\"" + deviceId + "\",\"type\":\"" + deviceType
-                                + "\",\"path\":\"/dev/remote/" + deviceId + "\"}");
-
-                log.info("[RemoteDevice] 设备已挂载: deviceId={} → /dev/remote/{}", deviceId, deviceId);
-                System.out.println("  \u001B[32m[RemoteDevice] 设备 '" + deviceId + "' 已连接并挂载到 /dev/remote/" + deviceId + "\u001B[0m");
-            });
-
-            ws.onMessage(ctx -> {
-                String deviceId = ctx.pathParam("deviceId");
-                RemoteDeviceMountNode node = remoteDevices.get(deviceId);
-                if (node != null) {
-                    String message = ctx.message();
-                    node.onWsMessage(message);
-                    log.debug("[RemoteDevice] 收到消息: deviceId={}, len={}", deviceId, message.length());
-                }
-            });
-
-            ws.onClose(ctx -> {
-                String deviceId = ctx.pathParam("deviceId");
-                log.info("[RemoteDevice] 设备正在断开: deviceId={}", deviceId);
-
-                RemoteDeviceMountNode node = remoteDevices.remove(deviceId);
-                if (node != null) {
-                    node.detachWsContext();
-
-                    // Unmount from VFS — the device is gone
-                    VfsManager.instance().unmountRemoteDevice(deviceId);
-
-                    log.info("[RemoteDevice] 设备已卸载: deviceId={}", deviceId);
-                }
-
-                EventBus.instance().broadcast("device_unmount",
-                        "{\"deviceId\":\"" + deviceId + "\",\"reason\":\""
-                                + escapeJson(ctx.reason() != null ? ctx.reason() : "closed") + "\"}");
-            });
-
-            ws.onError(ctx -> {
-                String deviceId = ctx.pathParam("deviceId");
-                Throwable err = ctx.error();
-                if (err != null) {
-                    log.error("[RemoteDevice] deviceId={} 上发生错误: {}", deviceId, err.getMessage());
-                }
-
-                RemoteDeviceMountNode node = remoteDevices.remove(deviceId);
-                if (node != null) {
-                    node.detachWsContext();
-                    VfsManager.instance().unmountRemoteDevice(deviceId);
-                }
-            });
-        });
+        // ── Remote Device WebSocket: dynamic mount/unmount into /dev/remote/ (extracted → RemoteDeviceRoutes) ──
+        RemoteDeviceRoutes.attachTo(app, remoteDevices);
 
         // ════════════════════════════════════════════════════════════
         //  Semantic Display Server: /ws/display (render push)
@@ -784,118 +649,8 @@ public class SyscallServer {
         // ── App Gateway: bridge external UIs to application stdin/stdout ──
         AppGateway.attachTo(app);
 
-        // ── System Stream: 全局系统状态监控 WebSocket ──
-        // 每个前端连接在 onConnect 时动态注册 EventBus 监听器，
-        // 在 onClose 时注销，防止连接断开后 EventBus 继续推送导致 OOM。
-        app.ws("/api/system/stream", ws -> {
-            ws.onConnect(ctx -> {
-                String token = ctx.queryParam("token");
-                if (!authManager.verifyToken(token)) {
-                    log.warn("[System Stream] 未授权连接被拒绝");
-                    ctx.session.close();
-                    return;
-                }
-
-                String sessionId = ctx.sessionId();
-                systemStreamClients.add(ctx);
-
-                // ── 为当前连接注册 EventBus 监听器 ──
-                List<Consumer<String>> handlers = new ArrayList<>();
-
-                // 订阅 sys.telemetry.metrics → 推送 SYS_METRICS（展平到顶层，前端直接读 data.cpuUsage）
-                Consumer<String> metricsHandler = payload -> {
-                    try {
-                        if (ctx.session.isOpen()) {
-                            ctx.send(payload);
-                        }
-                    } catch (Exception e) {
-                        log.debug("[System Stream] 推送 SYS_METRICS 失败: {}", e.getMessage());
-                    }
-                };
-                EventBus.instance().subscribe("sys.telemetry.metrics", metricsHandler);
-                handlers.add(metricsHandler);
-
-                // 订阅 sys.eventbus.logs → 推送 EVENT_BUS_LOG
-                Consumer<String> logsHandler = payload -> {
-                    try {
-                        if (ctx.session.isOpen()) {
-                            ctx.send(payload);
-                        }
-                    } catch (Exception e) {
-                        log.debug("[System Stream] 推送 EVENT_BUS_LOG 失败: {}", e.getMessage());
-                    }
-                };
-                EventBus.instance().subscribe("sys.eventbus.logs", logsHandler);
-                handlers.add(logsHandler);
-
-                // 订阅 sys.dag.events → 推送 DAG_EVENT（节点状态变更等）
-                Consumer<String> dagHandler = payload -> {
-                    try {
-                        if (ctx.session.isOpen()) {
-                            ctx.send(payload);
-                        }
-                    } catch (Exception e) {
-                        log.debug("[System Stream] 推送 DAG_EVENT 失败: {}", e.getMessage());
-                    }
-                };
-                EventBus.instance().subscribe("sys.dag.events", dagHandler);
-                handlers.add(dagHandler);
-
-                // 保存此连接的所有 handler，断开时批量注销
-                systemStreamSubscriptions.put(sessionId, handlers);
-
-                log.info("[System Stream] 客户端已连接并注册 EventBus 监听器。总数: {}, sessionId: {}",
-                        systemStreamClients.size(), sessionId);
-                System.out.printf("  📡 [System Stream] 客户端已连接并注册 EventBus 监听器。总数: %d%n",
-                        systemStreamClients.size());
-            });
-
-            ws.onClose(ctx -> {
-                String sessionId = ctx.sessionId();
-                systemStreamClients.remove(ctx);
-
-                // ── 注销此连接的所有 EventBus 监听器，防止内存泄漏 ──
-                List<Consumer<String>> handlers = systemStreamSubscriptions.remove(sessionId);
-                if (handlers != null) {
-                    String[] channels = {"sys.telemetry.metrics", "sys.eventbus.logs", "sys.dag.events"};
-                    for (int i = 0; i < handlers.size() && i < channels.length; i++) {
-                        EventBus.instance().unsubscribe(channels[i], handlers.get(i));
-                    }
-                    log.info("[System Stream] 已注销 {} 个 EventBus 处理器，会话: {}",
-                            handlers.size(), sessionId);
-                }
-
-                log.info("[System Stream] 客户端已断开。总数: {}", systemStreamClients.size());
-                System.out.printf("  📡 [System Stream] 客户端已断开。总数: %d%n",
-                        systemStreamClients.size());
-            });
-
-            ws.onError(ctx -> {
-                String sessionId = ctx.sessionId();
-                systemStreamClients.remove(ctx);
-
-                // 连接异常时也要注销监听器
-                List<Consumer<String>> handlers = systemStreamSubscriptions.remove(sessionId);
-                if (handlers != null) {
-                    String[] channels = {"sys.telemetry.metrics", "sys.eventbus.logs", "sys.dag.events"};
-                    for (int i = 0; i < handlers.size() && i < channels.length; i++) {
-                        EventBus.instance().unsubscribe(channels[i], handlers.get(i));
-                    }
-                    log.info("[System Stream] 错误后已注销 {} 个 EventBus 处理器，会话: {}",
-                            handlers.size(), sessionId);
-                }
-
-                log.warn("[System Stream] 错误: {}", ctx.error() != null ? ctx.error().getMessage() : "unknown");
-            });
-
-            // ── 处理前端心跳 PING，回复 PONG 防止 Idle Timeout ──
-            ws.onMessage(ctx -> {
-                String msg = ctx.message();
-                if (msg != null && msg.contains("\"PING\"")) {
-                    ctx.send("{\"type\":\"PONG\"}");
-                }
-            });
-        });
+        // ── System Stream: 全局系统状态监控 WebSocket (extracted → SystemStreamRoutes) ──
+        SystemStreamRoutes.attachTo(app, systemStreamClients, systemStreamSubscriptions);
 
         // ── EventBus 日志桥接：将内核事件统一转发到 sys.eventbus.logs 频道 ──
         // 前端订阅 sys.eventbus.logs 即可收到所有 EVENT_BUS_LOG 格式的事件

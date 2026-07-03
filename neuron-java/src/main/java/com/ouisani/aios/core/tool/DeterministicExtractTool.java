@@ -1,6 +1,5 @@
 package com.ouisani.aios.core.tool;
 
-import com.ouisani.aios.user.sdk.AiosSdk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -90,7 +89,7 @@ public class DeterministicExtractTool implements Tool<DeterministicExtractTool.I
             }
 
             // 3. 用 LLM 生成提取代码 — 借鉴 Firecrawl 的确定性提取
-            AiosSdk sdk = context.sdk();
+            ToolSdk sdk = context.sdk();
             String codeGenPrompt = buildCodeGenPrompt(input.prompt(), input.schema(), htmlContent);
             String llmResponse = sdk.think(context.agentId(), codeGenPrompt);
 

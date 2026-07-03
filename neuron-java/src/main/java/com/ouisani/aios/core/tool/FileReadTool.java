@@ -6,6 +6,9 @@ import com.ouisani.aios.core.security.ContainmentZoneManager;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * 文件读取工具 — 对标 Claude Code 的 FileReadTool。
@@ -96,5 +99,13 @@ public class FileReadTool implements Tool<FileReadTool.Input> {
 
     @Override public String prompt() {
         return "Use file_read to examine file contents in the virtual filesystem. For large files, use offset and limit to read specific sections.";
+    }
+
+    @Override
+    public Optional<ToolExample> example() {
+        return Optional.of(new ToolExample(
+            "如果你需要读取之前保存的配置文件",
+            Map.of("path", "/vfs/workspace/config.json")
+        ));
     }
 }

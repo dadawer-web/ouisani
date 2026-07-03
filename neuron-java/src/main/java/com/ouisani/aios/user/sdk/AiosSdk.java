@@ -23,6 +23,7 @@ import com.ouisani.aios.core.permission.PermissionMode;
 import com.ouisani.aios.core.telemetry.TelemetryService;
 import com.ouisani.aios.core.tool.QueryEngine;
 import com.ouisani.aios.core.tool.ToolRegistry;
+import com.ouisani.aios.core.tool.ToolSdk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -48,7 +49,7 @@ import java.util.Map;
  *   sdk.writeFile("agent_1", "/dev/gui/action", "{\"action\":\"click\",\"id\":\"btn_1\"}");
  * </pre>
  */
-public final class AiosSdk {
+public final class AiosSdk implements ToolSdk {
 
     private static final Logger log = LoggerFactory.getLogger(AiosSdk.class);
 

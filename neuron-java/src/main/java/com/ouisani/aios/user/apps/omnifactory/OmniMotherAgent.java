@@ -219,16 +219,14 @@ public class OmniMotherAgent extends AbstractAgent {
             for (int attempt = 1; attempt <= MAX_SELF_HEAL_RETRIES && !nodeVerified; attempt++) {
                 try {
                     String prompt = codePrompt;
-                    // 反思注入：把上次错误怼到大模型脸上
+                    // 【修复雪球效应】反思注入：只传最后一次错误，绝不传完整历史
                     if (attempt > 1 && !lastNodeError.isEmpty()) {
-                        prompt += "\n\n[SYSTEM CRITICAL - PREVIOUS ATTEMPT FAILED]:\n"
-                                + "The previous execution failed with the following error/logs:\n"
-                                + "```text\n" + lastNodeError + "\n```\n"
-                                + "Please thoroughly analyze this error, figure out what went wrong, "
-                                + "and provide a CORRECTED solution or code. "
-                                + "Do NOT repeat the same mistake!\n";
-                        log.warn("[OmniMother] onStart 节点 {} 自愈重试 {}/{}，注入错误轨迹。",
-                                node.instanceId(), attempt, MAX_SELF_HEAL_RETRIES);
+                        String lastErrorOnly = extractLastError(lastNodeError);
+                        prompt += "\n\n[SYSTEM - PREVIOUS ATTEMPT FAILED]:\n"
+                                + "Last error: " + lastErrorOnly + "\n"
+                                + "Please fix this specific error. Do NOT repeat previous steps.\n";
+                        log.warn("[OmniMother] onStart 节点 {} 自愈重试 {}/{}，注入最后错误（{} 字符）。",
+                                node.instanceId(), attempt, MAX_SELF_HEAL_RETRIES, lastErrorOnly.length());
                     }
 
                     System.out.println("[Mother Agent] 正在为节点启动 Claude Code REPL: " + node.instanceId()
@@ -444,17 +442,18 @@ public class OmniMotherAgent extends AbstractAgent {
                 String basePrompt = buildCodePrompt(node, "");
 
                 // ── 【核心机制：反思注入 (Reflection Injection)】 ──
-                // 如果这不是第一次尝试，说明上次失败了。把错误日志怼到大模型脸上！
+                // 【修复雪球效应】只传最后一次错误，绝不传完整历史！
+                // 之前把 lastErrorTrace 全量传入，导致重试 3 次后 Prompt 膨胀到 44000 字，
+                // LLM 每次要阅读四万多字垃圾信息，单次推理耗时 39 秒。
                 if (!lastErrorTrace.isEmpty()) {
-                    String reflectionBlock = "\n\n[SYSTEM CRITICAL - PREVIOUS ATTEMPT FAILED]:\n"
-                            + "The previous execution failed with the following error/logs:\n"
-                            + "```text\n" + lastErrorTrace + "\n```\n"
-                            + "Please thoroughly analyze this error, figure out what went wrong, "
-                            + "and provide a CORRECTED solution or code. "
-                            + "Do NOT repeat the same mistake!\n";
+                    // 只提取最后一次错误信息（最后一个换行分隔的段落）
+                    String lastErrorOnly = extractLastError(lastErrorTrace);
+                    String reflectionBlock = "\n\n[SYSTEM - PREVIOUS ATTEMPT FAILED]:\n"
+                            + "Last error: " + lastErrorOnly + "\n"
+                            + "Please fix this specific error. Do NOT repeat previous steps.\n";
                     basePrompt += reflectionBlock;
-                    log.warn("[OmniMother] 正在将错误轨迹注入 LLM 上下文以进行自纠正（第 {} 次尝试）。",
-                            currentAttempt);
+                    log.warn("[OmniMother] 注入最后一次错误信息以进行自纠正（第 {} 次尝试），长度: {} 字符",
+                            currentAttempt, lastErrorOnly.length());
                 }
 
                 // ── Dify 变量解析：从内存总线动态替换 {{nodeId.variable}} 引用 ──
@@ -632,6 +631,21 @@ public class OmniMotherAgent extends AbstractAgent {
                     new RuntimeException("Agent 在 " + MAX_SELF_HEAL_RETRIES
                             + " 次自愈尝试后失败。最后错误: " + lastErrorTrace));
         }
+    }
+
+    /**
+     * 从错误轨迹中提取最后一次错误信息。
+     * <p>
+     * 【修复雪球效应】只传最后一次错误给 LLM，绝不传完整历史。
+     * 错误轨迹可能包含多轮累积的错误信息，用换行分隔。
+     * 提取策略：取最后 500 字符（包含最相关的错误信息）。
+     */
+    private String extractLastError(String errorTrace) {
+        if (errorTrace == null || errorTrace.isEmpty()) return "";
+        // 如果错误信息很短，直接返回
+        if (errorTrace.length() <= 500) return errorTrace;
+        // 只取最后 500 字符（最相关的错误信息）
+        return "..." + errorTrace.substring(errorTrace.length() - 500);
     }
 
     // ════════════════════════════════════════════════════════════════

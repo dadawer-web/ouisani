@@ -1,6 +1,6 @@
 package com.ouisani.aios.core.task;
 
-import com.ouisani.aios.user.sdk.AiosSdk;
+import com.ouisani.aios.core.tool.ToolSdk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,7 +21,7 @@ public class DreamTask implements AiosTask {
 
     private final TaskHandle handle;
     private final String agentId;
-    private final AiosSdk sdk;
+    private final ToolSdk sdk;
     private final AtomicReference<TaskStatus> status = new AtomicReference<>(TaskStatus.PENDING);
     private final StringBuilder insights = new StringBuilder();
     private volatile Thread dreamThread;
@@ -39,7 +39,7 @@ public class DreamTask implements AiosTask {
             {"patterns": [...], "learnings": [...], "improvements": [...], "memories": [...]}
             """;
 
-    public DreamTask(String agentId, AiosSdk sdk) {
+    public DreamTask(String agentId, ToolSdk sdk) {
         this.handle = TaskHandle.generate(TaskType.DREAM);
         this.agentId = agentId;
         this.sdk = sdk;

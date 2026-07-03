@@ -115,19 +115,19 @@ public final class SemanticCrashAnalyzer {
      * @param throwable 致命异常
      */
     public void kernelPanic(String agentId, Throwable throwable) {
-        String lastContext = extractLastContextFromTask(agentId);
+        String lastContext = CrashDiagnosticsWriter.extractLastContextFromTask(agentId);
 
         // 分类崩溃
-        SemanticCoreDump.CrashCategory category = classifyCrash(throwable);
+        SemanticCoreDump.CrashCategory category = CrashDiagnosticsWriter.classifyCrash(throwable);
 
         // 审计追踪
         SemanticEtw.getInstance().logEvent("SECURITY", "KERNEL_PANIC",
                 "agent=" + agentId + " category=" + category
                 + " exception=" + throwable.getClass().getName()
-                + " message=" + truncate(throwable.getMessage(), 200));
+                + " message=" + CrashDiagnosticsWriter.truncate(throwable.getMessage(), 200));
 
         // 打印蓝屏
-        printBlueScreen(agentId, throwable, category);
+        CrashDiagnosticsWriter.printBlueScreen(agentId, throwable, category);
 
         // 挂起 Agent 进程
         suspendAgent(agentId);
@@ -136,14 +136,14 @@ public final class SemanticCrashAnalyzer {
         SemanticCoreDump coreDump = collectCoreDump(agentId, throwable, lastContext, category);
 
         // 写入 VFS
-        writeDumpToVfs(agentId, coreDump);
+        CrashDiagnosticsWriter.writeDumpToVfs(agentId, coreDump);
 
         // 记录崩溃历史
         crashHistory.put(agentId, coreDump);
         crashCounts.merge(agentId, 1, Integer::sum);
 
         // 清理 Agent 资源
-        cleanupAgentResources(agentId);
+        CrashDiagnosticsWriter.cleanupAgentResources(agentId);
 
         // LLM 诊断
         diagnoseCrash(agentId, coreDump);
@@ -200,12 +200,12 @@ public final class SemanticCrashAnalyzer {
     public void handleLogicDeadlock(String agentId, String repeatedContext) {
         log.warn("[CrashAnalyzer] Agent {} is in a logic deadlock. Triggering semantic kernel panic.", agentId);
         SemanticEtw.getInstance().logEvent("SECURITY", "LOGIC_DEADLOCK",
-                "agent=" + agentId + " context=" + truncate(repeatedContext, 200));
+                "agent=" + agentId + " context=" + CrashDiagnosticsWriter.truncate(repeatedContext, 200));
 
         // 构造一个虚拟异常来触发 kernelPanic 流程
         RuntimeException deadlockException = new RuntimeException(
                 "Logic deadlock detected: Agent is stuck in a repetitive reasoning loop. "
-                + "Last context: " + truncate(repeatedContext, 300));
+                + "Last context: " + CrashDiagnosticsWriter.truncate(repeatedContext, 300));
         kernelPanic(agentId, deadlockException);
     }
 
@@ -221,7 +221,7 @@ public final class SemanticCrashAnalyzer {
      */
     private void suspendAgent(String agentId) {
         try {
-            int pid = resolvePid(agentId);
+            int pid = CrashDiagnosticsWriter.resolvePid(agentId);
             if (pid < 0) return;
 
             TaskScheduler scheduler = VfsManager.instance().getTaskScheduler();
@@ -263,8 +263,8 @@ public final class SemanticCrashAnalyzer {
      */
     public SemanticCoreDump collectCoreDump(String agentId, Throwable throwable,
                                              String lastContext, SemanticCoreDump.CrashCategory category) {
-        int pid = resolvePid(agentId);
-        AgentTask task = resolveTask(pid);
+        int pid = CrashDiagnosticsWriter.resolvePid(agentId);
+        AgentTask task = CrashDiagnosticsWriter.resolveTask(pid);
 
         // ── 崩溃元数据 ──
         SemanticCoreDump.CrashInfo crashInfo = new SemanticCoreDump.CrashInfo(
@@ -272,7 +272,7 @@ public final class SemanticCrashAnalyzer {
                 Instant.now().toString(),
                 throwable.getClass().getName(),
                 throwable.getMessage() != null ? throwable.getMessage() : "(no message)",
-                stackTraceToString(throwable),
+                CrashDiagnosticsWriter.stackTraceToString(throwable),
                 category
         );
 
@@ -323,7 +323,7 @@ public final class SemanticCrashAnalyzer {
 
             return new SemanticCoreDump.CognitiveSnapshot(
                     entries.size(), summaries,
-                    lastThinking != null ? truncate(lastThinking, 500) : "(no thinking context)"
+                    lastThinking != null ? CrashDiagnosticsWriter.truncate(lastThinking, 500) : "(no thinking context)"
             );
         } catch (Exception e) {
             return new SemanticCoreDump.CognitiveSnapshot(0, List.of(), "(cache unavailable)");
@@ -465,7 +465,7 @@ public final class SemanticCrashAnalyzer {
                 } catch (Exception toJsonError) {
                     log.warn("[CrashAnalyzer] coreDump.toJson() failed during diagnosis: {}",
                             toJsonError.getMessage());
-                    dumpJson = "{\"crashInfo\":{\"agentId\":\"" + escJson(agentId)
+                    dumpJson = "{\"crashInfo\":{\"agentId\":\"" + CrashDiagnosticsWriter.escJson(agentId)
                             + "\",\"exceptionMessage\":\"toJson() failed during diagnosis\"}}";
                 }
                 // 截断防止 Prompt 过长
@@ -481,20 +481,20 @@ public final class SemanticCrashAnalyzer {
 
                 // 将诊断报告也写入 VFS
                 String diagnosisPath = "/var/crash/diagnosis_" + agentId + ".aios";
-                writeToFile(diagnosisPath, diagnosis);
+                CrashDiagnosticsWriter.writeToFile(diagnosisPath, diagnosis);
 
                 // 打印诊断结果
-                printDiagnosis(agentId, diagnosis);
+                CrashDiagnosticsWriter.printDiagnosis(agentId, diagnosis);
 
                 SemanticEtw.getInstance().logEvent("SECURITY", "CRASH_DIAGNOSIS",
                         "agent=" + agentId + " diagnosisLen=" + diagnosis.length());
 
             } catch (Exception e) {
                 log.warn("[CrashAnalyzer] LLM diagnosis failed for agent={}: {}", agentId, e.getMessage());
-                printLocalDiagnosis(coreDump);
+                CrashDiagnosticsWriter.printLocalDiagnosis(coreDump);
             }
         } else {
-            printLocalDiagnosis(coreDump);
+            CrashDiagnosticsWriter.printLocalDiagnosis(coreDump);
         }
     }
 
@@ -520,7 +520,7 @@ public final class SemanticCrashAnalyzer {
             4. RECOVERY: Should this agent be restarted? With what modifications?
             
             Core Dump:
-            """ + truncate(dumpJson, 6000);
+            """ + CrashDiagnosticsWriter.truncate(dumpJson, 6000);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -557,7 +557,7 @@ public final class SemanticCrashAnalyzer {
         log.info("[CrashAnalyzer] Starting semantic fsck for agent={} (crash #{})", agentId, crashCount);
 
         // 读取诊断报告
-        String diagnosis = readDiagnosis(agentId);
+        String diagnosis = CrashDiagnosticsWriter.readDiagnosis(agentId);
 
         // 生成恢复策略
         RecoveryStrategy strategy = deviseRecoveryStrategy(dump, diagnosis, crashCount);
@@ -621,8 +621,8 @@ public final class SemanticCrashAnalyzer {
      */
     private boolean executeRecovery(String agentId, SemanticCoreDump dump, RecoveryStrategy strategy) {
         try {
-            int pid = resolvePid(agentId);
-            AgentTask task = resolveTask(pid);
+            int pid = CrashDiagnosticsWriter.resolvePid(agentId);
+            AgentTask task = CrashDiagnosticsWriter.resolveTask(pid);
 
             switch (strategy.type()) {
                 case MODIFY_SYSTEM_PROMPT -> {
@@ -804,244 +804,6 @@ public final class SemanticCrashAnalyzer {
             // ignore
         }
         return null;
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    //  辅助方法
-    // ════════════════════════════════════════════════════════════════
-
-    /**
-     * 分类崩溃类型。
-     */
-    private SemanticCoreDump.CrashCategory classifyCrash(Throwable throwable) {
-        if (throwable instanceof TokenOomException) return SemanticCoreDump.CrashCategory.TOKEN_OOM;
-        if (throwable instanceof SyscallException) return SemanticCoreDump.CrashCategory.SYSCALL_FAULT;
-        if (throwable instanceof SecurityException) return SemanticCoreDump.CrashCategory.SECURITY_VIOLATION;
-
-        String msg = throwable.getMessage() != null ? throwable.getMessage().toLowerCase() : "";
-        if (msg.contains("deadlock") || msg.contains("infinite") || msg.contains("loop")) {
-            return SemanticCoreDump.CrashCategory.LOGIC_DEADLOCK;
-        }
-        if (msg.contains("hallucination") || msg.contains("unparseable") || msg.contains("invalid json")) {
-            return SemanticCoreDump.CrashCategory.SEVERE_HALLUCINATION;
-        }
-
-        if (throwable instanceof OutOfMemoryError || throwable instanceof StackOverflowError) {
-            return SemanticCoreDump.CrashCategory.FATAL_ERROR;
-        }
-        if (throwable instanceof Error) return SemanticCoreDump.CrashCategory.FATAL_ERROR;
-        if (throwable instanceof RuntimeException) return SemanticCoreDump.CrashCategory.RUNTIME_EXCEPTION;
-
-        return SemanticCoreDump.CrashCategory.UNKNOWN;
-    }
-
-    /**
-     * 打印语义蓝屏。
-     */
-    private void printBlueScreen(String agentId, Throwable throwable,
-                                  SemanticCoreDump.CrashCategory category) {
-        System.err.println();
-        System.err.println("  ╔══════════════════════════════════════════════════════════════╗");
-        System.err.println("  ║                                                              ║");
-        System.err.println("  ║   *** SEMANTIC KERNEL PANIC ***                              ║");
-        System.err.println("  ║                                                              ║");
-        System.err.printf("  ║   Agent: %-50s ║%n", agentId);
-        System.err.printf("  ║   Category: %-47s ║%n", category);
-        System.err.printf("  ║   Exception: %-46s ║%n", throwable.getClass().getSimpleName());
-        System.err.printf("  ║   Message: %-49s ║%n",
-                truncate(throwable.getMessage() != null ? throwable.getMessage() : "(none)", 49));
-        System.err.println("  ║                                                              ║");
-        System.err.println("  ║   The agent has been SUSPENDED.                              ║");
-        System.err.println("  ║   A semantic core dump is being generated...                 ║");
-        System.err.println("  ║                                                              ║");
-        System.err.println("  ╚══════════════════════════════════════════════════════════════╝");
-        System.err.println();
-    }
-
-    /**
-     * 打印 LLM 诊断结果。
-     */
-    private void printDiagnosis(String agentId, String diagnosis) {
-        System.err.println("  ╔══════════════════════════════════════════════════════════════╗");
-        System.err.println("  ║  ROOT CAUSE ANALYSIS (LLM Diagnosis)                        ║");
-        System.err.printf("  ║  Agent: %-50s ║%n", agentId);
-        System.err.println("  ╠══════════════════════════════════════════════════════════════╣");
-        for (String line : diagnosis.split("\n")) {
-            System.err.printf("  ║  %s%n", truncate(line, 60));
-        }
-        System.err.println("  ╚══════════════════════════════════════════════════════════════╝");
-        System.err.println();
-    }
-
-    /**
-     * 本地诊断（无 LLM 时的回退方案）。
-     */
-    private void printLocalDiagnosis(SemanticCoreDump dump) {
-        System.err.println("  ╔══════════════════════════════════════════════════════════════╗");
-        System.err.println("  ║  LOCAL ANALYSIS (No LLM available)                          ║");
-        System.err.println("  ╠══════════════════════════════════════════════════════════════╣");
-        System.err.printf("  ║  Category: %-47s ║%n", dump.crashInfo().category());
-        System.err.printf("  ║  Exception: %-46s ║%n", dump.crashInfo().exceptionClass());
-        System.err.printf("  ║  Message: %-49s ║%n", truncate(dump.crashInfo().exceptionMessage(), 49));
-
-        if (dump.cognitiveSnapshot() != null) {
-            System.err.printf("  ║  Cache entries: %-42d ║%n", dump.cognitiveSnapshot().cacheEntryCount());
-            System.err.printf("  ║  Last thinking: %-42s ║%n",
-                    truncate(dump.cognitiveSnapshot().lastThinking(), 42));
-        }
-
-        if (dump.cgroupUsage() != null) {
-            System.err.printf("  ║  Token usage: %d/%d (%d%%)%n",
-                    dump.cgroupUsage().tokenConsumed(), dump.cgroupUsage().tokenQuota(),
-                    dump.cgroupUsage().usagePercent());
-        }
-
-        System.err.println("  ╚══════════════════════════════════════════════════════════════╝");
-        System.err.println();
-    }
-
-    /**
-     * 将核心转储写入 VFS: /var/crash/dump_{pid}.aios
-     * <p>
-     * 防元崩溃保护：如果 toJson() 本身抛出异常（如字段提取触发了二次崩溃），
-     * 写入一条最小化的 fallback 转储，确保崩溃处理主流程不会被打断。
-     */
-    private void writeDumpToVfs(String agentId, SemanticCoreDump coreDump) {
-        String crashPath = "/var/crash/dump_" + agentId + ".aios";
-        try {
-            String dumpJson;
-            try {
-                dumpJson = coreDump.toJson();
-            } catch (Exception toJsonError) {
-                // toJson 自身崩溃 — 写入最小化 fallback
-                log.warn("[CrashAnalyzer] coreDump.toJson() 失败，写入最小回退: {}",
-                        toJsonError.getMessage());
-                dumpJson = "{\"crashInfo\":{\"agentId\":\"" + escJson(agentId)
-                        + "\",\"exceptionClass\":\"" + escJson(coreDump.crashInfo().exceptionClass())
-                        + "\",\"exceptionMessage\":\"toJson() failed: "
-                        + escJson(toJsonError.getClass().getSimpleName()) + "\"}}";
-            }
-
-            // 防止超大 JSON 写入 VFS 导致 OOM
-            if (dumpJson.length() > 100_000) {
-                dumpJson = dumpJson.substring(0, 100_000) + "\n... (truncated at 100KB)";
-            }
-
-            var nodeOpt = VfsManager.instance().resolve(crashPath);
-            if (nodeOpt.isPresent()) {
-                nodeOpt.get().write(dumpJson);
-            } else {
-                MutableFileNode dumpNode = new MutableFileNode(crashPath);
-                dumpNode.write(dumpJson);
-                VfsManager.instance().mount("/var/crash", "dump_" + agentId + ".aios", dumpNode);
-            }
-            log.info("[CrashAnalyzer] 核心转储已写入 {}", crashPath);
-            System.out.printf("  [CrashAnalyzer] Core dump written to %s (%d bytes)%n",
-                    crashPath, dumpJson.length());
-        } catch (Exception e) {
-            log.warn("[CrashAnalyzer] Failed to write core dump to VFS: {}", e.getMessage());
-        }
-    }
-
-    private static String escJson(String s) {
-        if (s == null) return "";
-        return s.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "").replace("\t", "\\t");
-    }
-
-    /**
-     * 清理 Agent 资源 — 关闭句柄、解绑 cgroup。
-     */
-    private void cleanupAgentResources(String agentId) {
-        try {
-            // 关闭所有 VFS 句柄
-            int closed = ObjectManager.instance().closeAllHandlesForAgent(agentId);
-            if (closed > 0) {
-                log.info("[CrashAnalyzer] Closed {} VFS handles for crashed agent={}", closed, agentId);
-            }
-        } catch (Exception e) {
-            log.warn("[CrashAnalyzer] Resource cleanup failed for agent={}: {}", agentId, e.getMessage());
-        }
-    }
-
-    private String readDiagnosis(String agentId) {
-        try {
-            String path = "/var/crash/diagnosis_" + agentId + ".aios";
-            var nodeOpt = VfsManager.instance().resolve(path);
-            return nodeOpt.map(VfsNode::read).orElse("(no diagnosis file)");
-        } catch (Exception e) {
-            return "(diagnosis read failed)";
-        }
-    }
-
-    private void writeToFile(String vfsPath, String content) {
-        try {
-            var nodeOpt = VfsManager.instance().resolve(vfsPath);
-            if (nodeOpt.isPresent()) {
-                nodeOpt.get().write(content);
-            } else {
-                String name = vfsPath.substring(vfsPath.lastIndexOf('/') + 1);
-                String dir = vfsPath.substring(0, vfsPath.lastIndexOf('/'));
-                MutableFileNode node = new MutableFileNode(vfsPath);
-                node.write(content);
-                VfsManager.instance().mount(dir, name, node);
-            }
-        } catch (Exception e) {
-            log.warn("[CrashAnalyzer] Failed to write to {}: {}", vfsPath, e.getMessage());
-        }
-    }
-
-    private int resolvePid(String agentId) {
-        try {
-            return Integer.parseInt(agentId);
-        } catch (NumberFormatException e) {
-            return -1;
-        }
-    }
-
-    private AgentTask resolveTask(int pid) {
-        if (pid < 0) return null;
-        try {
-            TaskScheduler scheduler = VfsManager.instance().getTaskScheduler();
-            return scheduler != null ? scheduler.getTask(pid) : null;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private String extractLastContextFromTask(String agentId) {
-        int pid = resolvePid(agentId);
-        AgentTask task = resolveTask(pid);
-        if (task == null) return "(no task context)";
-
-        var history = task.contextHistory();
-        if (history == null || history.isEmpty()) return "(no context history)";
-        int size = history.size();
-        int from = Math.max(0, size - 3);
-        StringBuilder sb = new StringBuilder();
-        for (int i = from; i < size; i++) {
-            if (i > from) sb.append(" | ");
-            String entry = history.get(i);
-            sb.append(entry.length() > 200 ? entry.substring(0, 200) + "..." : entry);
-        }
-        return sb.toString();
-    }
-
-    private String stackTraceToString(Throwable t) {
-        StringWriter sw = new StringWriter();
-        PrintWriter pw = new PrintWriter(sw);
-        t.printStackTrace(pw);
-        String trace = sw.toString();
-        if (trace.length() > 4000) {
-            trace = trace.substring(0, 4000) + "...(truncated)";
-        }
-        return trace;
-    }
-
-    private static String truncate(String s, int maxLen) {
-        if (s == null) return "";
-        if (s.length() <= maxLen) return s;
-        return s.substring(0, maxLen) + "...";
     }
 
     // ════════════════════════════════════════════════════════════════

@@ -3,6 +3,8 @@ package com.ouisani.aios.core.mcp;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.ouisani.aios.core.permission.ActionTier;
+import com.ouisani.aios.core.permission.Urgency;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -62,8 +64,15 @@ public class McpClientRegistry {
             String name,
             String description,
             String inputSchema,
-            String serverName
-    ) {}
+            String serverName,
+            ActionTier tier,
+            Urgency urgency
+    ) {
+        public McpToolDef {
+            if (tier == null) tier = ActionTier.RequiresPermission;
+            if (urgency == null) urgency = Urgency.Normal;
+        }
+    }
 
     private McpClientRegistry() {
         autoDiscoverAndMount();
@@ -456,11 +465,16 @@ public class McpClientRegistry {
                     String desc = toolNode.path("description").asText("");
                     String schema = toolNode.path("inputSchema").toString();
 
+                    // 解析 annotations.tier / urgency（MCP 自定义扩展，未知值降级到默认）
+                    JsonNode ann = toolNode.path("annotations");
+                    ActionTier tier = ActionTier.fromString(ann.path("tier").asText(""));
+                    Urgency urgency = Urgency.fromString(ann.path("urgency").asText(""));
+
                     // 避免重复添加
                     boolean exists = conn.tools().stream()
                             .anyMatch(t -> t.name().equals(name));
                     if (!exists) {
-                        conn.addTool(new McpToolDef(name, desc, schema, serverName));
+                        conn.addTool(new McpToolDef(name, desc, schema, serverName, tier, urgency));
                     }
                 }
             }

@@ -32,6 +32,9 @@ public class McpClient {
     /** MCP 协议版本 */
     private static final String PROTOCOL_VERSION = "2024-11-05";
 
+    /** 默认生命周期策略 */
+    private static final SessionLifecycle DEFAULT_LIFECYCLE = SessionLifecycle.KEEP_ALIVE;
+
     private final String serverName;
     private final McpTransport transport;
     // 记录正在等待响应的请求 ID -> Future 的映射
@@ -41,6 +44,8 @@ public class McpClient {
     private JsonNode serverCapabilities;
     /** 握手后服务端声明的协议版本 */
     private String negotiatedProtocolVersion;
+    /** 会话生命周期策略 — 控制连接保活行为 */
+    private SessionLifecycle lifecycle = DEFAULT_LIFECYCLE;
 
     /**
      * 创建使用 Stdio 传输的 MCP 客户端。
@@ -222,5 +227,102 @@ public class McpClient {
     /** 获取协商的协议版本 */
     public String getNegotiatedProtocolVersion() {
         return negotiatedProtocolVersion;
+    }
+
+    /**
+     * 获取会话生命周期策略。
+     *
+     * @return 生命周期策略
+     * @see SessionLifecycle
+     */
+    public SessionLifecycle getLifecycle() {
+        return lifecycle;
+    }
+
+    /**
+     * 设置会话生命周期策略 — 应在 {@link #connect} 之前调用。
+     *
+     * @param lifecycle 生命周期策略
+     * @see SessionLifecycle
+     */
+    public void setLifecycle(SessionLifecycle lifecycle) {
+        this.lifecycle = lifecycle != null ? lifecycle : DEFAULT_LIFECYCLE;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  会话生命周期管理（借鉴 Apix MCPToolManager + cache_first）
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 获取或创建 MCP 会话 — 缓存优先策略（借鉴 Apix 的 {@code cache_first}）。
+     * <p>
+     * <b>逻辑</b>：
+     * <ol>
+     *   <li>从 {@link McpSessionRegistry} 查找缓存的会话</li>
+     *   <li>若找到且生命周期匹配，直接复用（避免重复握手）</li>
+     *   <li>若未找到，创建新客户端、连接、握手，并注册到注册表</li>
+     * </ol>
+     * <p>
+     * 对于 {@code ALWAYS_CLOSE} 策略，每次都新建连接且不缓存。
+     *
+     * @param serverName MCP 服务器名
+     * @param command    Stdio 启动命令
+     * @param lifecycle  生命周期策略
+     * @return 已连接的 MCP 客户端
+     * @throws IOException 连接或握手失败
+     * @see McpSessionRegistry
+     * @see SessionLifecycle
+     */
+    public static McpClient getOrCreateSession(String serverName, List<String> command,
+                                                 SessionLifecycle lifecycle) throws IOException {
+        SessionLifecycle strategy = lifecycle != null ? lifecycle : DEFAULT_LIFECYCLE;
+
+        // 缓存优先：查找已有会话
+        McpClient cached = McpSessionRegistry.instance().getSession(serverName, strategy);
+        if (cached != null) {
+            return cached;
+        }
+
+        // 缓存未命中：创建新会话
+        McpClient client = new McpClient(serverName);
+        client.setLifecycle(strategy);
+        client.connect(command);
+
+        // KEEP_ALIVE 和 AGENT_LOOP 策略注册到缓存
+        if (strategy != SessionLifecycle.ALWAYS_CLOSE) {
+            McpSessionRegistry.instance().registerSession(serverName, client, strategy);
+        }
+
+        return client;
+    }
+
+    /**
+     * 获取或创建 MCP 会话（默认 KEEP_ALIVE 策略）。
+     *
+     * @param serverName MCP 服务器名
+     * @param command    Stdio 启动命令
+     * @return 已连接的 MCP 客户端
+     * @throws IOException 连接或握手失败
+     */
+    public static McpClient getOrCreateSession(String serverName, List<String> command) throws IOException {
+        return getOrCreateSession(serverName, command, DEFAULT_LIFECYCLE);
+    }
+
+    /**
+     * 关闭会话 — 根据生命周期策略决定是否从缓存移除。
+     * <p>
+     * <b>行为</b>：
+     * <ul>
+     *   <li>{@code ALWAYS_CLOSE}：直接断开连接</li>
+     *   <li>{@code AGENT_LOOP}：断开连接并从缓存移除（循环结束）</li>
+     *   <li>{@code KEEP_ALIVE}：仅断开连接，不影响缓存（缓存由 {@link McpSessionRegistry#cleanupAll} 管理）</li>
+     * </ul>
+     */
+    public void closeSession() {
+        if (lifecycle == SessionLifecycle.AGENT_LOOP) {
+            McpSessionRegistry.instance().releaseSession(serverName);
+        } else {
+            disconnect();
+        }
     }
 }

@@ -4,7 +4,7 @@ import com.ouisani.aios.core.network.EventBus;
 import com.ouisani.aios.core.sandbox.DockerSandboxProvider;
 import com.ouisani.aios.core.sandbox.GraalWasmSandbox;
 import com.ouisani.aios.core.sandbox.SandboxProvider;
-import com.ouisani.aios.user.sdk.AiosSdk;
+import com.ouisani.aios.core.tool.ToolSdk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -112,7 +112,7 @@ public class TaskScheduler {
      * @param sdk       AIOS SDK
      * @return 沙箱化的 Agent 任务
      */
-    public SandboxAgentTask submitAgentTask(String prompt, String agentId, String workingDir, AiosSdk sdk) {
+    public SandboxAgentTask submitAgentTask(String prompt, String agentId, String workingDir, ToolSdk sdk) {
         SandboxAgentTask task = new SandboxAgentTask(prompt, agentId, workingDir, sdk, sandboxProvider, fallbackSandbox);
         TaskRegistry.instance().register(task);
         task.start();
@@ -125,7 +125,7 @@ public class TaskScheduler {
      * <p>
      * Dream 任务为系统级进程，在 JVM 内执行（非 USER 态），无需沙箱。
      */
-    public DreamTask submitDreamTask(String agentId, AiosSdk sdk) {
+    public DreamTask submitDreamTask(String agentId, ToolSdk sdk) {
         DreamTask task = new DreamTask(agentId, sdk);
         TaskRegistry.instance().register(task);
         task.start();
@@ -136,7 +136,7 @@ public class TaskScheduler {
     /**
      * 延迟提交 Dream 任务。
      */
-    public void scheduleDream(String agentId, AiosSdk sdk, long delaySeconds) {
+    public void scheduleDream(String agentId, ToolSdk sdk, long delaySeconds) {
         scheduler.schedule(() -> submitDreamTask(agentId, sdk), delaySeconds, TimeUnit.SECONDS);
         log.info("[TaskScheduler] Scheduled dream for agent {} in {}s", agentId, delaySeconds);
     }
@@ -278,7 +278,7 @@ public class TaskScheduler {
         private final String prompt;
         private final String agentId;
         private final String workingDir;
-        private final AiosSdk sdk;
+        private final ToolSdk sdk;
         private final SandboxProvider sandbox;
         private final SandboxProvider fallback;
         private final java.util.concurrent.atomic.AtomicReference<TaskStatus> status =
@@ -286,7 +286,7 @@ public class TaskScheduler {
         private final StringBuilder resultBuilder = new StringBuilder();
         private volatile Thread execThread;
 
-        public SandboxAgentTask(String prompt, String agentId, String workingDir, AiosSdk sdk,
+        public SandboxAgentTask(String prompt, String agentId, String workingDir, ToolSdk sdk,
                                 SandboxProvider sandbox, SandboxProvider fallback) {
             this.handle = TaskHandle.generate(TaskType.SANDBOX_AGENT);
             this.prompt = prompt;

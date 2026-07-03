@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
-import { Plus, Rocket, Workflow, Sparkles, Loader2, Cpu, Users } from "lucide-react";
+import { Plus, Rocket, Workflow, Sparkles, Loader2, Cpu, Users, FolderOpen } from "lucide-react";
 import { useWorkflowStore } from "@/store/workflowStore";
+import VfsWorkspaceBridge from "@/components/VfsWorkspaceBridge";
 
 /** 左侧边栏 — 工作流操作面板（专家 + 傻瓜双模式） */
 export default function Sidebar() {
@@ -26,6 +27,8 @@ export default function Sidebar() {
 
   const [userIdea, setUserIdea] = useState("");
   const [autoCompiling, setAutoCompiling] = useState(false);
+  // 侧边栏视图切换：workflow | vfs
+  const [sidebarTab, setSidebarTab] = useState<"workflow" | "vfs">("workflow");
 
   const handleAddNode = () => {
     addNode({
@@ -59,7 +62,42 @@ export default function Sidebar() {
           </div>
         </div>
 
+        {/* Tab 切换：Workflow | VFS Bridge */}
+        <div className="flex border-b border-zinc-800/50">
+          <button
+            onClick={() => setSidebarTab("workflow")}
+            className={`flex flex-1 items-center justify-center gap-1.5 py-2 text-[10px] font-bold uppercase tracking-wider transition-all ${
+              sidebarTab === "workflow"
+                ? "border-b-2 border-cyan-400 text-cyan-400 bg-cyan-500/[0.04]"
+                : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            <Workflow className="h-3 w-3" />
+            Workflow
+          </button>
+          <button
+            onClick={() => setSidebarTab("vfs")}
+            className={`flex flex-1 items-center justify-center gap-1.5 py-2 text-[10px] font-bold uppercase tracking-wider transition-all ${
+              sidebarTab === "vfs"
+                ? "border-b-2 border-emerald-400 text-emerald-400 bg-emerald-500/[0.04]"
+                : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            <FolderOpen className="h-3 w-3" />
+            VFS Bridge
+          </button>
+        </div>
+
+        {/* VFS Bridge 视图 */}
+        {sidebarTab === "vfs" && (
+          <div className="flex-1 overflow-y-auto min-h-0 p-4 custom-scrollbar">
+            <VfsWorkspaceBridge />
+          </div>
+        )}
+
         {/* 傻瓜模式 — 一句话生成拓扑 */}
+        {sidebarTab === "workflow" && (
+        <>
         <div className="border-b border-zinc-800/50 px-4 py-3">
           <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium tracking-wider text-cyan-400/80 uppercase">
             <Sparkles className="h-3 w-3" /> Auto-Compile
@@ -109,6 +147,9 @@ export default function Sidebar() {
             <div className="text-[9px] text-zinc-500 uppercase">Edges</div>
           </div>
         </div>
+        </>
+        )}
+
       </div>
 
       {/* ═══ 中间滚动区域（技能 + 角色列表） ═══ */}

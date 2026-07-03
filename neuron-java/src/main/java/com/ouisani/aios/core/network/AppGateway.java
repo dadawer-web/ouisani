@@ -19,7 +19,6 @@ import com.ouisani.aios.user.apps.omnifactory.OperatorAgent;
 import com.ouisani.aios.user.apps.omnifactory.TopologyCompiler;
 import com.ouisani.aios.user.apps.omnifactory.WorkflowEngine;
 import com.ouisani.aios.user.apps.omnifactory.WorkflowManifest;
-import com.ouisani.aios.user.apps.omnifactory.WorkflowNode;
 import com.ouisani.aios.user.sdk.AbstractAgent;
 import com.ouisani.aios.user.sdk.AiosSdk;
 import io.javalin.Javalin;
@@ -64,9 +63,6 @@ public class AppGateway {
 
     /** 可视化大屏观察者 — 接收内核自愈告警等高优先级信号 */
     private static final Set<WsContext> dashboardObservers = ConcurrentHashMap.newKeySet();
-
-    /** Gson 实例 — 用于状态同步通道的 JSON 序列化/反序列化 */
-    private static final com.google.gson.Gson gson = new com.google.gson.Gson();
 
     public static void attachTo(Javalin app) {
         app.ws("/api/app/{app_name}/stream", ws -> {
@@ -208,10 +204,10 @@ public class AppGateway {
             ws.onMessage(ctx -> {
                 String message = ctx.message();
                 try {
-                    String action = extractJsonField(message, "action");
+                    String action = GatewayJsonParser.extractJsonField(message, "action");
                     if ("HOT_PATCH_PARAM".equals(action)) {
-                        String targetNode = extractJsonField(message, "targetNode");
-                        String paramsJson = extractJsonObject(message, "params");
+                        String targetNode = GatewayJsonParser.extractJsonField(message, "targetNode");
+                        String paramsJson = GatewayJsonParser.extractJsonObject(message, "params");
 
                         if (targetNode == null || targetNode.isBlank()) {
                             log.warn("[Gateway] HOT_PATCH_PARAM 缺少 targetNode");
@@ -276,10 +272,10 @@ public class AppGateway {
                     return;
                 }
                 try {
-                    String action = extractJsonField(message, "action");
+                    String action = GatewayJsonParser.extractJsonField(message, "action");
                     if ("HOT_PATCH_PARAM".equals(action)) {
-                        String targetNode = extractJsonField(message, "targetNode");
-                        String paramsJson = extractJsonObject(message, "params");
+                        String targetNode = GatewayJsonParser.extractJsonField(message, "targetNode");
+                        String paramsJson = GatewayJsonParser.extractJsonObject(message, "params");
 
                         if (targetNode == null || targetNode.isBlank()) {
                             log.warn("[Gateway] HOT_PATCH_PARAM 缺少 targetNode");
@@ -328,7 +324,7 @@ public class AppGateway {
 
             try {
                 // 解析请求 JSON
-                String prompt = extractJsonField(payload, "prompt");
+                String prompt = GatewayJsonParser.extractJsonField(payload, "prompt");
                 if (prompt == null || prompt.isBlank()) {
                     ctx.status(400);
                     ctx.contentType("application/json");
@@ -337,7 +333,7 @@ public class AppGateway {
                 }
 
                 // 解析 enabledSkills 数组
-                List<String> enabledSkills = extractJsonStringArray(payload, "enabledSkills");
+                List<String> enabledSkills = GatewayJsonParser.extractJsonStringArray(payload, "enabledSkills");
                 if (enabledSkills.isEmpty()) {
                     // 自动扫描物理硬盘中的技能
                     java.nio.file.Path skillsDir = java.nio.file.Paths.get("aios_skills");
@@ -354,7 +350,7 @@ public class AppGateway {
                 }
 
                 // 解析 enabledRoles 数组
-                List<String> enabledRoles = extractJsonStringArray(payload, "enabledRoles");
+                List<String> enabledRoles = GatewayJsonParser.extractJsonStringArray(payload, "enabledRoles");
 
                 System.out.printf("[App Gateway] 正在编译拓扑: prompt='%s...', skills=%s, roles=%s%n",
                         prompt.substring(0, Math.min(prompt.length(), 50)), enabledSkills, enabledRoles);
@@ -365,7 +361,7 @@ public class AppGateway {
 
                 // 如果编译结果中没有 agentType，从前端 payload 中提取，默认 "omni"
                 if (!topologyJson.contains("\"agentType\"")) {
-                    String agentType = extractJsonField(payload, "agentType");
+                    String agentType = GatewayJsonParser.extractJsonField(payload, "agentType");
                     if (agentType == null || agentType.isBlank()) agentType = "omni";
                     int lastBrace = topologyJson.lastIndexOf('}');
                     if (lastBrace > 0) {
@@ -412,7 +408,7 @@ public class AppGateway {
 
             try {
                 // 解析 JSON → WorkflowManifest
-                WorkflowManifest manifest = parseWorkflowManifest(payload);
+                WorkflowManifest manifest = GatewayJsonParser.parseWorkflowManifest(payload);
 
                 System.out.printf("[App Gateway] 已解析工作流 '%s'，包含 %d 个节点。%n",
                         manifest.workflowName(), manifest.nodes().size());
@@ -577,8 +573,8 @@ public class AppGateway {
         // ════════════════════════════════════════════════════════════════
         app.post("/api/workspace/create", ctx -> {
             String body = ctx.body();
-            String name = extractJsonField(body, "name");
-            String quotaStr = extractJsonField(body, "quota");
+            String name = GatewayJsonParser.extractJsonField(body, "name");
+            String quotaStr = GatewayJsonParser.extractJsonField(body, "quota");
             long quota = quotaStr != null ? Long.parseLong(quotaStr) : 100000L;
 
             ProjectWorkspace ws = ProjectWorkspaceManager.getInstance().createWorkspace(name, quota);
@@ -676,267 +672,9 @@ public class AppGateway {
         log.info("[App Gateway] Human-in-the-Loop 恢复 API 已挂载: /api/recovery/pending, /api/recovery/{nodeId}/resume");
         System.out.println("  ✓ [App Gateway] Human-in-the-Loop 恢复 API: /api/recovery/pending, /api/recovery/{nodeId}/resume");
 
-        // ════════════════════════════════════════════════════════════════
-        //  A2A 通信协议端点（借鉴 Agent Zero 的 A2A 协议）
-        // ════════════════════════════════════════════════════════════════
-        app.post(A2aProtocol.HTTP_ENDPOINT, ctx -> {
-            String body = ctx.body();
-            A2aMessage message = A2aMessage.fromJson(body);
-            if (message != null) {
-                A2aFederation.getInstance().handleIncomingMessage(message);
-                ctx.result("{\"status\":\"received\"}");
-            } else {
-                ctx.status(400).result("{\"error\":\"Invalid A2A message\"}");
-            }
-        });
+        ManagementRoutes.attachTo(app);
 
-        app.get(A2aProtocol.DISCOVERY_ENDPOINT, ctx -> {
-            Collection<A2aNodeDescriptor> nodes = A2aFederation.getInstance().getRemoteNodes();
-            StringBuilder sb = new StringBuilder("{\"localNodeId\":\"")
-                    .append(A2aFederation.getInstance().getLocalNodeId())
-                    .append("\",\"remoteNodes\":[");
-            boolean first = true;
-            for (A2aNodeDescriptor node : nodes) {
-                if (!first) sb.append(",");
-                sb.append("{\"nodeId\":\"").append(node.getNodeId())
-                  .append("\",\"endpoint\":\"").append(node.getEndpoint())
-                  .append("\",\"capabilities\":").append(node.getCapabilities())
-                  .append(",\"agents\":").append(node.getAvailableAgents().size())
-                  .append("}");
-                first = false;
-            }
-            sb.append("]}");
-            ctx.contentType("application/json");
-            ctx.result(sb.toString());
-        });
-
-        app.post("/api/a2a/register", ctx -> {
-            String body = ctx.body();
-            String nodeId = extractJsonField(body, "nodeId");
-            String endpoint = extractJsonField(body, "endpoint");
-            if (nodeId == null || endpoint == null) {
-                ctx.status(400).result("{\"error\":\"Missing nodeId or endpoint\"}");
-                return;
-            }
-            A2aNodeDescriptor descriptor = new A2aNodeDescriptor(nodeId, endpoint);
-            A2aFederation.getInstance().registerRemoteNode(descriptor);
-            ctx.result("{\"status\":\"registered\",\"nodeId\":\"" + nodeId + "\"}");
-        });
-
-        log.info("[App Gateway] A2A 通信协议端点已挂载");
-        System.out.println("  ✓ [App Gateway] A2A 通信协议端点: /api/a2a/message, /api/a2a/discovery, /api/a2a/register");
-
-        // ════════════════════════════════════════════════════════════════
-        //  Human-in-the-Loop + Frontend Tool — 借鉴 CopilotKit
-        // ════════════════════════════════════════════════════════════════
-
-        // HITL: 获取待处理的人类响应请求
-        app.get("/api/hitl/pending", ctx -> {
-            var pending = com.ouisani.aios.core.tool.HumanResponseTool.getPendingRequests();
-            StringBuilder json = new StringBuilder("{\"pending\":[");
-            boolean first = true;
-            for (var entry : pending.entrySet()) {
-                if (!first) json.append(",");
-                json.append(String.format("{\"requestId\":\"%s\",\"agentId\":\"%s\"}",
-                        entry.getKey(), entry.getValue()));
-                first = false;
-            }
-            json.append("]}");
-            ctx.result(json.toString()).contentType("application/json");
-        });
-
-        // HITL: 提交人类响应
-        app.post("/api/hitl/{requestId}/respond", ctx -> {
-            String requestId = ctx.pathParam("requestId");
-            String body = ctx.body();
-            // 从 JSON 中提取 response 字段
-            String response = "";
-            try {
-                var jsonObj = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
-                if (jsonObj.has("response")) {
-                    response = jsonObj.get("response").getAsString();
-                }
-            } catch (Exception e) {
-                response = body; // 非 JSON，直接用 body
-            }
-
-            boolean success = com.ouisani.aios.core.tool.HumanResponseTool.submitResponse(requestId, response);
-            ctx.result("{\"success\":" + success + "}").contentType("application/json");
-            ctx.status(success ? 200 : 404);
-        });
-
-        // FrontendTool: 注册前端工具
-        app.post("/api/frontend/tool/register", ctx -> {
-            String body = ctx.body();
-            var jsonObj = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
-            String toolName = jsonObj.get("toolName").getAsString();
-            String schema = jsonObj.has("schema") ? jsonObj.get("schema").toString() : "{}";
-            com.ouisani.aios.core.tool.FrontendTool.registerFrontendTool(toolName, schema);
-            ctx.result("{\"success\":true}").contentType("application/json");
-        });
-
-        // FrontendTool: 注销前端工具
-        app.post("/api/frontend/tool/unregister", ctx -> {
-            String body = ctx.body();
-            var jsonObj = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
-            String toolName = jsonObj.get("toolName").getAsString();
-            com.ouisani.aios.core.tool.FrontendTool.unregisterFrontendTool(toolName);
-            ctx.result("{\"success\":true}").contentType("application/json");
-        });
-
-        // FrontendTool: 提交工具调用结果
-        app.post("/api/frontend/tool/{callId}/result", ctx -> {
-            String callId = ctx.pathParam("callId");
-            String body = ctx.body();
-            String result = "";
-            try {
-                var jsonObj = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
-                if (jsonObj.has("result")) {
-                    result = jsonObj.get("result").getAsString();
-                }
-            } catch (Exception e) {
-                result = body;
-            }
-
-            boolean success = com.ouisani.aios.core.tool.FrontendTool.submitResult(callId, result);
-            ctx.result("{\"success\":" + success + "}").contentType("application/json");
-            ctx.status(success ? 200 : 404);
-        });
-
-        // FrontendTool: 列出已注册的前端工具
-        app.get("/api/frontend/tool/list", ctx -> {
-            var tools = com.ouisani.aios.core.tool.FrontendTool.getRegisteredTools();
-            StringBuilder json = new StringBuilder("{\"tools\":[");
-            boolean first = true;
-            for (var entry : tools.entrySet()) {
-                if (!first) json.append(",");
-                json.append(String.format("{\"name\":\"%s\",\"schema\":%s}",
-                        entry.getKey(), entry.getValue()));
-                first = false;
-            }
-            json.append("]}");
-            ctx.result(json.toString()).contentType("application/json");
-        });
-
-        // WebSocket: HITL + FrontendTool 双向通道
-        app.ws("/api/agent/interaction", ws -> {
-            ws.onConnect(ctx -> {
-                log.info("[App Gateway] Agent 交互 WebSocket 已连接: {}", ctx.sessionId());
-            });
-
-            ws.onMessage(ctx -> {
-                String msg = ctx.message();
-                try {
-                    var jsonObj = com.google.gson.JsonParser.parseString(msg).getAsJsonObject();
-                    String type = jsonObj.get("type").getAsString();
-
-                    switch (type) {
-                        case "hitl_response" -> {
-                            // 人类响应
-                            String requestId = jsonObj.get("requestId").getAsString();
-                            String response = jsonObj.get("response").getAsString();
-                            boolean success = com.ouisani.aios.core.tool.HumanResponseTool.submitResponse(requestId, response);
-                            ctx.send("{\"type\":\"hitl_response_ack\",\"success\":" + success + "}");
-                        }
-                        case "frontend_tool_result" -> {
-                            // 前端工具结果
-                            String callId = jsonObj.get("callId").getAsString();
-                            String result = jsonObj.get("result").getAsString();
-                            boolean success = com.ouisani.aios.core.tool.FrontendTool.submitResult(callId, result);
-                            ctx.send("{\"type\":\"frontend_tool_result_ack\",\"success\":" + success + "}");
-                        }
-                        case "register_frontend_tool" -> {
-                            // 注册前端工具
-                            String toolName = jsonObj.get("toolName").getAsString();
-                            String schema = jsonObj.has("schema") ? jsonObj.get("schema").toString() : "{}";
-                            com.ouisani.aios.core.tool.FrontendTool.registerFrontendTool(toolName, schema);
-                            ctx.send("{\"type\":\"register_ack\",\"toolName\":\"" + toolName + "\"}");
-                        }
-                        case "unregister_frontend_tool" -> {
-                            String toolName = jsonObj.get("toolName").getAsString();
-                            com.ouisani.aios.core.tool.FrontendTool.unregisterFrontendTool(toolName);
-                            ctx.send("{\"type\":\"unregister_ack\",\"toolName\":\"" + toolName + "\"}");
-                        }
-                        default -> {
-                            ctx.send("{\"type\":\"error\",\"message\":\"Unknown type: " + type + "\"}");
-                        }
-                    }
-                } catch (Exception e) {
-                    log.error("[App Gateway] 交互 WebSocket 消息解析失败: {}", e.getMessage());
-                    ctx.send("{\"type\":\"error\",\"message\":\"" + e.getMessage() + "\"}");
-                }
-            });
-
-            ws.onClose(ctx -> {
-                log.info("[App Gateway] Agent 交互 WebSocket 已断开: {}", ctx.sessionId());
-            });
-        });
-
-        log.info("[App Gateway] HITL + FrontendTool 交互通道已挂载: /api/agent/interaction");
-        System.out.println("  ✓ [App Gateway] HITL + FrontendTool 交互通道: /api/agent/interaction");
-
-        // ════════════════════════════════════════════════════════════════
-        //  双向状态同步 — 借鉴 CopilotKit 的前端状态与 Agent 状态双向同步
-        // ════════════════════════════════════════════════════════════════
-
-        // WebSocket: 状态同步通道
-        app.ws("/api/state/sync", ws -> {
-            ws.onConnect(ctx -> {
-                String sessionId = ctx.sessionId();
-                com.ouisani.aios.core.network.StateSyncChannel.instance().sessionConnected(sessionId);
-                log.info("[App Gateway] 状态同步 WebSocket 已连接: {}", sessionId);
-                // 发送欢迎消息
-                ctx.send("{\"type\":\"connected\",\"sessionId\":\"" + sessionId + "\"}");
-            });
-
-            ws.onMessage(ctx -> {
-                String msg = ctx.message();
-                String sessionId = ctx.sessionId();
-                try {
-                    var jsonObj = com.google.gson.JsonParser.parseString(msg).getAsJsonObject();
-                    String type = jsonObj.get("type").getAsString();
-
-                    switch (type) {
-                        case "state_update" -> {
-                            // 前端 → Agent 状态更新
-                            String key = jsonObj.get("key").getAsString();
-                            Object value = gson.fromJson(jsonObj.get("value"), Object.class);
-                            com.ouisani.aios.core.network.StateSyncChannel.instance()
-                                    .handleFrontendStateUpdate(sessionId, key, value);
-                            ctx.send("{\"type\":\"state_update_ack\",\"key\":\"" + key + "\",\"success\":true}");
-                        }
-                        case "get_snapshot" -> {
-                            // 前端请求状态快照
-                            String snapshot = com.ouisani.aios.core.network.StateSyncChannel.instance()
-                                    .getSessionSnapshot(sessionId);
-                            ctx.send(snapshot);
-                        }
-                        default -> {
-                            ctx.send("{\"type\":\"error\",\"message\":\"Unknown type: " + type + "\"}");
-                        }
-                    }
-                } catch (Exception e) {
-                    log.error("[App Gateway] 状态同步消息解析失败: {}", e.getMessage());
-                    ctx.send("{\"type\":\"error\",\"message\":\"" + e.getMessage() + "\"}");
-                }
-            });
-
-            ws.onClose(ctx -> {
-                String sessionId = ctx.sessionId();
-                com.ouisani.aios.core.network.StateSyncChannel.instance().sessionDisconnected(sessionId);
-                log.info("[App Gateway] 状态同步 WebSocket 已断开: {}", sessionId);
-            });
-        });
-
-        // REST: 获取状态同步通道状态
-        app.get("/api/state/status", ctx -> {
-            int sessions = com.ouisani.aios.core.network.StateSyncChannel.instance().getConnectedSessionCount();
-            ctx.result("{\"connectedSessions\":" + sessions + "}").contentType("application/json");
-        });
-
-        log.info("[App Gateway] 双向状态同步通道已挂载: /api/state/sync, /api/state/status");
-        System.out.println("  ✓ [App Gateway] 双向状态同步通道: /api/state/sync, /api/state/status");
-
+        HitlStateRoutes.attachTo(app);
         // ════════════════════════════════════════════════════════════════
         //  Cross-Validation — 多模型对抗与交叉审查（借鉴 OmniGent Debby & Polly）
         // ════════════════════════════════════════════════════════════════
@@ -989,350 +727,7 @@ public class AppGateway {
         log.info("[App Gateway] Cross-Validation API 已挂载: /api/cross-validation/run, /api/cross-validation/providers");
         System.out.println("  ✓ [App Gateway] Cross-Validation API: /api/cross-validation/run, /api/cross-validation/providers");
 
-        // ════════════════════════════════════════════════════════════════
-        //  MCP 服务器管理 API — 列出/挂载/卸载 MCP 服务器
-        // ════════════════════════════════════════════════════════════════
-
-        // GET /api/mcp/servers — 列出已注册的 MCP 服务器
-        app.get("/api/mcp/servers", ctx -> {
-            var connections = com.ouisani.aios.core.mcp.McpClientRegistry.getInstance().allConnections();
-            StringBuilder json = new StringBuilder("{\"servers\":[");
-            boolean first = true;
-            for (var conn : connections) {
-                if (!first) json.append(",");
-                json.append(String.format(
-                        "{\"name\":\"%s\",\"state\":\"%s\",\"type\":\"%s\",\"url\":\"%s\"}",
-                        conn.serverName(),
-                        conn.state().name(),
-                        conn.config().type(),
-                        conn.config().url() != null ? conn.config().url() : ""));
-                first = false;
-            }
-            json.append("]}");
-            ctx.contentType("application/json");
-            ctx.result(json.toString());
-        });
-
-        app.options("/api/mcp/servers", ctx -> {
-            ctx.header("Access-Control-Allow-Origin", "*");
-            ctx.header("Access-Control-Allow-Methods", "GET, OPTIONS");
-            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-            ctx.result("");
-        });
-
-        // POST /api/mcp/mount — 手动挂载 MCP 服务器
-        // body: {"name":"...", "transport":"stdio|http|sse", "command":["..."], "args":["..."], "url":"...", "headers":{...}}
-        app.post("/api/mcp/mount", ctx -> {
-            String body = ctx.body();
-            try {
-                var jsonObj = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
-                String name = jsonObj.has("name") ? jsonObj.get("name").getAsString() : null;
-                if (name == null || name.isBlank()) {
-                    ctx.status(400).result("{\"error\":\"Missing 'name' field\"}")
-                       .contentType("application/json");
-                    return;
-                }
-                String transport = jsonObj.has("transport") ? jsonObj.get("transport").getAsString() : "stdio";
-                com.ouisani.aios.core.mcp.McpClientRegistry registry =
-                        com.ouisani.aios.core.mcp.McpClientRegistry.getInstance();
-
-                if ("stdio".equals(transport)) {
-                    List<String> command = new ArrayList<>();
-                    if (jsonObj.has("command") && jsonObj.get("command").isJsonArray()) {
-                        jsonObj.get("command").getAsJsonArray().forEach(n -> command.add(n.getAsString()));
-                    }
-                    if (jsonObj.has("args") && jsonObj.get("args").isJsonArray()) {
-                        jsonObj.get("args").getAsJsonArray().forEach(n -> command.add(n.getAsString()));
-                    }
-                    if (command.isEmpty()) {
-                        ctx.status(400).result("{\"error\":\"stdio transport requires 'command' array\"}")
-                           .contentType("application/json");
-                        return;
-                    }
-                    registry.mountServer(name, command);
-                } else if ("http".equals(transport) || "sse".equals(transport)) {
-                    String url = jsonObj.has("url") ? jsonObj.get("url").getAsString() : null;
-                    if (url == null || url.isBlank()) {
-                        ctx.status(400).result("{\"error\":\"http/sse transport requires 'url' field\"}")
-                           .contentType("application/json");
-                        return;
-                    }
-                    Map<String, String> headers = new HashMap<>();
-                    if (jsonObj.has("headers") && jsonObj.get("headers").isJsonObject()) {
-                        jsonObj.get("headers").getAsJsonObject().entrySet()
-                                .forEach(e -> headers.put(e.getKey(), e.getValue().getAsString()));
-                    }
-                    registry.mountHttpServer(name, url, headers);
-                } else {
-                    ctx.status(400).result("{\"error\":\"Unsupported transport: " + transport + "\"}")
-                       .contentType("application/json");
-                    return;
-                }
-                ctx.result("{\"success\":true,\"name\":\"" + name + "\",\"transport\":\"" + transport + "\"}")
-                   .contentType("application/json");
-            } catch (Exception e) {
-                ctx.status(400)
-                   .result("{\"error\":\"" + e.getMessage().replace("\"", "'") + "\"}")
-                   .contentType("application/json");
-            }
-        });
-
-        app.options("/api/mcp/mount", ctx -> {
-            ctx.header("Access-Control-Allow-Origin", "*");
-            ctx.header("Access-Control-Allow-Methods", "POST, OPTIONS");
-            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-            ctx.result("");
-        });
-
-        // POST /api/mcp/unmount/{name} — 卸载 MCP 服务器
-        app.post("/api/mcp/unmount/{name}", ctx -> {
-            String name = ctx.pathParam("name");
-            com.ouisani.aios.core.mcp.McpClientRegistry.getInstance().unmountServer(name);
-            ctx.result("{\"success\":true,\"name\":\"" + name + "\"}")
-               .contentType("application/json");
-        });
-
-        app.options("/api/mcp/unmount/{name}", ctx -> {
-            ctx.header("Access-Control-Allow-Origin", "*");
-            ctx.header("Access-Control-Allow-Methods", "POST, OPTIONS");
-            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-            ctx.result("");
-        });
-
-        log.info("[App Gateway] MCP 管理 API 已挂载: /api/mcp/servers, /api/mcp/mount, /api/mcp/unmount/{name}");
-        System.out.println("  ✓ [App Gateway] MCP 管理 API: /api/mcp/servers, /api/mcp/mount, /api/mcp/unmount/{name}");
-
-        // ════════════════════════════════════════════════════════════════
-        //  Skill 动态插拔 API — 运行时激活/停用行为准则技能
-        // ════════════════════════════════════════════════════════════════
-
-        // GET /api/skills — 列出所有技能及其激活状态
-        app.get("/api/skills", ctx -> {
-            var allSkills = com.ouisani.aios.core.skill.SkillLoader.getCached();
-            var activeNames = com.ouisani.aios.core.skill.SkillLoader.getActiveSkillNames();
-            StringBuilder json = new StringBuilder("{\"skills\":[");
-            boolean first = true;
-            for (var entry : allSkills.entrySet()) {
-                if (!first) json.append(",");
-                json.append(String.format(
-                        "{\"name\":\"%s\",\"description\":\"%s\",\"source\":\"%s\",\"active\":%b}",
-                        entry.getKey(),
-                        entry.getValue().description() != null
-                                ? entry.getValue().description().replace("\"", "'") : "",
-                        entry.getValue().source().name(),
-                        activeNames.contains(entry.getKey())
-                ));
-                first = false;
-            }
-            json.append("]}");
-            ctx.contentType("application/json");
-            ctx.result(json.toString());
-        });
-
-        app.options("/api/skills", ctx -> {
-            ctx.header("Access-Control-Allow-Origin", "*");
-            ctx.header("Access-Control-Allow-Methods", "GET, OPTIONS");
-            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-            ctx.result("");
-        });
-
-        // POST /api/skills/{name}/activate — 激活技能
-        app.post("/api/skills/{name}/activate", ctx -> {
-            String name = ctx.pathParam("name");
-            boolean success = com.ouisani.aios.core.skill.SkillLoader.activate(name);
-            ctx.contentType("application/json");
-            if (success) {
-                ctx.result("{\"success\":true,\"name\":\"" + name + "\",\"action\":\"activated\"}");
-            } else {
-                ctx.status(404).result("{\"success\":false,\"error\":\"Skill not found: " + name + "\"}");
-            }
-        });
-
-        app.options("/api/skills/{name}/activate", ctx -> {
-            ctx.header("Access-Control-Allow-Origin", "*");
-            ctx.header("Access-Control-Allow-Methods", "POST, OPTIONS");
-            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-            ctx.result("");
-        });
-
-        // POST /api/skills/{name}/deactivate — 停用技能
-        app.post("/api/skills/{name}/deactivate", ctx -> {
-            String name = ctx.pathParam("name");
-            boolean success = com.ouisani.aios.core.skill.SkillLoader.deactivate(name);
-            ctx.contentType("application/json");
-            if (success) {
-                ctx.result("{\"success\":true,\"name\":\"" + name + "\",\"action\":\"deactivated\"}");
-            } else {
-                ctx.status(404).result("{\"success\":false,\"error\":\"Skill was not active: " + name + "\"}");
-            }
-        });
-
-        app.options("/api/skills/{name}/deactivate", ctx -> {
-            ctx.header("Access-Control-Allow-Origin", "*");
-            ctx.header("Access-Control-Allow-Methods", "POST, OPTIONS");
-            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-            ctx.result("");
-        });
-
-        log.info("[App Gateway] Skill 动态插拔 API 已挂载: /api/skills, /api/skills/{name}/activate, /api/skills/{name}/deactivate");
-        System.out.println("  ✓ [App Gateway] Skill 动态插拔 API: /api/skills, /api/skills/{name}/activate, /api/skills/{name}/deactivate");
-
-        // ════════════════════════════════════════════════════════════════
-        //  Tracing Span 管理 API — 查询/刷新/状态
-        // ════════════════════════════════════════════════════════════════
-
-        // GET /api/tracing/spans — 获取最近的 Span 列表（JSON）
-        app.get("/api/tracing/spans", ctx -> {
-            List<TraceSpan> spans = TracingManager.instance().getRecentSpans();
-            StringBuilder json = new StringBuilder("[");
-            boolean first = true;
-            for (TraceSpan span : spans) {
-                if (!first) json.append(",");
-                json.append(span.toJson());
-                first = false;
-            }
-            json.append("]");
-            ctx.contentType("application/json");
-            ctx.result(json.toString());
-        });
-
-        app.options("/api/tracing/spans", ctx -> {
-            ctx.header("Access-Control-Allow-Origin", "*");
-            ctx.header("Access-Control-Allow-Methods", "GET, OPTIONS");
-            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-            ctx.result("");
-        });
-
-        // POST /api/tracing/flush — 强制刷新 Span 缓冲区
-        app.post("/api/tracing/flush", ctx -> {
-            TracingManager.instance().flush();
-            ctx.contentType("application/json");
-            ctx.result("{\"status\":\"flushed\",\"recentSpanCount\":"
-                    + TracingManager.instance().recentSpanCount() + "}");
-        });
-
-        app.options("/api/tracing/flush", ctx -> {
-            ctx.header("Access-Control-Allow-Origin", "*");
-            ctx.header("Access-Control-Allow-Methods", "POST, OPTIONS");
-            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-            ctx.result("");
-        });
-
-        // GET /api/tracing/status — 获取 Tracing 状态
-        app.get("/api/tracing/status", ctx -> {
-            TracingManager tm = TracingManager.instance();
-            StringBuilder json = new StringBuilder("{");
-            json.append("\"enabled\":").append(!tm.isTracingDisabled());
-            json.append(",\"processorCount\":").append(tm.processorCount());
-            json.append(",\"exporterCount\":").append(tm.exporterCount());
-            json.append(",\"recentSpanCount\":").append(tm.recentSpanCount());
-            json.append("}");
-            ctx.contentType("application/json");
-            ctx.result(json.toString());
-        });
-
-        app.options("/api/tracing/status", ctx -> {
-            ctx.header("Access-Control-Allow-Origin", "*");
-            ctx.header("Access-Control-Allow-Methods", "GET, OPTIONS");
-            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-            ctx.result("");
-        });
-
-        log.info("[App Gateway] Tracing Span 管理 API 已挂载: /api/tracing/spans, /api/tracing/flush, /api/tracing/status");
-        System.out.println("  ✓ [App Gateway] Tracing Span 管理 API: /api/tracing/spans, /api/tracing/flush, /api/tracing/status");
-
-        // ════════════════════════════════════════════════════════════════
-        //  Handoff 管理 API — LLM 驱动的 Agent 切换（参考 OpenAI Agents Python Handoff）
-        // ════════════════════════════════════════════════════════════════
-
-        // GET /api/handoff/targets — 获取可用的 Handoff 目标列表
-        app.get("/api/handoff/targets", ctx -> {
-            var targets = com.ouisani.aios.core.tool.HandoffManager.instance().getHandoffTargets();
-            StringBuilder json = new StringBuilder("{\"targets\":[");
-            boolean first = true;
-            for (var t : targets) {
-                if (!first) json.append(",");
-                json.append(String.format(
-                        "{\"agentId\":\"%s\",\"role\":\"%s\",\"description\":\"%s\"}",
-                        t.agentId().replace("\"", "\\\""),
-                        t.role().replace("\"", "\\\""),
-                        t.description().replace("\"", "\\\"")));
-                first = false;
-            }
-            json.append("]}");
-            ctx.contentType("application/json");
-            ctx.result(json.toString());
-        });
-
-        app.options("/api/handoff/targets", ctx -> {
-            ctx.header("Access-Control-Allow-Origin", "*");
-            ctx.header("Access-Control-Allow-Methods", "GET, OPTIONS");
-            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-            ctx.result("");
-        });
-
-        // GET /api/handoff/history — 获取 Handoff 历史记录
-        app.get("/api/handoff/history", ctx -> {
-            var history = com.ouisani.aios.core.tool.HandoffManager.instance().getHandoffHistory();
-            StringBuilder json = new StringBuilder("{\"history\":[");
-            boolean first = true;
-            for (var r : history) {
-                if (!first) json.append(",");
-                json.append(String.format(
-                        "{\"source\":\"%s\",\"target\":\"%s\",\"reason\":\"%s\",\"contextSummary\":\"%s\",\"timestamp\":%d}",
-                        r.source().replace("\"", "\\\""),
-                        r.target().replace("\"", "\\\""),
-                        r.reason().replace("\"", "\\\""),
-                        r.contextSummary().replace("\"", "\\\"").replace("\n", " "),
-                        r.timestamp()));
-                first = false;
-            }
-            json.append("]}");
-            ctx.contentType("application/json");
-            ctx.result(json.toString());
-        });
-
-        app.options("/api/handoff/history", ctx -> {
-            ctx.header("Access-Control-Allow-Origin", "*");
-            ctx.header("Access-Control-Allow-Methods", "GET, OPTIONS");
-            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-            ctx.result("");
-        });
-
-        // POST /api/handoff/register — 注册新的 Handoff 目标
-        // body: {"agentId":"...", "role":"...", "description":"..."}
-        app.post("/api/handoff/register", ctx -> {
-            String body = ctx.body();
-            try {
-                var jsonObj = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
-                String agentId = jsonObj.has("agentId") ? jsonObj.get("agentId").getAsString() : null;
-                if (agentId == null || agentId.isBlank()) {
-                    ctx.status(400).result("{\"error\":\"Missing 'agentId' field\"}")
-                       .contentType("application/json");
-                    return;
-                }
-                String role = jsonObj.has("role") ? jsonObj.get("role").getAsString() : "";
-                String description = jsonObj.has("description") ? jsonObj.get("description").getAsString() : "";
-                com.ouisani.aios.core.tool.HandoffManager.instance()
-                        .registerHandoffTarget(agentId, role, description);
-                ctx.result("{\"success\":true,\"agentId\":\"" + agentId + "\"}")
-                   .contentType("application/json");
-            } catch (Exception e) {
-                ctx.status(400)
-                   .result("{\"error\":\"" + e.getMessage().replace("\"", "'") + "\"}")
-                   .contentType("application/json");
-            }
-        });
-
-        app.options("/api/handoff/register", ctx -> {
-            ctx.header("Access-Control-Allow-Origin", "*");
-            ctx.header("Access-Control-Allow-Methods", "POST, OPTIONS");
-            ctx.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-            ctx.result("");
-        });
-
-        log.info("[App Gateway] Handoff 管理 API 已挂载: /api/handoff/targets, /api/handoff/history, /api/handoff/register");
-        System.out.println("  ✓ [App Gateway] Handoff 管理 API: /api/handoff/targets, /api/handoff/history, /api/handoff/register");
+        VfsBridgeRoutes.attachTo(app);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -1344,7 +739,7 @@ public class AppGateway {
 
     /**
      * 为 Workflow 控制通道启动定时心跳 ping，防止 WebSocket 因空闲超时被断开。
-     * 心跳间隔 2 分钟，远小于 5 分钟的 idle timeout。
+     * 心跳间隔 30 秒，远小于 10 分钟的 WebSocket idle timeout。
      */
     private static void scheduleWorkflowHeartbeat(WsContext ctx) {
         String sessionId = ctx.sessionId();
@@ -1365,225 +760,8 @@ public class AppGateway {
                 workflowHeartbeats.remove(sessionId);
                 scheduler.shutdown();
             }
-        }, 2, 2, java.util.concurrent.TimeUnit.MINUTES);
+        }, 30, 30, java.util.concurrent.TimeUnit.SECONDS);
         workflowHeartbeats.put(sessionId, future);
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    //  JSON 解析器 — 正则提取，兼容前端各种格式
-    // ════════════════════════════════════════════════════════════════
-
-    /**
-     * 将前端传来的 JSON 解析为 WorkflowManifest。
-     * <p>
-     * 预期格式：
-     * <pre>
-     * {
-     *   "workflowName": "my_workflow",
-     *   "nodes": [
-     *     {
-     *       "instanceId": "agent_1",
-     *       "blueprintId": "spider_agent",
-     *       "role": "爬取数据",
-     *       "subscribeTopic": "",
-     *       "publishTopic": "topic_agent_1_agent_2",
-     *       "userParams": {}
-     *     }
-     *   ]
-     * }
-     * </pre>
-     */
-    private static WorkflowManifest parseWorkflowManifest(String json) {
-        String workflowName = extractJsonField(json, "workflowName");
-        if (workflowName == null || workflowName.isBlank()) {
-            workflowName = "dashboard_workflow";
-        }
-
-        // 提取 nodes 数组部分
-        String nodesArray = extractJsonArray(json, "nodes");
-        if (nodesArray == null || nodesArray.isBlank()) {
-            throw new IllegalArgumentException("负载中缺少 'nodes' 数组或数组为空");
-        }
-
-        // 逐个解析节点对象 — 使用安全的深度感知分割器
-        List<WorkflowNode> nodes = new ArrayList<>();
-        List<String> rawNodes = splitJsonObjectsSafe(nodesArray);
-        for (String obj : rawNodes) {
-            String instanceId = extractJsonField(obj, "instanceId");
-            String blueprintId = extractJsonField(obj, "blueprintId");
-            String role = extractJsonField(obj, "role");
-            String executor = extractJsonField(obj, "executor");
-            String subscribeTopic = extractJsonField(obj, "subscribeTopic");
-            String publishTopic = extractJsonField(obj, "publishTopic");
-            Map<String, String> userParams = extractUserParams(obj);
-
-            if (instanceId != null && !instanceId.isBlank()) {
-                WorkflowNode node = new WorkflowNode(
-                        instanceId.trim(),
-                        role != null ? role.trim() : "",
-                        blueprintId != null ? blueprintId.trim() : instanceId.trim(),
-                        userParams,
-                        subscribeTopic != null ? subscribeTopic.trim() : "",
-                        publishTopic != null ? publishTopic.trim() : "",
-                        executor != null ? executor.trim() : "omni"
-                );
-
-                // 解析 upstreamDependencies — 决定哪些节点可以并发执行
-                String depsArray = extractJsonArray(obj, "upstreamDependencies");
-                if (depsArray != null && !depsArray.isBlank()) {
-                    for (String dep : depsArray.split(",")) {
-                        String trimmed = dep.trim().replaceAll("[\"\\[\\]\\s]", "");
-                        if (!trimmed.isEmpty()) {
-                            node.addDependency(trimmed);
-                        }
-                    }
-                }
-
-                nodes.add(node);
-            }
-        }
-
-        if (nodes.isEmpty()) {
-            throw new IllegalArgumentException("负载中未找到有效节点");
-        }
-
-        // 解析 enabledSkills / enabledRoles 数组
-        List<String> enabledSkills = extractJsonStringArray(json, "enabledSkills");
-        List<String> enabledRoles = extractJsonStringArray(json, "enabledRoles");
-
-        // 解析 agentType（默认 "omni"）
-        String agentType = extractJsonField(json, "agentType");
-        if (agentType == null || agentType.isBlank()) agentType = "omni";
-
-        return new WorkflowManifest(workflowName, nodes, enabledSkills, enabledRoles, agentType);
-    }
-
-    /**
-     * 从 JSON 中提取指定 key 对应的字符串数组。
-     * <p>
-     * 例如：{"enabledSkills": ["skills.web_scraper", "skills.file_ops"]}
-     */
-    private static List<String> extractJsonStringArray(String json, String key) {
-        List<String> result = new ArrayList<>();
-        String arrayContent = extractJsonArray(json, key);
-        if (arrayContent == null || arrayContent.isBlank()) return result;
-
-        Pattern stringPattern = Pattern.compile("\"([^\"]+)\"");
-        Matcher matcher = stringPattern.matcher(arrayContent);
-        while (matcher.find()) {
-            result.add(matcher.group(1));
-        }
-        return result;
-    }
-
-    /**
-     * 从 JSON 中提取指定 key 的字符串值。
-     */
-    private static String extractJsonField(String json, String key) {
-        if (json == null || key == null) return null;
-        Pattern p = Pattern.compile("\"" + key + "\"\\s*:\\s*\"([^\"]*?)\"");
-        Matcher m = p.matcher(json);
-        if (m.find()) return m.group(1);
-        // 尝试无引号格式
-        Pattern rawP = Pattern.compile("\"" + key + "\"\\s*:\\s*([^,}\\s]+)");
-        Matcher rawM = rawP.matcher(json);
-        if (rawM.find()) return rawM.group(1).trim();
-        return null;
-    }
-
-    /**
-     * 从 JSON 中提取指定 key 对应的对象内容（含花括号）。
-     * 用于提取 HOT_PATCH_PARAM 中的 params 字段。
-     */
-    private static String extractJsonObject(String json, String key) {
-        Pattern p = Pattern.compile("\"" + key + "\"\\s*:\\s*\\{");
-        Matcher m = p.matcher(json);
-        if (!m.find()) return null;
-        int start = m.start() + m.group().length() - 1, depth = 0, pos = start;
-        boolean inStr = false, esc = false;
-        while (pos < json.length()) {
-            char c = json.charAt(pos);
-            if (esc) esc = false;
-            else if (c == '\\') esc = true;
-            else if (c == '"') inStr = !inStr;
-            else if (!inStr) {
-                if (c == '{') depth++; else if (c == '}') {
-                    depth--; if (depth == 0) return json.substring(start, pos + 1);
-                }
-            }
-            pos++;
-        }
-        return null;
-    }
-
-    /**
-     * 从 JSON 中提取指定 key 对应的数组内容（不含方括号）。
-     */
-    public static String extractJsonArray(String json, String key) {
-        Pattern p = Pattern.compile("\"" + key + "\"\\s*:\\s*\\[");
-        Matcher m = p.matcher(json);
-        if (!m.find()) return null;
-        int start = m.end(), depth = 1, pos = start;
-        boolean inStr = false, esc = false;
-        while (pos < json.length() && depth > 0) {
-            char c = json.charAt(pos);
-            if (esc) esc = false;
-            else if (c == '\\') esc = true;
-            else if (c == '"') inStr = !inStr;
-            else if (!inStr) {
-                if (c == '[') depth++; else if (c == ']') depth--;
-            }
-            pos++;
-        }
-        return depth == 0 ? json.substring(start, pos - 1) : null;
-    }
-
-    /**
-     * 从 JSON 对象中提取 userParams 字典。
-     */
-    private static Map<String, String> extractUserParams(String jsonObj) {
-        Map<String, String> params = new LinkedHashMap<>();
-        String content = extractJsonObject(jsonObj, "userParams");
-        if (content == null || content.length() < 2) return params;
-        content = content.substring(1, content.length() - 1);
-        Pattern kvPattern = Pattern.compile("\"([^\"]+)\"\\s*:\\s*\"([^\"]*)\"");
-        Matcher kvMatcher = kvPattern.matcher(content);
-        while (kvMatcher.find()) {
-            params.put(kvMatcher.group(1), kvMatcher.group(2));
-        }
-        return params;
-    }
-
-    /**
-     * 安全分割 JSON 数组中的对象 — 无视字符串内的花括号干扰。
-     * <p>
-     * 使用深度感知的状态机遍历，正确处理转义字符和字符串内的花括号，
-     * 避免正则表达式在嵌套 JSON 或字符串含花括号时误匹配。
-     */
-    public static List<String> splitJsonObjectsSafe(String jsonArrayInner) {
-        List<String> objects = new ArrayList<>();
-        if (jsonArrayInner == null) return objects;
-        int depth = 0, objStart = -1;
-        boolean inString = false, escape = false;
-        for (int pos = 0; pos < jsonArrayInner.length(); pos++) {
-            char c = jsonArrayInner.charAt(pos);
-            if (escape) { escape = false; }
-            else if (c == '\\') { escape = true; }
-            else if (c == '"') { inString = !inString; }
-            else if (!inString) {
-                if (c == '{') {
-                    if (depth == 0) objStart = pos;
-                    depth++;
-                } else if (c == '}') {
-                    depth--;
-                    if (depth == 0 && objStart != -1) {
-                        objects.add(jsonArrayInner.substring(objStart, pos + 1));
-                        objStart = -1;
-                    }
-                }
-            }
-        }
-        return objects;
     }
 
     /**

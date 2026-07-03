@@ -38,10 +38,25 @@ public class TeamManager {
     private static final Logger log = LoggerFactory.getLogger(TeamManager.class);
     private static final TeamManager INSTANCE = new TeamManager();
 
+    /** Generation 完成事件频道 — 当一个 generation 内所有任务完成时广播 */
+    public static final String EVENT_GENERATION_COMPLETED = "team.generation.completed";
+
     /** 活跃团队：teamName → TeamState */
     private final ConcurrentHashMap<String, TeamState> activeTeams = new ConcurrentHashMap<>();
 
-    private TeamManager() {}
+    /** Generation 批量任务追踪器 — 借鉴 Apix 的 generation_tasks 机制 */
+    private final GenerationTracker generationTracker = new GenerationTracker();
+
+    private TeamManager() {
+        // 设置 Generation 完成回调：通过 EventBus 广播，Lead Agent 可订阅以查询结果
+        generationTracker.setOnGenerationCompleted((generationId, historyId) -> {
+            String payload = String.format(
+                    "{\"eventType\":\"GENERATION_COMPLETED\", \"generationId\":\"%s\", \"historyId\":\"%s\", \"timestamp\":%d}",
+                    generationId, historyId != null ? historyId : "", System.currentTimeMillis());
+            EventBus.instance().broadcast(EVENT_GENERATION_COMPLETED, payload);
+            log.info("[TeamManager] Generation 已完成: gen={}, history={}", generationId, historyId);
+        });
+    }
 
     public static TeamManager instance() {
         return INSTANCE;
@@ -204,6 +219,140 @@ public class TeamManager {
 
         log.info("[TeamManager] 任务已在团队中创建 '{}' in team '{}' by {}", task.taskId(), teamName, creatorId);
         return task;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Generation 批量任务管理（借鉴 Apix team_task_manager.py）
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 创建新的 Generation — 用于将一次用户请求产生的所有子任务归为一组。
+     * <p>
+     * Lead Agent 收到用户请求后调用此方法获取 generationId，
+     * 然后通过 {@link #createTaskWithGeneration} 创建多个并行子任务。
+     * 当所有子任务完成时，会通过 EventBus 广播 {@link #EVENT_GENERATION_COMPLETED} 事件。
+     *
+     * @return 新的 generationId
+     * @see GenerationTracker
+     */
+    public String createGeneration() {
+        return generationTracker.createGeneration();
+    }
+
+    /**
+     * 创建关联到 Generation 的团队任务 — 借鉴 Apix 的 {@code submit_task}。
+     * <p>
+     * 创建的任务会注册到 GenerationTracker，当任务进入终态
+     * （COMPLETED/FAILED/CANCELLED）时自动从 generation 集合中移除。
+     * 当 generation 内所有任务均完成时，触发完成事件。
+     *
+     * @param teamName      团队名
+     * @param creatorId     创建者 ID（通常是 Lead）
+     * @param description   任务描述
+     * @param assigneeId    执行者 ID（可为 null 表示未分配）
+     * @param generationId  关联的 generation ID（通过 {@link #createGeneration} 获取）
+     * @return 创建的任务
+     */
+    public TeamTask createTaskWithGeneration(String teamName, String creatorId,
+                                              String description, String assigneeId,
+                                              String generationId) {
+        TeamTask task = createTask(teamName, creatorId, description, assigneeId);
+        generationTracker.registerTask(generationId, task.taskId());
+        log.info("[TeamManager] 任务已关联到 generation: task={}, gen={}", task.taskId(), generationId);
+        return task;
+    }
+
+    /**
+     * 标记任务完成 — 更新状态并触发 Generation 完成检测。
+     * <p>
+     * 这是 {@link #updateTask} 的便捷方法，专门用于任务完成场景。
+     * 当任务完成导致其所属 generation 全部完成时，会广播
+     * {@link #EVENT_GENERATION_COMPLETED} 事件。
+     *
+     * @param teamName  团队名
+     * @param taskId    任务 ID
+     * @param updaterId 更新者 ID
+     * @param historyId 关联的会话历史 ID（用于完成回调，可为 null）
+     * @return 更新后的任务
+     */
+    public TeamTask markTaskCompleted(String teamName, String taskId, String updaterId, String historyId) {
+        TeamTask updated = updateTask(teamName, taskId, updaterId, TaskStatus.COMPLETED, null);
+        emitGenerationCompletedIfNeeded(taskId, historyId);
+        return updated;
+    }
+
+    /**
+     * 标记任务失败 — 更新状态并触发 Generation 完成检测。
+     *
+     * @param teamName  团队名
+     * @param taskId    任务 ID
+     * @param updaterId 更新者 ID
+     * @param historyId 关联的会话历史 ID（可为 null）
+     * @return 更新后的任务
+     */
+    public TeamTask markTaskFailed(String teamName, String taskId, String updaterId, String historyId) {
+        TeamTask updated = updateTask(teamName, taskId, updaterId, TaskStatus.FAILED, null);
+        emitGenerationCompletedIfNeeded(taskId, historyId);
+        return updated;
+    }
+
+    /**
+     * 标记任务取消 — 更新状态并触发 Generation 完成检测。
+     *
+     * @param teamName  团队名
+     * @param taskId    任务 ID
+     * @param updaterId 更新者 ID
+     * @param historyId 关联的会话历史 ID（可为 null）
+     * @return 更新后的任务
+     */
+    public TeamTask markTaskCancelled(String teamName, String taskId, String updaterId, String historyId) {
+        TeamTask updated = updateTask(teamName, taskId, updaterId, TaskStatus.CANCELLED, null);
+        emitGenerationCompletedIfNeeded(taskId, historyId);
+        return updated;
+    }
+
+    /**
+     * 触发 Generation 完成检测 — 从 generation 集合中移除任务，
+     * 当集合为空时通过回调广播完成事件。
+     *
+     * @param taskId    已完成的任务 ID
+     * @param historyId 关联的会话历史 ID
+     */
+    private void emitGenerationCompletedIfNeeded(String taskId, String historyId) {
+        GenerationTracker.GenerationFinishResult result = generationTracker.finishTask(taskId, historyId);
+        if (result != null && result.generationFinished()) {
+            log.info("[TeamManager] Generation 全部完成: gen={}, history={}",
+                    result.generationId(), historyId);
+        }
+    }
+
+    /**
+     * 获取 Generation 中尚未完成的任务数量。
+     *
+     * @param generationId generation ID
+     * @return 剩余任务数
+     */
+    public int getGenerationRemainingCount(String generationId) {
+        return generationTracker.getRemainingTaskCount(generationId);
+    }
+
+    /**
+     * 获取 Generation 中尚未完成的任务 ID 集合。
+     *
+     * @param generationId generation ID
+     * @return 任务 ID 集合
+     */
+    public Set<String> getGenerationTasks(String generationId) {
+        return generationTracker.getGenerationTasks(generationId);
+    }
+
+    /**
+     * 获取 Generation 追踪器（用于高级场景直接操作）。
+     *
+     * @return GenerationTracker 实例
+     */
+    public GenerationTracker getGenerationTracker() {
+        return generationTracker;
     }
 
     /**

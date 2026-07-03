@@ -1,5 +1,7 @@
+# ── Secrets / 环境变量 ──
 .env
 .env.*
+!.env.example
 
 # ── Java / Maven ──
 target/
@@ -51,3 +53,16 @@ llama.cpp/
 snapshots/
 swap/
 /tmp/
+
+# ── AIOS 运行时数据（不应上传）──
+# workspaces/ — Agent 任务运行时输出（每次任务生成的 factory 产物）
+workspaces/
+# openclaw_sessions/ — 会话日志（jsonl 格式）
+openclaw_sessions/
+# var/ — 运行时状态（PID、plan 持久化测试产物、安全裁决文件等）
+var/
+# *.jsonl — 通用会话/日志格式
+*.jsonl
+
+# ── IDE 内部文档（规划/计划文件，非源码）──
+.trae/

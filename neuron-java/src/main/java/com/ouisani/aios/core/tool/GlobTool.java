@@ -5,6 +5,8 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * Glob 工具 — 文件模式匹配搜索，对标 Claude Code 的 GlobTool。
@@ -93,5 +95,32 @@ public class GlobTool implements Tool<GlobTool.Input> {
 
     @Override public String prompt() {
         return "Use glob to find files by name pattern. Results are limited to 500 matches.";
+    }
+
+    // ── 强类型 I/O 契约 ──
+    @Override
+    public List<Port> inputPorts() {
+        return List.of(
+            new Port("pattern", DataTypes.PLAIN_TEXT, "Glob 文件名匹配模式（如 **/*.java）"),
+            new Port("path", DataTypes.FILE_PATH, "搜索目录路径（默认当前目录）")
+        );
+    }
+
+    @Override
+    public List<Port> outputPorts() {
+        return List.of(
+            new Port("files", DataTypes.FILE_PATH_LIST, "匹配的文件路径列表")
+        );
+    }
+
+    @Override
+    public Optional<ToolExample> example() {
+        return Optional.of(new ToolExample(
+            "如果你需要查找所有 JSON 配置文件",
+            Map.of(
+                "pattern", "**/*.json",
+                "path", "/vfs/workspace"
+            )
+        ));
     }
 }

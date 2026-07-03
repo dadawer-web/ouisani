@@ -72,6 +72,23 @@
             <version>2.18.0</version>
         </dependency>
 
+        <!-- ── DJL (Deep Java Library)：本地 ONNX embedding 推理 ── -->
+        <dependency>
+            <groupId>ai.djl</groupId>
+            <artifactId>api</artifactId>
+            <version>0.27.0</version>
+        </dependency>
+        <dependency>
+            <groupId>ai.djl.huggingface</groupId>
+            <artifactId>tokenizers</artifactId>
+            <version>0.27.0</version>
+        </dependency>
+        <dependency>
+            <groupId>ai.djl.onnxruntime</groupId>
+            <artifactId>onnxruntime-engine</artifactId>
+            <version>0.27.0</version>
+        </dependency>
+
         <!-- ── Test Dependencies ── -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -141,6 +158,9 @@
                         <configuration>
                             <finalName>aios</finalName>
                             <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>com.ouisani.aios.user.cli.AiosShell</mainClass>
+                                </transformer>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                             </transformers>
                             <filters>

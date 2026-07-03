@@ -1,5 +1,7 @@
 package com.ouisani.aios.core.state;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.ouisani.aios.user.apps.omnifactory.WorkflowNode;
 
 import java.util.Map;
@@ -17,6 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * @see BoulderStateManager
  * @see com.ouisani.aios.user.apps.omnifactory.WorkflowEngine
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class BoulderCheckpoint {
 
     /** 工作流 ID */
@@ -81,9 +84,11 @@ public class BoulderCheckpoint {
     public void incrementRetry() { this.retryCount++; }
 
     /** 是否已成功完成 */
+    @JsonIgnore
     public boolean isCompleted() { return status == WorkflowNode.Status.SUCCESS; }
 
     /** 是否已失败且超过最大重试次数 */
+    @JsonIgnore
     public boolean isExhausted(int maxRetries) { return retryCount >= maxRetries; }
 
     @Override

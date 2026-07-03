@@ -13,7 +13,6 @@ import com.ouisani.aios.core.security.GuardrailEngine;
 import com.ouisani.aios.core.telemetry.TelemetryService;
 import com.ouisani.aios.core.trace.TraceSpan;
 import com.ouisani.aios.core.trace.TracingManager;
-import com.ouisani.aios.user.sdk.AiosSdk;
 import com.google.gson.Gson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,12 +41,25 @@ public class QueryEngine {
 
     private static final int MAX_TOOL_ROUNDS = 60;
 
+    /**
+     * 专用虚拟线程执行器 — 坚决弃用 ForkJoinPool.commonPool。
+     * <p>
+     * commonPool 使用平台线程，池大小 = CPU核心数-1。当工具包含阻塞式 I/O
+     * （网络请求、文件读写、等待子 Agent）时，commonPool 会瞬间耗尽，
+     * 导致所有并行工具调用排队死锁。
+     * <p>
+     * 虚拟线程执行器为每个任务分配一个虚拟线程，开销极低（~几 KB），
+     * 可以轻松支持数千个并发阻塞操作。
+     */
+    private static final java.util.concurrent.ExecutorService VTHREAD_EXECUTOR =
+            java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+
     static {
         log.info("[InstructionDecoder] 增强型鲁棒字符串指针解析已激活。");
         System.out.println("  \u001B[36m[InstructionDecoder] 增强型鲁棒字符串指针解析已激活。\u001B[0m");
     }
 
-    private final AiosSdk sdk;
+    private final ToolSdk sdk;
     private final String agentId;
     private final String workingDir;
     private final List<Tool<? extends ToolInput>> availableTools;
@@ -66,7 +78,7 @@ public class QueryEngine {
      * @param agentId   Agent ID
      * @param workingDir 工作目录
      */
-    public QueryEngine(AiosSdk sdk, String agentId, String workingDir) {
+    public QueryEngine(ToolSdk sdk, String agentId, String workingDir) {
         this(sdk, agentId, workingDir, List.of());
     }
 
@@ -81,7 +93,7 @@ public class QueryEngine {
      * @param workingDir    工作目录
      * @param extraTools    用户空间扩展工具列表
      */
-    public QueryEngine(AiosSdk sdk, String agentId, String workingDir,
+    public QueryEngine(ToolSdk sdk, String agentId, String workingDir,
                        List<Tool<? extends ToolInput>> extraTools) {
         this.sdk = sdk;
         this.agentId = agentId;
@@ -165,6 +177,9 @@ public class QueryEngine {
         // Agent Loop — 最多 MAX_TOOL_ROUNDS 轮
         int consecutiveErrors = 0;
         final int MAX_CONSECUTIVE_ERRORS = 3;
+        // 【动刀4】参数级错误熔断器 — 防止 LLM 陷入语法错误死循环
+        int syntaxErrorCount = 0;
+        final int MAX_SYNTAX_ERRORS = 2; // 参数级错误最多重试 2 次，超过则熔断
         String lastLlmResponse = null;
 
         for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
@@ -260,7 +275,13 @@ public class QueryEngine {
             }
 
             // 检测工具调用
-            List<ToolCall> toolCalls = parseToolCalls(llmResponse);
+            if (registeredToolNames == null) {
+                registeredToolNames = new HashSet<>();
+                for (Tool<? extends ToolInput> tool : availableTools) {
+                    registeredToolNames.add(tool.name());
+                }
+            }
+            List<ToolCall> toolCalls = ToolCallParser.parseToolCalls(llmResponse, registeredToolNames);
 
             if (toolCalls.isEmpty()) {
                 // 没有工具调用，返回纯文本回复
@@ -294,12 +315,30 @@ public class QueryEngine {
                     AiosEventSchema.emit(AiosEventSchema.toolCallStarted(agentId, currentRunId, round + 1, tc.toolName, tc.paramsJson));
                     result = executeTool(tc);
                     consecutiveErrors = 0;
+                    syntaxErrorCount = 0; // 成功执行，重置语法错误计数
                     DynamicToolBridge.getInstance().markToolUsed(tc.toolName);
                 } catch (Exception e) {
                     consecutiveErrors++;
                     result = "工具 '" + tc.toolName + "' 执行期间系统错误: " + e.getMessage();
                     log.error("[QueryEngine] 工具 '{}' 抛出异常。({}/{})",
                             tc.toolName, consecutiveErrors, MAX_CONSECUTIVE_ERRORS, e);
+
+                    // 【动刀4】参数级错误熔断器 — 检测语法/参数级错误
+                    String errMsg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+                    boolean isSyntaxError = errMsg.contains("path required") || errMsg.contains("path is null")
+                            || errMsg.contains("missing") || errMsg.contains("required")
+                            || errMsg.contains("empty command") || errMsg.contains("invalid")
+                            || e instanceof IllegalArgumentException;
+                    if (isSyntaxError) {
+                        syntaxErrorCount++;
+                        log.warn("[QueryEngine] 参数级错误 ({}/{})，工具: {}，错误: {}",
+                                syntaxErrorCount, MAX_SYNTAX_ERRORS, tc.toolName, e.getMessage());
+                        if (syntaxErrorCount > MAX_SYNTAX_ERRORS) {
+                            log.error("[QueryEngine] 参数级错误熔断器触发 — LLM 陷入语法错误死循环，终止执行！");
+                            return "查询已中止：LLM 连续 " + syntaxErrorCount + " 次参数级错误（如缺少必填参数），"
+                                    + "已触发熔断器终止执行。最后错误: " + result;
+                        }
+                    }
 
                     if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
                         log.error("[QueryEngine] {} 次连续错误 — 中止查询循环", consecutiveErrors);
@@ -320,6 +359,7 @@ public class QueryEngine {
 
                 java.util.List<java.util.concurrent.CompletableFuture<ToolResult>> futures = new java.util.ArrayList<>();
                 for (ToolCall tc : toolCalls) {
+                    // 【动刀1】强制挂载虚拟线程池，弃用 ForkJoinPool.commonPool
                     java.util.concurrent.CompletableFuture<ToolResult> future = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
                         try {
                             String result = executeTool(tc);
@@ -328,7 +368,7 @@ public class QueryEngine {
                         } catch (Exception e) {
                             return new ToolResult(tc.toolName, null, e);
                         }
-                    });
+                    }, VTHREAD_EXECUTOR);
                     futures.add(future);
                 }
 
@@ -516,332 +556,6 @@ public class QueryEngine {
      * 这些不应被解析为真正的工具调用。只有与已注册工具名匹配的标签才是合法调用。
      */
     private Set<String> registeredToolNames;
-
-    /**
-     * 解析 LLM 响应中的工具调用。
-     * <p>
-     * 使用纯字符串 indexOf 线性扫描，O(N) 时间复杂度，绝不触发 StackOverflowError。
-     * 只匹配已注册工具名称的 XML 标签，过滤掉 LLM 输出的格式示例标签。
-     * <p>
-     * 匹配格式：{@code <tool_name>JSON params</tool_name>}
-     */
-    private List<ToolCall> parseToolCalls(String response) {
-        if (registeredToolNames == null) {
-            registeredToolNames = new HashSet<>();
-            for (Tool<? extends ToolInput> tool : availableTools) {
-                registeredToolNames.add(tool.name());
-            }
-        }
-
-        List<ToolCall> calls = new ArrayList<>();
-        int searchStart = 0;
-        int len = response.length();
-
-        while (searchStart < len) {
-            // ── 查找工具块起点 ──
-            // 支持多种格式：<tool_call>, <function=xxx>, <tool_name>
-            int blockStart = -1;
-            String blockType = null; // "tool_call" | "function=" | "direct_tag"
-
-            // 1. 查找 <tool_call> 块
-            int tcIdx = response.indexOf("<tool_call>", searchStart);
-            // 2. 查找 <function=xxx> 格式
-            int fnIdx = response.indexOf("<function=", searchStart);
-
-            // 取最早出现的
-            if (tcIdx >= 0 && (fnIdx < 0 || tcIdx <= fnIdx)) {
-                blockStart = tcIdx;
-                blockType = "tool_call";
-            } else if (fnIdx >= 0) {
-                blockStart = fnIdx;
-                blockType = "function=";
-            }
-
-            if (blockStart < 0) {
-                // 3. 没有工具块标记，尝试直接查找已注册工具名标签
-                //    如 <glob>...</glob>, <bash>...</bash>
-                int tagStart = findToolTagStart(response, searchStart, registeredToolNames);
-                if (tagStart < 0) break;
-
-                // 提取标签名
-                int tagEnd = response.indexOf('>', tagStart + 1);
-                if (tagEnd < 0) { searchStart = tagStart + 1; continue; }
-
-                String tagName = response.substring(tagStart + 1, tagEnd).trim();
-                // 清理标签名中的空白和换行
-                tagName = cleanTagName(tagName);
-                if (tagName.isEmpty()) { searchStart = tagEnd + 1; continue; }
-
-                // 查找闭合标签
-                String closeTag = "</" + tagName + ">";
-                int closeIdx = response.indexOf(closeTag, tagEnd + 1);
-                if (closeIdx < 0) { searchStart = tagEnd + 1; continue; }
-
-                String params = response.substring(tagEnd + 1, closeIdx).trim();
-                calls.add(new ToolCall(tagName, params));
-                searchStart = closeIdx + closeTag.length();
-                continue;
-            }
-
-            // ── 处理 <tool_call> 块 ──
-            if ("tool_call".equals(blockType)) {
-                int contentStart = blockStart + "<tool_call>".length();
-                int blockEnd = findCloseTag(response, contentStart, "tool_call");
-                if (blockEnd < 0) { searchStart = contentStart; continue; }
-
-                String blockContent = response.substring(contentStart, blockEnd).trim();
-                ToolCall tc = parseToolCallContent(blockContent);
-                if (tc != null) calls.add(tc);
-
-                searchStart = blockEnd + "</tool_call>".length();
-                continue;
-            }
-
-            // ── 处理 <function=xxx> 格式 ──
-            if ("function=".equals(blockType)) {
-                int eqIdx = response.indexOf('=', blockStart);
-                int tagEnd = response.indexOf('>', eqIdx + 1);
-                if (tagEnd < 0) { searchStart = blockStart + 1; continue; }
-
-                String funcName = response.substring(eqIdx + 1, tagEnd).trim();
-                funcName = cleanTagName(funcName);
-
-                // 查找闭合标签 </function>
-                int closeIdx = response.indexOf("</function>", tagEnd + 1);
-                if (closeIdx < 0) {
-                    // 也可能用 </function=xxx> 闭合
-                    closeIdx = response.indexOf("</function=", tagEnd + 1);
-                    if (closeIdx < 0) { searchStart = tagEnd + 1; continue; }
-                    // 跳过闭合标签
-                    int closeTagEnd = response.indexOf('>', closeIdx);
-                    if (closeTagEnd < 0) { searchStart = tagEnd + 1; continue; }
-
-                    String params = response.substring(tagEnd + 1, closeIdx).trim();
-                    if (registeredToolNames.contains(funcName)) {
-                        calls.add(new ToolCall(funcName, params));
-                    }
-                    searchStart = closeTagEnd + 1;
-                } else {
-                    String params = response.substring(tagEnd + 1, closeIdx).trim();
-                    if (registeredToolNames.contains(funcName)) {
-                        calls.add(new ToolCall(funcName, params));
-                    }
-                    searchStart = closeIdx + "</function>".length();
-                }
-                continue;
-            }
-
-            // 安全推进
-            searchStart = blockStart + 1;
-        }
-
-        return calls;
-    }
-
-    /**
-     * 解析 <tool_call> 块内的内容，提取工具名和参数。
-     * <p>
-     * 支持的内部格式：
-     * <ul>
-     *   <li>function=glob with parameter=pattern</li>
-     *   <li>JSON format with name and arguments</li>
-     *   <li>Direct tool name tags</li>
-     * </ul>
-     */
-    private ToolCall parseToolCallContent(String blockContent) {
-        // 格式 1：<function=xxx><parameter=yyy>value</parameter></function>
-        int fnIdx = blockContent.indexOf("<function=");
-        if (fnIdx >= 0) {
-            int eqIdx = fnIdx + 10; // skip "<function="
-            int tagEnd = blockContent.indexOf('>', eqIdx);
-            if (tagEnd >= 0) {
-                String funcName = blockContent.substring(eqIdx, tagEnd).trim();
-                funcName = cleanTagName(funcName);
-
-                if (!registeredToolNames.contains(funcName)) return null;
-
-                // 提取参数
-                StringBuilder params = new StringBuilder();
-                int paramSearchStart = tagEnd + 1;
-                while (paramSearchStart < blockContent.length()) {
-                    int paramStart = blockContent.indexOf("<parameter=", paramSearchStart);
-                    if (paramStart < 0) break;
-
-                    int paramEqIdx = paramStart + 11; // skip "<parameter="
-                    int paramTagEnd = blockContent.indexOf('>', paramEqIdx);
-                    if (paramTagEnd < 0) break;
-
-                    String paramName = blockContent.substring(paramEqIdx, paramTagEnd).trim();
-                    paramName = cleanTagName(paramName);
-
-                    int paramCloseIdx = blockContent.indexOf("</parameter>", paramTagEnd + 1);
-                    if (paramCloseIdx < 0) break;
-
-                    String paramValue = blockContent.substring(paramTagEnd + 1, paramCloseIdx).trim();
-
-                    // 构建 JSON 参数
-                    if (!params.isEmpty()) params.append(",");
-                    params.append("\"").append(escapeJsonString(paramName)).append("\":")
-                          .append("\"").append(escapeJsonString(paramValue)).append("\"");
-
-                    paramSearchStart = paramCloseIdx + "</parameter>".length();
-                }
-
-                String paramsJson = params.isEmpty() ? "{}" : "{" + params + "}";
-                return new ToolCall(funcName, paramsJson);
-            }
-        }
-
-        // 格式 2：JSON 格式 {"name": "xxx", "arguments": {...}}
-        int jsonStart = blockContent.indexOf('{');
-        if (jsonStart >= 0) {
-            String json = extractCompleteJsonObject(blockContent, jsonStart);
-            if (json != null) {
-                // 尝试从 JSON 中提取 name 和 arguments
-                String name = extractJsonFieldValue(json, "name");
-                String args = extractJsonFieldValue(json, "arguments");
-                if (name != null && registeredToolNames.contains(name)) {
-                    return new ToolCall(name, args != null ? args : "{}");
-                }
-                // 也可能是 "function" 字段
-                String func = extractJsonFieldValue(json, "function");
-                if (func != null && registeredToolNames.contains(func)) {
-                    return new ToolCall(func, args != null ? args : "{}");
-                }
-            }
-        }
-
-        // 格式 3：内部直接包含已注册工具名标签
-        for (String toolName : registeredToolNames) {
-            String openTag = "<" + toolName + ">";
-            int idx = blockContent.indexOf(openTag);
-            if (idx >= 0) {
-                int contentStart = idx + openTag.length();
-                String closeTag = "</" + toolName + ">";
-                int closeIdx = blockContent.indexOf(closeTag, contentStart);
-                String params = closeIdx >= 0
-                        ? blockContent.substring(contentStart, closeIdx).trim()
-                        : blockContent.substring(contentStart).trim();
-                return new ToolCall(toolName, params);
-            }
-        }
-
-        return null;
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    //  鲁棒字符串扫描辅助方法 — O(N) indexOf，绝不使用 Regex
-    // ════════════════════════════════════════════════════════════════
-
-    /** 清理标签名中的空白、换行和非法字符 */
-    private String cleanTagName(String tagName) {
-        if (tagName == null) return "";
-        // 去除所有空白字符（空格、换行、制表符等）
-        StringBuilder sb = new StringBuilder(tagName.length());
-        for (int i = 0; i < tagName.length(); i++) {
-            char c = tagName.charAt(i);
-            if (!Character.isWhitespace(c) && c != '/' && c != '<' && c != '>') {
-                sb.append(c);
-            }
-        }
-        return sb.toString().trim();
-    }
-
-    /** 查找已注册工具名对应的标签起始位置 */
-    private int findToolTagStart(String text, int searchStart, java.util.Set<String> toolNames) {
-        int earliest = -1;
-        for (String name : toolNames) {
-            int idx = text.indexOf('<' + name + '>', searchStart);
-            if (idx >= 0 && (earliest < 0 || idx < earliest)) {
-                earliest = idx;
-            }
-        }
-        return earliest;
-    }
-
-    /** 查找闭合标签位置，容忍标签前后的空白 */
-    private int findCloseTag(String text, int searchStart, String tagName) {
-        String closeTag = "</" + tagName + ">";
-        return text.indexOf(closeTag, searchStart);
-    }
-
-    /** 从指定位置提取完整的 JSON 对象（花括号匹配，引号感知） */
-    private String extractCompleteJsonObject(String text, int startIdx) {
-        if (startIdx >= text.length() || text.charAt(startIdx) != '{') return null;
-        int depth = 0;
-        boolean inString = false;
-        boolean escape = false;
-        int pos = startIdx;
-
-        while (pos < text.length()) {
-            char c = text.charAt(pos);
-            if (escape) {
-                escape = false;
-            } else if (c == '\\' && inString) {
-                escape = true;
-            } else if (c == '"') {
-                inString = !inString;
-            } else if (!inString) {
-                if (c == '{') depth++;
-                else if (c == '}') {
-                    depth--;
-                    if (depth == 0) {
-                        return text.substring(startIdx, pos + 1);
-                    }
-                }
-            }
-            pos++;
-        }
-        return null;
-    }
-
-    /** 从 JSON 字符串中提取指定字段的值（简单线性扫描，不依赖正则） */
-    private String extractJsonFieldValue(String json, String fieldName) {
-        String searchKey = "\"" + fieldName + "\"";
-        int keyIdx = json.indexOf(searchKey);
-        if (keyIdx < 0) return null;
-
-        // 找到冒号
-        int colonIdx = json.indexOf(':', keyIdx + searchKey.length());
-        if (colonIdx < 0) return null;
-
-        // 跳过冒号后的空白
-        int valueStart = colonIdx + 1;
-        while (valueStart < json.length() && Character.isWhitespace(json.charAt(valueStart))) {
-            valueStart++;
-        }
-
-        if (valueStart >= json.length()) return null;
-
-        char firstChar = json.charAt(valueStart);
-        if (firstChar == '"') {
-            // 字符串值
-            int endIdx = json.indexOf('"', valueStart + 1);
-            // 处理转义引号
-            while (endIdx > 0 && json.charAt(endIdx - 1) == '\\') {
-                endIdx = json.indexOf('"', endIdx + 1);
-            }
-            if (endIdx < 0) return null;
-            return json.substring(valueStart + 1, endIdx);
-        } else if (firstChar == '{' || firstChar == '[') {
-            // 对象或数组值 — 使用括号匹配
-            return extractCompleteJsonObject(json, valueStart);
-        } else {
-            // 数字、布尔值等
-            int valueEnd = valueStart + 1;
-            while (valueEnd < json.length() && json.charAt(valueEnd) != ',' && json.charAt(valueEnd) != '}') {
-                valueEnd++;
-            }
-            return json.substring(valueStart, valueEnd).trim();
-        }
-    }
-
-    /** JSON 字符串转义 */
-    private String escapeJsonString(String s) {
-        if (s == null) return "";
-        return s.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "").replace("\t", "\\t");
-    }
 
     /**
      * 执行单个工具调用（含权限检查）。
@@ -1152,7 +866,7 @@ public class QueryEngine {
     /**
      * 工具调用记录。
      */
-    private record ToolCall(String toolName, String paramsJson) {}
+    record ToolCall(String toolName, String paramsJson) {}
 
     /**
      * 并行工具执行结果记录。

@@ -3,9 +3,14 @@ module com.ouisani.aios {
     requires com.google.gson;
     requires java.net.http;
     requires java.desktop;
+    requires java.management;
+    requires jdk.management;
     requires org.graalvm.polyglot;
     requires io.javalin;
     requires com.fasterxml.jackson.databind;
+    requires ai.djl.api;
+    requires ai.djl.tokenizers;
+    requires ai.djl.onnxruntime_engine;
     exports com.ouisani.aios.core;
     exports com.ouisani.aios.core.bridge;
     exports com.ouisani.aios.core.cache;
@@ -33,6 +38,7 @@ module com.ouisani.aios {
     exports com.ouisani.aios.core.memory;
     exports com.ouisani.aios.core.memory.connector;
     exports com.ouisani.aios.core.memory.providers;
+    exports com.ouisani.aios.core.overnight;
     exports com.ouisani.aios.core.network;
     exports com.ouisani.aios.core.observability;
     exports com.ouisani.aios.core.observability.subscribers.metrics;
@@ -52,6 +58,8 @@ module com.ouisani.aios {
     exports com.ouisani.aios.core.skill;
     exports com.ouisani.aios.core.snapshot;
     exports com.ouisani.aios.core.swarm;
+    exports com.ouisani.aios.core.plan;
+    exports com.ouisani.aios.core.ranking;
     exports com.ouisani.aios.core.syscall;
     exports com.ouisani.aios.core.syscall.schema;
     exports com.ouisani.aios.core.task;
@@ -97,6 +105,7 @@ module com.ouisani.aios {
     opens com.ouisani.aios.core.memory;
     opens com.ouisani.aios.core.memory.connector;
     opens com.ouisani.aios.core.memory.providers;
+    opens com.ouisani.aios.core.overnight;
     opens com.ouisani.aios.core.network;
     opens com.ouisani.aios.core.observability;
     opens com.ouisani.aios.core.observability.subscribers.metrics;
@@ -117,6 +126,8 @@ module com.ouisani.aios {
     opens com.ouisani.aios.core.skill;
     opens com.ouisani.aios.core.snapshot;
     opens com.ouisani.aios.core.swarm;
+    opens com.ouisani.aios.core.plan;
+    opens com.ouisani.aios.core.ranking;
     opens com.ouisani.aios.core.syscall;
     opens com.ouisani.aios.core.syscall.schema;
     opens com.ouisani.aios.core.task;

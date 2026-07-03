@@ -1,9 +1,12 @@
 package com.ouisani.aios.vfs;
 
 import com.ouisani.aios.core.VfsNode;
+import com.ouisani.aios.core.tool.DataTypes;
+import com.ouisani.aios.core.tool.Port;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -54,6 +57,19 @@ public non-sealed class PipeNode implements VfsNode {
     @Override
     public VfsNodeType nodeType() {
         return VfsNodeType.PIPE;
+    }
+
+    // ── 强类型 I/O 契约 ──
+    @Override
+    public List<Port> inputPorts() {
+        return List.of(new Port("data", DataTypes.PLAIN_TEXT,
+                "流式数据块（write/put 入口，FIFO 队列）", true));
+    }
+
+    @Override
+    public List<Port> outputPorts() {
+        return List.of(new Port("data", DataTypes.PLAIN_TEXT,
+                "FIFO 输出的数据块（read/take 出口）", true));
     }
 
     @Override

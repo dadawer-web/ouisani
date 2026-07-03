@@ -1,6 +1,8 @@
 package com.ouisani.aios.vfs;
 
 import com.ouisani.aios.core.VfsNode;
+import com.ouisani.aios.core.tool.DataTypes;
+import com.ouisani.aios.core.tool.Port;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +12,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
@@ -54,6 +57,19 @@ public non-sealed class HttpNode implements VfsNode {
     @Override
     public VfsNodeType nodeType() {
         return VfsNodeType.WEBHOOK;
+    }
+
+    // ── 强类型 I/O 契约 ──
+    @Override
+    public List<Port> inputPorts() {
+        return List.of(new Port("request", DataTypes.JSON_DATA,
+                "HTTP 请求 JSON：{url, method, body}（write 入口）", true));
+    }
+
+    @Override
+    public List<Port> outputPorts() {
+        return List.of(new Port("response", DataTypes.HTTP_RESPONSE,
+                "HTTP 响应 JSON：{status, body}（read 出口）", true));
     }
 
     @Override

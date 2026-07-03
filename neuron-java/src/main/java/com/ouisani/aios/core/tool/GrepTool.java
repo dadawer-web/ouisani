@@ -6,6 +6,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
@@ -99,5 +101,34 @@ public class GrepTool implements Tool<GrepTool.Input> {
 
     @Override public String prompt() {
         return "Use grep to search file contents. Prefer glob filter to narrow search scope. Results are limited to 200 matches.";
+    }
+
+    // ── 强类型 I/O 契约 ──
+    @Override
+    public List<Port> inputPorts() {
+        return List.of(
+            new Port("pattern", DataTypes.PLAIN_TEXT, "正则表达式搜索模式"),
+            new Port("path", DataTypes.FILE_PATH, "搜索目录或文件路径（默认当前目录）"),
+            new Port("glob", DataTypes.PLAIN_TEXT, "文件名过滤模式（如 *.java）")
+        );
+    }
+
+    @Override
+    public List<Port> outputPorts() {
+        return List.of(
+            new Port("matches", DataTypes.PLAIN_TEXT, "匹配的行（带文件名和行号）")
+        );
+    }
+
+    @Override
+    public Optional<ToolExample> example() {
+        return Optional.of(new ToolExample(
+            "如果你需要在代码库中搜索特定函数",
+            Map.of(
+                "pattern", "public.*compile",
+                "path", "/vfs/workspace/src",
+                "include", "*.java"
+            )
+        ));
     }
 }

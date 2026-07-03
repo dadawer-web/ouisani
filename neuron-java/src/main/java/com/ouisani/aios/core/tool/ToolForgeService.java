@@ -1,6 +1,5 @@
 package com.ouisani.aios.core.tool;
 
-import com.ouisani.aios.user.sdk.AiosSdk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,7 +55,7 @@ public class ToolForgeService {
      * @param workingDir  工作目录
      * @return 锻造成功的工具名称，失败返回 null
      */
-    public String forge(String description, String agentId, AiosSdk sdk, String workingDir) {
+    public String forge(String description, String agentId, ToolSdk sdk, String workingDir) {
         log.info("[ToolForge] Agent '{}' 请求锻造工具: {}", agentId, description);
 
         try {
@@ -109,7 +108,7 @@ public class ToolForgeService {
     /**
      * 调用已锻造的工具。
      */
-    public String invokeForgedTool(String toolName, String argsJson, String agentId, AiosSdk sdk, String workingDir) {
+    public String invokeForgedTool(String toolName, String argsJson, String agentId, ToolSdk sdk, String workingDir) {
         DynamicForgedTool tool = forgedTools.get(toolName);
         if (tool == null) {
             return "Error: Forged tool '" + toolName + "' not found";
@@ -247,7 +246,7 @@ public class ToolForgeService {
         return null;
     }
 
-    private boolean validateSyntax(String code, String agentId, AiosSdk sdk, String workingDir) {
+    private boolean validateSyntax(String code, String agentId, ToolSdk sdk, String workingDir) {
         try {
             // 用 python3 -c "compile(...)" 验证语法
             String escapedCode = code.replace("'", "'\"'\"'");

@@ -79,11 +79,14 @@ public class AgentTool implements Tool<AgentTool.Input> {
         String agentId = "sub_" + System.currentTimeMillis();
         String prompt = buildPrompt(input);
 
-        log.info("[AgentTool] 正在启动子 Agent: blueprint={}, background={}",
+        // 提取父 Agent ID（从 context 或使用默认值）
+        String parentAgentId = context.agentId() != null ? context.agentId() : "unknown_parent";
+
+        log.info("[AgentTool] 正在启动子 Agent: blueprint={}, background={}, parent={}",
                 input.blueprintPath().isEmpty() ? "(generic)" : input.blueprintPath(),
-                input.runInBackground());
-        System.out.printf("[AgentTool] ├─ 正在启动子 Agent: blueprint=%s%n",
-                input.blueprintPath().isEmpty() ? "(generic)" : input.blueprintPath());
+                input.runInBackground(), parentAgentId);
+        System.out.printf("[AgentTool] ├─ 正在启动子 Agent: blueprint=%s, parent=%s%n",
+                input.blueprintPath().isEmpty() ? "(generic)" : input.blueprintPath(), parentAgentId);
 
         if (input.runInBackground()) {
             // 异步执行 — 强制沙箱隔离
@@ -96,9 +99,33 @@ public class AgentTool implements Tool<AgentTool.Input> {
                     + "\nStatus: " + task.status()
                     + "\nOutput routed to EventBus: sys.sandbox.agent." + task.taskId());
         } else {
-            // 同步执行 — 使用 QueryEngine
-            QueryEngine engine = new QueryEngine(context.sdk(), agentId, context.workingDir());
-            String result = engine.query(prompt);
+            // 同步执行 — 使用 waitpid() 阻塞原语
+            // 1. 在 WaitRegistry 中注册子 Agent
+            AgentWaitRegistry.instance().registerChild(agentId, parentAgentId);
+
+            // 2. 在虚拟线程中启动子 Agent 的 QueryEngine
+            Thread.startVirtualThread(() -> {
+                try {
+                    QueryEngine engine = new QueryEngine(context.sdk(), agentId, context.workingDir());
+                    String result = engine.query(prompt);
+                    AgentWaitRegistry.instance().completeChild(agentId, result);
+                } catch (Exception e) {
+                    log.error("[AgentTool] 子 Agent 执行异常: agentId={}, error={}", agentId, e.getMessage());
+                    AgentWaitRegistry.instance().failChild(agentId, e.getMessage());
+                }
+            });
+
+            // 3. 父 Agent 阻塞等待子 Agent 完成 — 对标 waitpid()
+            //    虚拟线程被挂起，释放 CPU，直到子 Agent 完成
+            //    默认超时 5 分钟，防止僵尸进程永久阻塞
+            log.info("[AgentTool] 父 Agent {} 正在等待子 Agent {} 完成 (waitpid)...", parentAgentId, agentId);
+            String result = AgentWaitRegistry.instance().waitForChild(agentId, 300_000);
+
+            if (result == null) {
+                return ToolOutput.fail("子 Agent 执行超时或失败: " + agentId);
+            }
+
+            log.info("[AgentTool] 子 Agent {} 已完成，结果长度: {}", agentId, result.length());
             return ToolOutput.ok(result);
         }
     }

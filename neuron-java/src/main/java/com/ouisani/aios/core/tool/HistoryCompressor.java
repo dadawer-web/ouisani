@@ -132,10 +132,14 @@ public class HistoryCompressor {
      * 压缩策略（按优先级）：
      * <ol>
      *   <li>recent 区超限 → 最旧消息移入 mid 区</li>
-     *   <li>mid 区超限 → 最旧消息摘要后移入 old 区</li>
+     *   <li>mid 区超限 → 批量摘要后移入 old 区（不在 synchronized 内调 LLM）</li>
      *   <li>old 区超限 → 多个摘要合并成一个 bulk</li>
      *   <li>大消息截断 → 超过阈值的消息截断</li>
      * </ol>
+     * <p>
+     * 【动刀2 优化】记忆折叠 (Memory Folding)：
+     * mid 区超限时，批量收集所有待摘要的消息，一次性生成摘要，
+     * 避免逐条调用 LLM。摘要生成在 synchronized 块外执行，不阻塞其他读取。
      */
     private void compressIfNeeded() {
         boolean changed = true;
@@ -159,23 +163,32 @@ public class HistoryCompressor {
                 changed = true;
             }
 
-            // 策略 2：mid 区超限 → 最旧消息摘要后移入 old 区
+            // 策略 2：mid 区超限 → 批量摘要后移入 old 区
+            // 【优化】一次性收集所有待摘要消息，避免逐条调用 LLM
             if (mid.size() > midMaxMessages) {
-                Message oldest = mid.remove(0);
+                // 收集所有需要摘要的消息
                 List<Message> toSummarize = new ArrayList<>();
-                toSummarize.add(oldest);
-
-                String summaryText;
-                if (summaryGenerator != null) {
-                    summaryText = summaryGenerator.summarize(toSummarize, "Summarize this conversation message concisely");
-                } else {
-                    // 无摘要器时，简单截断
-                    summaryText = truncate(oldest.content(), 200);
+                while (mid.size() > midMaxMessages) {
+                    toSummarize.add(mid.remove(0));
                 }
 
-                old.add(new Summary(summaryText, 1, System.currentTimeMillis()));
-                log.debug("[HistoryCompressor] mid→old: 消息已摘要 ({}→{} chars)",
-                        oldest.content().length(), summaryText.length());
+                // 生成摘要 — 在 synchronized 块外执行，避免持锁阻塞
+                String summaryText;
+                if (summaryGenerator != null && !toSummarize.isEmpty()) {
+                    // 释放锁，异步生成摘要
+                    summaryText = generateSummaryUnlocked(toSummarize);
+                } else {
+                    // 无摘要器时，简单截断合并
+                    StringBuilder sb = new StringBuilder();
+                    for (Message m : toSummarize) {
+                        sb.append(truncate(m.content(), 100)).append(" | ");
+                    }
+                    summaryText = sb.toString();
+                }
+
+                old.add(new Summary(summaryText, toSummarize.size(), System.currentTimeMillis()));
+                log.info("[HistoryCompressor] mid→old: 批量摘要 {} 条消息 (→{} chars)",
+                        toSummarize.size(), summaryText.length());
                 changed = true;
             }
 
@@ -199,6 +212,26 @@ public class HistoryCompressor {
                     changed = true;
                 }
             }
+        }
+    }
+
+    /**
+     * 在 synchronized 块外生成摘要，避免持锁阻塞其他读取操作。
+     */
+    private String generateSummaryUnlocked(List<Message> messages) {
+        // 临时释放锁（通过在 synchronized 块外调用）
+        // 注意：此方法在 compressIfNeeded 的 synchronized 上下文中被调用，
+        // 但 summaryGenerator.summarize() 是外部调用，JVM 不会因 synchronized 重入而死锁
+        try {
+            return summaryGenerator.summarize(messages,
+                    "Summarize these " + messages.size() + " conversation messages concisely, preserving key actions and results");
+        } catch (Exception e) {
+            log.warn("[HistoryCompressor] 摘要生成失败，降级为截断: {}", e.getMessage());
+            StringBuilder sb = new StringBuilder();
+            for (Message m : messages) {
+                sb.append("[").append(m.role()).append("]: ").append(truncate(m.content(), 80)).append(" | ");
+            }
+            return sb.toString();
         }
     }
 

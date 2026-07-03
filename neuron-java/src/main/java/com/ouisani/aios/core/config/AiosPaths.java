@@ -237,6 +237,27 @@ public final class AiosPaths {
         return resolve("AIOS_CRASH_DIR", "aios.crash.dir", aiosHome() + "/var/crash");
     }
 
+    /** Overnight 长跑运行目录 — manifest 与任务卡片的 VFS 持久化根路径 */
+    public static String overnightDir() {
+        return resolve("AIOS_OVERNIGHT_DIR", "aios.overnight.dir", aiosHome() + "/var/run/overnight");
+    }
+
+    /** VersionedPlan 持久化目录 — 镜像 jcode swarm_persistence state_dir */
+    public static String planDir() {
+        return resolve("AIOS_PLAN_DIR", "aios.plan.dir", aiosHome() + "/var/run/plan");
+    }
+
+    /** 本地 ONNX 模型目录 — 镜像 jcode ~/.jcode/models/all-MiniLM-L6-v2（含 model.onnx + tokenizer.json） */
+    public static String modelsDir() {
+        return resolve("AIOS_MODELS_DIR", "aios.models.dir",
+                aiosHome() + "/var/models/all-MiniLM-L6-v2");
+    }
+
+    /** 安全裁决持久化目录 — 镜像 jcode ~/.jcode/safety（queue.json + history.json） */
+    public static String safetyDir() {
+        return resolve("AIOS_SAFETY_DIR", "aios.safety.dir", aiosHome() + "/var/safety");
+    }
+
     // ════════════════════════════════════════════════════════════════
     //  VFS 虚拟路径 — Agent 可见的路径
     // ════════════════════════════════════════════════════════════════

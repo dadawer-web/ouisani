@@ -38,13 +38,32 @@ public class ToolRegistry {
 
     /**
      * 注册一个工具。
+     * <p>
+     * 强类型 I/O 契约校验：如果工具未声明 inputPorts / outputPorts，
+     * 会输出 WARN 日志提醒开发者补全声明（不阻止注册，向后兼容）。
      */
     public <I extends ToolInput> void register(Tool<I> tool) {
         if (tools.containsKey(tool.name())) {
             log.warn("[ToolRegistry] 工具 '{}' 已注册，正在覆盖", tool.name());
         }
         tools.put(tool.name(), tool);
-        log.info("[ToolRegistry] 已注册工具: {} ({})", tool.name(), tool.description());
+
+        // ── 强类型 I/O 契约校验 ──
+        if (tool.hasIOContract()) {
+            String inputTypes = tool.inputPorts().stream()
+                    .map(p -> p.name() + ":" + p.type())
+                    .reduce((a, b) -> a + ", " + b)
+                    .orElse("(none)");
+            String outputTypes = tool.outputPorts().stream()
+                    .map(p -> p.name() + ":" + p.type())
+                    .reduce((a, b) -> a + ", " + b)
+                    .orElse("(none)");
+            log.info("[ToolRegistry] 已注册工具: {} | I/O 契约: IN[{}] → OUT[{}]",
+                    tool.name(), inputTypes, outputTypes);
+        } else {
+            log.warn("[ToolRegistry] 工具 '{}' 未声明 I/O 契约 (inputPorts/outputPorts 为空)，" +
+                    "建议补全声明以启用流水线类型检查", tool.name());
+        }
     }
 
     /**
@@ -63,15 +82,48 @@ public class ToolRegistry {
     }
 
     /**
+     * 注销工具 — 从注册表中移除指定工具。
+     * <p>
+     * 主要用于动态注册的 MCP 工具在服务器断开时清理。
+     *
+     * @param name 工具名
+     * @return 被移除的工具，不存在返回 null
+     */
+    public Tool<? extends ToolInput> unregister(String name) {
+        Tool<? extends ToolInput> removed = tools.remove(name);
+        if (removed != null) {
+            log.info("[ToolRegistry] 工具已注销: {}", name);
+        }
+        return removed;
+    }
+
+    /**
      * 生成工具列表的 JSON 描述，供 LLM 理解可用的工具集。
      * 格式兼容 OpenAI function calling schema。
+     * <p>
+     * 强类型 I/O 契约：同时展示每个工具的 inputPorts / outputPorts，
+     * 让 LLM 知道工具之间如何衔接（吃进去什么，吐出来什么）。
      */
     public String toolsDescription() {
         StringBuilder sb = new StringBuilder();
         for (Tool<? extends ToolInput> tool : tools.values()) {
             sb.append("## ").append(tool.name()).append("\n");
             sb.append(tool.description()).append("\n");
-            sb.append("Input Schema: ").append(tool.inputSchema()).append("\n\n");
+            sb.append("Input Schema: ").append(tool.inputSchema()).append("\n");
+            // 强类型 I/O 契约展示
+            if (tool.hasIOContract()) {
+                sb.append("Input Ports: ");
+                sb.append(tool.inputPorts().stream()
+                        .map(p -> p.name() + "(" + p.type() + ")")
+                        .reduce((a, b) -> a + ", " + b)
+                        .orElse("none")).append("\n");
+                sb.append("Output Ports: ");
+                sb.append(tool.outputPorts().stream()
+                        .map(p -> p.name() + "(" + p.type() + ")")
+                        .reduce((a, b) -> a + ", " + b)
+                        .orElse("none")).append("\n");
+            }
+            sb.append("\n");
         }
         return sb.toString();
     }

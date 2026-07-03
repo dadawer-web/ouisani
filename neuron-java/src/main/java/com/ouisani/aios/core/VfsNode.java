@@ -1,5 +1,6 @@
 package com.ouisani.aios.core;
 
+import com.ouisani.aios.core.tool.Port;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,7 +30,9 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
         com.ouisani.aios.vfs.MutableFileNode,
         com.ouisani.aios.vfs.RemoteDeviceMountNode,
         com.ouisani.aios.vfs.DesktopNotifyNode,
-        com.ouisani.aios.vfs.ChromeBridgeNode {
+        com.ouisani.aios.vfs.ChromeBridgeNode,
+        com.ouisani.aios.vfs.IndexNode,
+        com.ouisani.aios.vfs.OverlayNode {
 
     Logger log = LoggerFactory.getLogger(VfsNode.class);
 
@@ -67,6 +70,45 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
         final String frozenContent = this.read();
         final String frozenPath = this.path() + " [SHADOW]";
         return new com.ouisani.aios.vfs.ShadowCopyNode(frozenPath, this.nodeType(), frozenContent, this.ownerUid());
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  强类型 I/O 契约 (Type-Safe I/O Contract)
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 声明此 VFS 节点接受的数据输入端口 — "吃进去什么"。
+     * <p>
+     * 默认返回空列表（无 I/O 契约声明，向后兼容）。
+     * 有明确数据格式的设备节点（VectorNode / HttpNode 等）应覆写此方法，
+     * 声明 write(String) 所期望的数据类型，供 GraphValidator 在部署前校验。
+     *
+     * @return 输入端口列表，默认为空
+     */
+    default List<Port> inputPorts() {
+        return List.of();
+    }
+
+    /**
+     * 声明此 VFS 节点产出的数据输出端口 — "吐出来什么"。
+     * <p>
+     * 默认返回空列表（无 I/O 契约声明，向后兼容）。
+     * 有明确数据格式的设备节点应覆写此方法，
+     * 声明 read() 所产出的数据类型，供下游节点类型匹配。
+     *
+     * @return 输出端口列表，默认为空
+     */
+    default List<Port> outputPorts() {
+        return List.of();
+    }
+
+    /**
+     * 是否声明了强类型 I/O 契约。
+     *
+     * @return true 如果 inputPorts 或 outputPorts 非空
+     */
+    default boolean hasIOContract() {
+        return !inputPorts().isEmpty() || !outputPorts().isEmpty();
     }
 
     /**

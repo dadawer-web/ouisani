@@ -2,6 +2,8 @@ package com.ouisani.aios.vfs;
 
 import com.ouisani.aios.core.VfsNode;
 import com.ouisani.aios.core.llm.LlmProvider;
+import com.ouisani.aios.core.tool.DataTypes;
+import com.ouisani.aios.core.tool.Port;
 import com.ouisani.aios.core.vfs.VfsJournal;
 
 import java.util.*;
@@ -73,6 +75,19 @@ public non-sealed class GraphNode implements VfsNode {
     @Override
     public VfsNodeType nodeType() {
         return VfsNodeType.DEVICE;
+    }
+
+    // ── 强类型 I/O 契约 ──
+    @Override
+    public List<Port> inputPorts() {
+        return List.of(new Port("text", DataTypes.PLAIN_TEXT,
+                "待抽取三元组的文本内容（write 入口）", true));
+    }
+
+    @Override
+    public List<Port> outputPorts() {
+        return List.of(new Port("graph", DataTypes.JSON_DATA,
+                "知识图谱 JSON：实体+关系（read 出口）", true));
     }
 
     @Override

@@ -120,6 +120,25 @@ public class EventBus {
         return handlers != null ? handlers.size() : 0;
     }
 
+    /**
+     * 获取责任链事件分发器 — 提供按优先级排序、支持 accept 中断和单 handler 超时的事件处理模式。
+     * <p>
+     * 借鉴 Apix 的 {@code event_registry.py}，与 {@link #broadcast} 的纯 pub/sub 模式互补：
+     * <ul>
+     *   <li><b>{@link #broadcast}</b>：所有订阅者平等并发执行，互不影响</li>
+     *   <li><b>{@link ChainEventDispatcher}</b>：handler 按优先级排序，顺序执行，
+     *       高优先级 handler 可通过 {@link ChainEventItem#accept()} 中断低优先级 handler</li>
+     * </ul>
+     * <p>
+     * <b>适用场景</b>：安全审查、权限校验等需要顺序决策的场景。
+     *
+     * @return 责任链事件分发器单例
+     * @see ChainEventDispatcher
+     */
+    public ChainEventDispatcher chainDispatcher() {
+        return ChainEventDispatcher.instance();
+    }
+
     private static String clientId(SseClient client) {
         return "sse-" + System.identityHashCode(client) + "-" + System.nanoTime() % 10000;
     }

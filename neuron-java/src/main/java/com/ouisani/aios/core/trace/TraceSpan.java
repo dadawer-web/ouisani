@@ -88,7 +88,7 @@ public class TraceSpan {
         this.parentSpanId = b.parentSpanId;
         this.name = b.name;
         this.spanType = b.spanType != null ? b.spanType : SpanType.CUSTOM;
-        this.startTimeNanos = b.startTimeNanos != 0 ? b.startTimeNanos : System.nanoTime();
+        this.startTimeNanos = b.startTimeNanos != null ? b.startTimeNanos : System.nanoTime();
         this.endTimeNanos = b.endTimeNanos;
         this.attributes = new LinkedHashMap<>(b.attributes);
         this.events = new ArrayList<>(b.events);

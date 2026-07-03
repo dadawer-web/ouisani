@@ -329,4 +329,49 @@ public final class VectorMath {
         }
         return result;
     }
+
+    // ════════════════════════════════════════════════════════════════
+    //  有界 top-k 语义检索 (镜像 jcode find_similar, lib.rs:402-418)
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * findSimilar 的结果项：候选在原列表中的索引 + 相似度分数。
+     */
+    public record ScoredIndex(int index, float score) {}
+
+    /**
+     * 有界 top-k 语义检索 — 镜像 jcode {@code find_similar}（lib.rs:402-418）。
+     * <p>
+     * 用 {@link BoundedTopK} 最小堆保持 top-k，O(N log K)，避免全量排序的 O(N log N)。
+     * <ul>
+     *   <li>对每个候选计算 cosine 相似度，过滤 {@code score >= threshold}</li>
+     *   <li>维度不匹配的候选被跳过（不抛异常）— 保证中途切换 embedding provider
+     *       （如 mockEmbed 1536 维 → ONNX 384 维）时既有索引查询不崩溃</li>
+     *   <li>输出按 score 降序、ordinal（索引）升序排列</li>
+     * </ul>
+     *
+     * @param query      查询向量
+     * @param candidates 候选向量列表
+     * @param threshold  最低相似度阈值（cosine ∈ [-1,1]；传 -1.0f 表示不过滤）
+     * @param topK       返回数量上限（&lt;= 0 返回空）
+     * @return 排序后的 (index, score) 列表
+     */
+    public static List<ScoredIndex> findSimilar(float[] query, List<float[]> candidates,
+                                                float threshold, int topK) {
+        BoundedTopK<Integer> heap = new BoundedTopK<>(topK);
+        for (int i = 0; i < candidates.size(); i++) {
+            float score;
+            try {
+                score = cosineSimilarity(query, candidates.get(i));
+            } catch (IllegalArgumentException e) {
+                continue; // 维度不匹配 — skip
+            }
+            if (score >= threshold) {
+                heap.offer(score, i);
+            }
+        }
+        return heap.drainSorted().stream()
+                .map(e -> new ScoredIndex(e.value(), e.score()))
+                .toList();
+    }
 }

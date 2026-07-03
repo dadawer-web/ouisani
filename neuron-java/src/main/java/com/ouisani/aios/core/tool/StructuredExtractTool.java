@@ -1,6 +1,5 @@
 package com.ouisani.aios.core.tool;
 
-import com.ouisani.aios.user.sdk.AiosSdk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -82,7 +81,7 @@ public class StructuredExtractTool implements Tool<StructuredExtractTool.Input> 
             String extractPrompt = buildExtractPrompt(input.prompt(), normalizedSchema, content);
 
             // 5. 调用 LLM
-            AiosSdk sdk = context.sdk();
+            ToolSdk sdk = context.sdk();
             String llmResponse = sdk.think(context.agentId(), extractPrompt);
 
             // 6. 修复和验证 JSON

@@ -84,7 +84,28 @@ public class SystemPromptBuilder {
         sb.append("- For complex tasks, consider delegating to a sub-agent using the agent tool\n");
         sb.append("- Always verify your changes by reading the file after editing\n");
 
-        return sb.toString();
+        String prompt = sb.toString();
+
+        // ── P5: CacheAligner 前缀稳定化检测 — 借鉴 Headroom cache_aligner ──
+        // 纯检测不改写：检测 prompt 中的动态内容（UUID/时间戳/JWT/哈希），
+        // 这些会破坏 LLM provider 的 KV cache 前缀匹配。
+        // 注意：上面的 LocalDateTime.now() 就是动态内容，每次请求都不同！
+        try {
+            com.ouisani.aios.core.compact.CacheAligner.instance().detectVolatileContent(prompt);
+        } catch (Exception e) {
+            log.debug("[SystemPromptBuilder] CacheAligner 检测失败: {}", e.getMessage());
+        }
+
+        // ── P4: OutputTokenReducer 啰嗦度转向 — 借鉴 Headroom verbosity_steerer ──
+        // 在 system prompt 尾部追加啰嗦度指令（追加在尾部而非头部，保护 KV cache 前缀）
+        try {
+            prompt = com.ouisani.aios.core.compact.OutputTokenReducer.instance()
+                    .applyVerbositySteering(prompt);
+        } catch (Exception e) {
+            log.debug("[SystemPromptBuilder] Verbosity steering 失败: {}", e.getMessage());
+        }
+
+        return prompt;
     }
 
     public static String build(String workingDir) {

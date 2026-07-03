@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>
  * 按优先级依次启动多个抓取引擎，第一个成功的结果胜出：
  * <ol>
+ *   <li>引擎0：Jina Reader（r.jina.ai，LLM 优化 Markdown，MRT=10s）— 借鉴 Apix/tools/web_search/providers/jina.py</li>
  *   <li>引擎1：Playwright/Puppeteer（JS 渲染，高质量，MRT=15s）</li>
  *   <li>引擎2：HTTP + HTML 解析（轻量快速，MRT=8s）</li>
  *   <li>引擎3：BashTool + curl（兜底，MRT=10s）</li>
@@ -77,7 +78,55 @@ public class WebScrapeTool implements Tool<WebScrapeTool.Input> {
         }
     }
 
-    // ── 三个引擎实现 ──
+    // ── 四个引擎实现 ──
+
+    /**
+     * 引擎0：Jina Reader（r.jina.ai）— 借鉴 Apix/tools/web_search/providers/jina.py。
+     * <p>
+     * 直接调用 {@code https://r.jina.ai/{url}} 获取为 LLM 优化的纯净 Markdown，
+     * 无需自己写正则剥离 HTML 标签。返回内容信噪比极高，避免上下文爆炸。
+     * <p>
+     * 当传统 HtmlToMarkdownTool 爬几万字无用 DOM 撑爆内存时，
+     * Jina Reader 返回的纯净 Markdown 能让 Agent 检索速度和准确率飙升。
+     */
+    private static class JinaReaderEngine implements ScrapeEngine {
+        @Override public String engineName() { return "jina-reader"; }
+        @Override public long mrtMs() { return 10000; }
+
+        @Override
+        public ScrapeResult scrape(String url, ToolContext context) {
+            try {
+                // 拼接 r.jina.ai 前缀
+                String jinaUrl = "https://r.jina.ai/" + url;
+                HttpRequest request = HttpRequest.newBuilder()
+                        .uri(URI.create(jinaUrl))
+                        .header("Accept", "text/plain")          // 返回纯 Markdown
+                        .header("X-Return-Format", "markdown")   // 强制 Markdown 格式
+                        .header("X-With-Links-Summary", "true")  // 链接汇总
+                        .timeout(Duration.ofSeconds(10))
+                        .GET()
+                        .build();
+
+                HttpResponse<String> response = HTTP_CLIENT.send(request,
+                        HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+                if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                    String body = response.body();
+                    // Jina 返回的内容已经是 LLM 优化的 Markdown，无需再解析 HTML
+                    if (body != null && body.length() > 50) {
+                        return new ScrapeResult(true, body, engineName(),
+                                response.statusCode(), null);
+                    }
+                    return new ScrapeResult(false, null, engineName(),
+                            response.statusCode(), "Empty or too short body");
+                }
+                return new ScrapeResult(false, null, engineName(),
+                        response.statusCode(), "HTTP " + response.statusCode());
+            } catch (Exception e) {
+                return new ScrapeResult(false, null, engineName(), -1, e.getMessage());
+            }
+        }
+    }
 
     /** 引擎1：Playwright（JS 渲染，高质量） */
     private static class PlaywrightEngine implements ScrapeEngine {
@@ -168,8 +217,9 @@ public class WebScrapeTool implements Tool<WebScrapeTool.Input> {
         }
     }
 
-    // ── 引擎列表 ──
+    // ── 引擎列表 ── 瀑布流顺序：Jina Reader 优先（LLM 优化 Markdown）
     private final List<ScrapeEngine> engines = List.of(
+            new JinaReaderEngine(),
             new PlaywrightEngine(),
             new HttpEngine(),
             new CurlEngine()
@@ -178,7 +228,7 @@ public class WebScrapeTool implements Tool<WebScrapeTool.Input> {
     @Override public String name() { return "web_scrape"; }
 
     @Override public String description() {
-        return "Scrapes a web page using multi-engine waterfall (Playwright→HTTP→curl). Returns clean content. Better than web_fetch for JS-heavy sites.";
+        return "Scrapes a web page using multi-engine waterfall (JinaReader→Playwright→HTTP→curl). Jina Reader returns LLM-optimized clean Markdown first; falls back to Playwright/HTTP/curl. Better than web_fetch for JS-heavy sites.";
     }
 
     @Override public String inputSchema() {
@@ -262,6 +312,6 @@ public class WebScrapeTool implements Tool<WebScrapeTool.Input> {
     @Override public boolean readOnly() { return true; }
 
     @Override public String prompt() {
-        return "Use web_scrape for fetching web pages with JS rendering support. Uses multi-engine waterfall: Playwright→HTTP→curl. Prefer over web_fetch for modern websites.";
+        return "Use web_scrape for fetching web pages with JS rendering support. Uses multi-engine waterfall: JinaReader→Playwright→HTTP→curl. Jina Reader returns LLM-optimized clean Markdown first to avoid context bloat. Prefer over web_fetch for modern websites.";
     }
 }

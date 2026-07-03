@@ -1,6 +1,5 @@
 package com.ouisani.aios.core.tool;
 
-import com.ouisani.aios.user.sdk.AiosSdk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,7 +22,7 @@ public class DynamicForgedTool implements Tool<DynamicForgedTool.Input> {
     private final String entryFunction;
     private final String inputSchema;
     private final String agentId;
-    private final AiosSdk sdk;
+    private final ToolSdk sdk;
     private final String workingDir;
 
     /**
@@ -35,12 +34,12 @@ public class DynamicForgedTool implements Tool<DynamicForgedTool.Input> {
      * @param entryFunction  入口函数名（默认 "main"）
      * @param inputSchema    输入参数 JSON Schema
      * @param agentId        创建该工具的 Agent ID
-     * @param sdk            AIOS SDK
+     * @param sdk            工具层 SDK 契约（{@link ToolSdk}）
      * @param workingDir     工作目录
      */
     public DynamicForgedTool(String toolName, String toolDescription, String code,
                              String entryFunction, String inputSchema,
-                             String agentId, AiosSdk sdk, String workingDir) {
+                             String agentId, ToolSdk sdk, String workingDir) {
         this.toolName = toolName;
         this.toolDescription = toolDescription;
         this.code = code;

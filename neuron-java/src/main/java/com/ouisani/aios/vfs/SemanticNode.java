@@ -6,6 +6,8 @@ import com.ouisani.aios.core.llm.ComputeCore;
 import com.ouisani.aios.core.llm.LlmProvider;
 import com.ouisani.aios.core.llm.VectorMath;
 import com.ouisani.aios.core.telemetry.SemanticEtw;
+import com.ouisani.aios.core.tool.DataTypes;
+import com.ouisani.aios.core.tool.Port;
 import com.ouisani.aios.core.vfs.VfsJournal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -130,6 +132,19 @@ public non-sealed class SemanticNode implements VfsNode {
     @Override
     public VfsNodeType nodeType() {
         return VfsNodeType.SEMANTIC;
+    }
+
+    // ── 强类型 I/O 契约 ──
+    @Override
+    public List<Port> inputPorts() {
+        return List.of(new Port("memory", DataTypes.PLAIN_TEXT,
+                "自然语言记忆片段（write 入口，双写到向量卷+图谱卷）", true));
+    }
+
+    @Override
+    public List<Port> outputPorts() {
+        return List.of(new Port("stats", DataTypes.JSON_DATA,
+                "混合存储统计摘要 JSON（read 出口）", true));
     }
 
     @Override
@@ -458,20 +473,14 @@ public non-sealed class SemanticNode implements VfsNode {
             float[] queryVec = llmProvider.embed(query);
             List<VectorNode.VectorRecord> records = vectorVolume.getRecords();
 
-            for (int i = 0; i < records.size(); i++) {
-                VectorNode.VectorRecord record = records.get(i);
-                float similarity = VectorMath.cosineSimilarity(queryVec, record.vector());
-                results.add(new RankedResult(i, record.text(), similarity, 0.0));
+            List<float[]> vectors = new ArrayList<>(records.size());
+            for (VectorNode.VectorRecord r : records) vectors.add(r.vector());
+            // O(N log K) 有界堆 top-k — 镜像 jcode find_similar；维度不匹配的候选被跳过
+            List<VectorMath.ScoredIndex> top = VectorMath.findSimilar(queryVec, vectors, -1.0f, topK);
+            for (VectorMath.ScoredIndex si : top) {
+                VectorNode.VectorRecord record = records.get(si.index());
+                results.add(new RankedResult(si.index(), record.text(), si.score(), 0.0));
             }
-
-            // 按相似度降序排序
-            results.sort(Comparator.comparingDouble(RankedResult::vectorSimilarity).reversed());
-
-            // 截取 topK
-            if (results.size() > topK) {
-                results = results.subList(0, topK);
-            }
-
         } catch (Exception e) {
             log.error("[SemanticNode] Vector KNN search error: {}", e.getMessage());
         }

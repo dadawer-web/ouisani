@@ -1,0 +1,921 @@
+{
+  "total": 559,
+  "totals_by_pattern": {
+    "catch_exception": 502,
+    "catch_throwable": 4,
+    "empty_catch": 53,
+    "print_stack_trace": 0
+  },
+  "tracked_files": {
+    "src/main/java/com/ouisani/aios/core/TaskScheduler.java": {
+      "catch_exception": 2,
+      "catch_throwable": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/a2a/A2aFederation.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/a2a/A2aMessage.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/ast/AstGrepRunner.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/cache/SemanticCacheManager.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/cache/kvstate/KvCacheVfsStore.java": {
+      "catch_exception": 4,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/cgroup/CgroupManager.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/cluster/ClusterPeer.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/cluster/SemanticRaftNode.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "empty_catch": 2,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/compact/CompactService.java": {
+      "catch_exception": 4,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/compact/ContentTypeDetector.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/config/DeclarativeConfig.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/context/SystemPromptBuilder.java": {
+      "catch_exception": 4,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/crash/SemanticCrashAnalyzer.java": {
+      "catch_exception": 18,
+      "catch_throwable": 0,
+      "empty_catch": 2,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/dream/AutoDreamService.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "empty_catch": 3,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/dream/InstinctContextInjector.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/dream/InstinctExtractor.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/dream/LearnRuleWriter.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/dream/SessionAnalyzer.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/hibernation/HibernationManager.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/hibernation/SnapshotSerializer.java": {
+      "catch_exception": 4,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/hook/HookManager.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/ipc/OutputSchemaValidator.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/ipc/TraceContext.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/learning/instinct/InstinctStore.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/lifecycle/AgentLifecycleManager.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/lifecycle/HeartbeatScheduler.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/llm/InstructionDecoder.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/llm/LlmRouter.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/llm/SpeculativePredictor.java": {
+      "catch_exception": 6,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/llm/decode/SemanticFuzzyDecodeStrategy.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/llm/decode/StrictDecodeStrategy.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/mcp/McpClient.java": {
+      "catch_exception": 4,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/mcp/McpClientRegistry.java": {
+      "catch_exception": 9,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/mcp/McpHttpTransport.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/mcp/McpServer.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/mcp/McpSessionRegistry.java": {
+      "catch_exception": 5,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/memory/CognitiveDreamDaemon.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/memory/ContextInjector.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/memory/MemoryDir.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/memory/SomWindowController.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/memory/TokenOomKiller.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/memory/TokenZram.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/memory/connector/TwoLevelMemoryConnector.java": {
+      "catch_exception": 8,
+      "catch_throwable": 0,
+      "empty_catch": 2,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/memory/providers/TokenZramProvider.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/network/AppGateway.java": {
+      "catch_exception": 10,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/network/ChainEventDispatcher.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/network/EventBus.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/network/StateSyncChannel.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/network/SyscallServer.java": {
+      "catch_exception": 25,
+      "catch_throwable": 0,
+      "empty_catch": 6,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/observability/ObservabilityEventBus.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/pipeline/ContentPipeline.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/pipeline/QueryTransformer.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/pipeline/SummaryTransformer.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/pkg/AiosApt.java": {
+      "catch_exception": 5,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/plugin/DynamicToolBridge.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/plugin/ExtensibleHookRegistry.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/plugin/PluginDiscovery.java": {
+      "catch_exception": 1,
+      "catch_throwable": 3,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/plugin/PluginManager.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/plugin/WebSearchTool.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/recovery/CodeSurgeryStrategy.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/recovery/ContextWindowRecovery.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/recovery/RecoveryOrchestrator.java": {
+      "catch_exception": 7,
+      "catch_throwable": 0,
+      "empty_catch": 3,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/recovery/ResourceRefillStrategy.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/recovery/RuntimeFallbackRecovery.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/recovery/TopologyMutationStrategy.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/remote/RemoteSessionManager.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/rtos/WatchdogDaemon.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/sandbox/CompilerBridge.java": {
+      "catch_exception": 4,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/sandbox/GraalWasmSandbox.java": {
+      "catch_exception": 6,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/security/AiSecurityAuditor.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/security/BpfManager.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/security/BypassSecurityAuditor.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/security/GuardrailEngine.java": {
+      "catch_exception": 4,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/security/SecurityAuditHook.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/security/ToolCircuitBreaker.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/security/ZonePolicyLoader.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/security/crypto/EnvelopeEncryption.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/security/redteam/SecurityScanApprovalHook.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/skill/SkillLoader.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/snapshot/SnapshotManager.java": {
+      "catch_exception": 12,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/state/BoulderStateManager.java": {
+      "catch_exception": 6,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/swarm/InProcessWorker.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/syscall/SyscallDispatcher.java": {
+      "catch_exception": 19,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/syscall/schema/RawPayload.java": {
+      "catch_exception": 0,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/task/DreamTask.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/task/MoEIntentRouter.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/task/TaskHandle.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/task/TaskScheduler.java": {
+      "catch_exception": 4,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/team/AgentMailbox.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/team/FileMailboxBackend.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "empty_catch": 2,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/team/GenerationTracker.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/team/TeamManager.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/telemetry/SystemMonitorDaemon.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tick/SystemTickGenerator.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tick/TickSleepRegistry.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/AgentTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/AgentWaitRegistry.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/BashTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/DeterministicExtractTool.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/DynamicForgedTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/DynamicMcpTool.java": {
+      "catch_exception": 4,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/FileEditTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/FileReadTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/FileWriteTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/FrontendTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/GrepTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/HandoffTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/HistoryCompressor.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/HumanResponseTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/McpTool.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/McpToolBridge.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/QueryEngine.java": {
+      "catch_exception": 9,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/SecurityScanTool.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/SendMessageTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/StructuredExtractTool.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/ToolExecutionPipeline.java": {
+      "catch_exception": 5,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/tool/ToolForgeService.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/trace/TraceProxyFactory.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/trace/TracingManager.java": {
+      "catch_exception": 7,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/trace/builtin/EventBusTracingProcessor.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/transport/SseTransport.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/transport/WebSocketTransport.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/vfs/VfsAsyncWriter.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/vfs/VfsJournal.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/core/vfs/VfsLockManager.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/drivers/memory/Mem0Provider.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/operator/PluginLoader.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/operator/gateway/GatewayClient.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/operator/secrets/SecretRefResolver.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/operator/session/SessionManager.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/operator/tools/AstRewriteTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/operator/tools/AstSearchTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/operator/tools/BrowserTool.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/operator/tools/ComputerUseTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/operator/tools/DesktopGuiTool.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/operator/tools/TeamTool.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/operator/vision/VisionService.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/DaemonManager.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/AutoMedicAgent.java": {
+      "catch_exception": 8,
+      "catch_throwable": 0,
+      "empty_catch": 2,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/ChildEngineBuilder.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/ConditionEvaluator.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/ConditionNode.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/CrossValidationTemplate.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/EventBusBridgeLayer.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/ExternalAgentRunner.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "empty_catch": 2,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/OmniMotherAgent.java": {
+      "catch_exception": 6,
+      "catch_throwable": 0,
+      "empty_catch": 3,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/OperatorAgent.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/SkillForgeAgent.java": {
+      "catch_exception": 6,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/SubAgent.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/TopologyBenchmark.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/TopologyCompiler.java": {
+      "catch_exception": 4,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/WorkflowEngine.java": {
+      "catch_exception": 19,
+      "catch_throwable": 0,
+      "empty_catch": 2,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/omnifactory/tools/NotebookEditTool.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/redteam/RedTeamWorkflow.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/apps/redteam/SecurityAuditorAgent.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/bin/AiosAppManager.java": {
+      "catch_exception": 14,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/bridge/rpa/HostRpaManager.java": {
+      "catch_exception": 11,
+      "catch_throwable": 0,
+      "empty_catch": 2,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/cli/AiosShell.java": {
+      "catch_exception": 4,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/cli/IntentRouter.java": {
+      "catch_exception": 8,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/cli/MoEGatingRouter.java": {
+      "catch_exception": 6,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/container/ContainerRuntime.java": {
+      "catch_exception": 5,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/init/InitDaemon.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/user/sdk/AbstractAgent.java": {
+      "catch_exception": 4,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/vfs/ChromeBridgeNode.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/vfs/DesktopNotifyNode.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/vfs/GraphNode.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/vfs/GuiActionNode.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/vfs/GuiDomNode.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/vfs/HostSourceNode.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/vfs/HttpNode.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/vfs/RemoteDeviceMountNode.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/vfs/SemanticNode.java": {
+      "catch_exception": 3,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/vfs/VectorNode.java": {
+      "catch_exception": 1,
+      "catch_throwable": 0,
+      "empty_catch": 1,
+      "print_stack_trace": 0
+    },
+    "src/main/java/com/ouisani/aios/vfs/WebSocketNode.java": {
+      "catch_exception": 2,
+      "catch_throwable": 0,
+      "print_stack_trace": 0
+    }
+  },
+  "version": 1
+}

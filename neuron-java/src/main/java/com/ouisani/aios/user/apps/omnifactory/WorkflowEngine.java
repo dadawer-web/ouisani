@@ -5,6 +5,7 @@ import com.ouisani.aios.core.ipc.VariablePool;
 import com.ouisani.aios.core.network.EventBus;
 import com.ouisani.aios.core.state.BoulderCheckpoint;
 import com.ouisani.aios.core.state.BoulderStateManager;
+import com.ouisani.aios.core.tool.Port;
 import com.ouisani.aios.user.sdk.AiosSdk;
 import com.ouisani.aios.user.sdk.AbstractAgent;
 import org.slf4j.Logger;
@@ -53,10 +54,10 @@ public class WorkflowEngine {
     // ── 声明式边列表（借鉴 Langflow 的 Edge 路由机制） ──
     private final List<WorkflowEdge> edges = new ArrayList<>();
 
-    /** 活跃工作流的节点映射（workflowId → nodeMap） */
-    private final ConcurrentHashMap<String, Map<String, WorkflowNode>> activeNodeMaps = new ConcurrentHashMap<>();
-    /** 活跃工作流的上下文（workflowId → context） */
-    private final ConcurrentHashMap<String, WorkflowContext> activeContexts = new ConcurrentHashMap<>();
+    /** 活跃工作流注册表 — 节点映射与上下文的共享状态 */
+    private final WorkflowRegistry registry = new WorkflowRegistry();
+    /** 自愈器 — 故障恢复与拓扑突变 */
+    private final WorkflowHealer healer = new WorkflowHealer(this, registry);
 
     // 默认注册的 Layer
     private static final List<GraphEngineLayer> DEFAULT_LAYERS = List.of(
@@ -247,7 +248,7 @@ public class WorkflowEngine {
         }
 
         // 注册活跃工作流（供 resumeNode 查找节点和上下文）
-        registerActiveWorkflow(workflowId, nodeMap, context);
+        registry.registerActiveWorkflow(workflowId, nodeMap, context);
 
         // 构建有向无环图的 CompletableFuture 依赖链
         // ── 容错隔离：使用 handleAsync 替代 thenRunAsync，防止单节点失败级联传播 ──
@@ -397,14 +398,14 @@ public class WorkflowEngine {
                     }
                     if (!stillSuspended) {
                         log.info("[DAG Engine] 所有 SUSPENDED 节点已解决，注销活跃工作流: {}", workflowId);
-                        unregisterActiveWorkflow(workflowId);
+                        registry.unregisterActiveWorkflow(workflowId);
                         break;
                     }
                 }
             });
         } else {
             // 注销活跃工作流
-            unregisterActiveWorkflow(workflowId);
+            registry.unregisterActiveWorkflow(workflowId);
         }
     }
 
@@ -412,7 +413,7 @@ public class WorkflowEngine {
      * 执行单个节点 — 包含完整的事件驱动生命周期。
      * 支持迭代节点（Iteration Node）的子引擎递归调度。
      */
-    private void executeNode(WorkflowNode node, Map<String, WorkflowNode> nodeMap,
+    void executeNode(WorkflowNode node, Map<String, WorkflowNode> nodeMap,
                              WorkflowContext context, String workflowId) {
         // A. 检查依赖节点的健康状态 — 容错分支隔离
         // ── 借鉴 Kubernetes 的 Pod 故障隔离：只有直接依赖的分支失败才跳过 ──
@@ -516,6 +517,11 @@ public class WorkflowEngine {
                     // executor="external" 或 "external:claude-code" 等
                     log.info("[DAG Engine]   └─ 路由至 ExternalAgentRunner（外部 Agent CLI）");
                     taskAgent = new ExternalAgentRunner(node, context);
+                } else if (node.executor() != null && node.executor().startsWith("sub")) {
+                    // ── 主从智能体树 — 借鉴 Apix main_agent_node/sub_agent_node ──
+                    // executor="sub:tool_name" 挂载单一技能，或 "sub" 走纯 LLM 推理
+                    log.info("[DAG Engine]   └─ 路由至 SubAgent（主从树打工人）");
+                    taskAgent = new SubAgent(node, context);
                 } else {
                     log.info("[DAG Engine]   └─ 路由至 OmniMotherAgent（逻辑/代码）");
                     taskAgent = new OmniMotherAgent(node, context);
@@ -627,7 +633,7 @@ public class WorkflowEngine {
                     node.instanceId(), durationMs, e.getMessage());
 
             // ── Step 1: 生成 Semantic Core Dump ──
-            String dumpFilePath = generateSemanticCoreDump(node, e, context, workflowId, durationMs);
+            String dumpFilePath = healer.generateSemanticCoreDump(node, e, context, workflowId, durationMs);
 
             // ── Step 2: 挂起节点（SUSPENDED） ──
             node.setStatus(WorkflowNode.Status.SUSPENDED);
@@ -664,12 +670,12 @@ public class WorkflowEngine {
                     // 等待 120 秒，给 RecoveryOrchestrator 足够时间修复
                     Thread.sleep(120_000);
                     // 检查节点是否仍然 SUSPENDED
-                    WorkflowNode checkNode = findNodeInActiveWorkflows(suspendedNodeId);
+                    WorkflowNode checkNode = registry.findNodeInActiveWorkflows(suspendedNodeId);
                     if (checkNode != null && checkNode.getStatus() == WorkflowNode.Status.SUSPENDED) {
                         log.warn("[DAG Engine] 节点 '{}' 恢复超时（120s），自动降级为 FAILED", suspendedNodeId);
                         checkNode.setStatus(WorkflowNode.Status.FAILED);
                         // 通知下游节点可以继续（不再无限等待）
-                        WorkflowContext ctx = activeContexts.get(suspendedWorkflowId);
+                        WorkflowContext ctx = registry.getActiveWorkflowContext(suspendedWorkflowId);
                         if (ctx != null) {
                             ctx.commitNodeOutput(suspendedNodeId, Map.of(
                                     "status", "failed",
@@ -677,7 +683,7 @@ public class WorkflowEngine {
                             ));
                         }
                         // 重新触发下游 SKIPPED 节点（让它们自行判断是否可执行）
-                        Map<String, WorkflowNode> timeoutNodeMap = findNodeMapForWorkflow(suspendedWorkflowId);
+                        Map<String, WorkflowNode> timeoutNodeMap = registry.findNodeMapForWorkflow(suspendedWorkflowId);
                         if (timeoutNodeMap != null) {
                             for (WorkflowNode downstream : timeoutNodeMap.values()) {
                                 if (downstream.getUpstreamDependencies().contains(suspendedNodeId)
@@ -875,7 +881,7 @@ public class WorkflowEngine {
     /**
      * 向所有已注册的 Layer 发送事件。
      */
-    private void emitEvent(GraphEngineEvent event) {
+    void emitEvent(GraphEngineEvent event) {
         for (GraphEngineLayer layer : layers) {
             try {
                 layer.onEvent(event);
@@ -889,7 +895,7 @@ public class WorkflowEngine {
     /**
      * 对所有 Layer 执行操作（函数式接口）。
      */
-    private void invokeLayers(java.util.function.Consumer<GraphEngineLayer> action) {
+    void invokeLayers(java.util.function.Consumer<GraphEngineLayer> action) {
         for (GraphEngineLayer layer : layers) {
             try {
                 action.accept(layer);
@@ -918,700 +924,33 @@ public class WorkflowEngine {
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Semantic Core Dump — 现场冻结与认知核心转储
-    //  借鉴 Linux Core Dump：进程崩溃时生成内存映像供事后分析
-    // ════════════════════════════════════════════════════════════════
-
-    /**
-     * 生成语义核心转储 — 节点崩溃时冻结现场。
-     * <p>
-     * 收集节点崩溃那一刻的完整认知状态：
-     * <ul>
-     *   <li>异常信息（Exception 堆栈）</li>
-     *   <li>节点的 LLM 上下文历史</li>
-     *   <li>VariablePool 中该节点的变量表</li>
-     *   <li>VFS 挂载状态</li>
-     *   <li>Boulder 检查点历史</li>
-     * </ul>
-     * <p>
-     * OS 类比：Linux 进程崩溃时内核生成 core 文件，
-     * 包含进程的内存映像、寄存器状态、信号信息。
-     *
-     * @return dump 文件路径
-     */
-    private String generateSemanticCoreDump(WorkflowNode node, Exception error,
-                                            WorkflowContext context, String workflowId, long durationMs) {
-        String dumpDir = com.ouisani.aios.core.config.AiosPaths.workspaces() + "/" + workflowId.replace(" ", "_") + "/factory";
-        String dumpFileName = "dump_" + node.instanceId() + "_" + System.currentTimeMillis() + ".aios";
-        String dumpFilePath = dumpDir + "/" + dumpFileName;
-
-        try {
-            // 确保目录存在
-            java.nio.file.Path dir = java.nio.file.Path.of(dumpDir);
-            if (!java.nio.file.Files.exists(dir)) {
-                java.nio.file.Files.createDirectories(dir);
-            }
-
-            // ── 端到端 Trace ID — 贯穿整个调用链 ──
-            String traceId = com.ouisani.aios.core.ipc.TraceContext.getCurrentTraceId();
-            if (traceId == null) {
-                traceId = com.ouisani.aios.core.ipc.TraceContext.getTraceIdForTask(node.instanceId());
-            }
-
-            StringBuilder dump = new StringBuilder();
-            dump.append("═══════════════════════════════════════════════════\n");
-            dump.append("  AIOS Semantic Core Dump\n");
-            dump.append("  Node: ").append(node.instanceId()).append("\n");
-            dump.append("  Role: ").append(node.role()).append("\n");
-            dump.append("  Executor: ").append(node.executor()).append("\n");
-            dump.append("  Timestamp: ").append(java.time.Instant.now()).append("\n");
-            dump.append("  Duration: ").append(durationMs).append("ms\n");
-            dump.append("  Trace ID: ").append(traceId != null ? traceId : "(none)").append("\n");
-            dump.append("═══════════════════════════════════════════════════\n\n");
-
-            // 1. 崩溃信息
-            dump.append("── CRASH INFO ──\n");
-            dump.append("Exception: ").append(error.getClass().getName()).append("\n");
-            dump.append("Message: ").append(error.getMessage()).append("\n");
-            if (error.getCause() != null) {
-                dump.append("Cause: ").append(error.getCause().getClass().getName())
-                        .append(": ").append(error.getCause().getMessage()).append("\n");
-            }
-            dump.append("\nStackTrace:\n");
-            for (StackTraceElement ste : error.getStackTrace()) {
-                dump.append("  at ").append(ste.toString()).append("\n");
-            }
-            dump.append("\n");
-
-            // 2. 节点变量表（VariablePool 快照）
-            dump.append("── VARIABLE SNAPSHOT ──\n");
-            Map<String, Object> nodeVars = context.getNodeMemorySnapshot(node.instanceId());
-            if (nodeVars != null && !nodeVars.isEmpty()) {
-                for (Map.Entry<String, Object> entry : nodeVars.entrySet()) {
-                    String val = entry.getValue() != null ? entry.getValue().toString() : "null";
-                    if (val.length() > 500) val = val.substring(0, 500) + "...(truncated)";
-                    dump.append("  ").append(entry.getKey()).append(" = ").append(val).append("\n");
-                }
-            } else {
-                dump.append("  (empty)\n");
-            }
-            dump.append("\n");
-
-            // 3. 上游节点输出
-            dump.append("── UPSTREAM OUTPUTS ──\n");
-            for (String depId : node.getUpstreamDependencies()) {
-                Map<String, Object> depOutput = context.getNodeMemorySnapshot(depId);
-                if (depOutput != null && !depOutput.isEmpty()) {
-                    dump.append("  [").append(depId).append("]\n");
-                    for (Map.Entry<String, Object> entry : depOutput.entrySet()) {
-                        String val = entry.getValue() != null ? entry.getValue().toString() : "null";
-                        if (val.length() > 300) val = val.substring(0, 300) + "...";
-                        dump.append("    ").append(entry.getKey()).append(" = ").append(val).append("\n");
-                    }
-                }
-            }
-            dump.append("\n");
-
-            // 4. 节点蓝图（原始任务描述）
-            dump.append("── NODE BLUEPRINT ──\n");
-            dump.append("  BlueprintId: ").append(node.blueprintId()).append("\n");
-            dump.append("  Role: ").append(node.role()).append("\n");
-            dump.append("  Subscribe: ").append(node.subscribeTopic()).append("\n");
-            dump.append("  Publish: ").append(node.publishTopic()).append("\n");
-            dump.append("\n");
-
-            // 5. Boulder 检查点历史
-            dump.append("── BOULDER CHECKPOINT HISTORY ──\n");
-            BoulderStateManager.loadCheckpoint(workflowId, node.instanceId()).ifPresentOrElse(
-                    cp -> dump.append("  RetryCount: ").append(cp.getRetryCount())
-                            .append(", LastStatus: ").append(cp.getStatus())
-                            .append(", LastError: ").append(cp.getErrorMessage()).append("\n"),
-                    () -> dump.append("  (no previous checkpoint)\n")
-            );
-            dump.append("\n");
-
-            // 6. VFS 挂载状态
-            dump.append("── VFS MOUNT STATE ──\n");
-            try {
-                String factoryListing = VfsManager.instance().readText(
-                        "/factory/" + node.instanceId());
-                if (factoryListing != null && !factoryListing.isBlank()) {
-                    dump.append("  /factory/").append(node.instanceId()).append(": ")
-                            .append(factoryListing.length()).append(" chars\n");
-                }
-            } catch (Exception ignored) {}
-            dump.append("\n");
-
-            dump.append("═══════════════════════════════════════════════════\n");
-            dump.append("  END OF CORE DUMP\n");
-            dump.append("═══════════════════════════════════════════════════\n");
-
-            java.nio.file.Files.writeString(java.nio.file.Path.of(dumpFilePath), dump.toString());
-            log.info("[DAG Engine] Core Dump 已写入: {} ({} chars)", dumpFilePath, dump.length());
-
-        } catch (Exception ex) {
-            log.error("[DAG Engine] Core Dump 写入失败: {}", ex.getMessage());
-            dumpFilePath = "(dump failed: " + ex.getMessage() + ")";
-        }
-
-        return dumpFilePath;
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    //  状态回滚与热重启 (State Rollback & Hot Restart)
-    //  借鉴 Linux 的 CRIU (Checkpoint/Restore In Userspace)
-    // ════════════════════════════════════════════════════════════════
-
-    /**
-     * AutoMedic 修复成功后，回滚节点状态并热重启。
-     * <p>
-     * 流程：
-     * 1. 抹除节点崩溃前最后一次错误的对话记录（状态倒回）
-     * 2. 将 Medic 修改后的正确上下文重新注入节点
-     * 3. 重新执行节点（SIGCONT → 原地复活）
-     *
-     * @return true=重启成功, false=重启失败
-     */
-    private boolean restartNodeAfterHeal(WorkflowNode node, AutoMedicAgent.MedicalReport report,
-                                         WorkflowContext context, String workflowId) {
-        try {
-            log.info("[DAG Engine] 节点 '{}' 热重启中... (修复内容: {} chars)",
-                    node.instanceId(), report.patchedCode() != null ? report.patchedCode().length() : 0);
-
-            // 1. 如果 AutoMedic 修复了代码，写入 VFS
-            if (report.patchedCode() != null && !report.patchedCode().isBlank()
-                    && report.patchedVfsPath() != null) {
-                try {
-                    VfsManager.instance().writeText(report.patchedVfsPath(), report.patchedCode());
-                    log.info("[DAG Engine] 修复代码已写入 VFS: {}", report.patchedVfsPath());
-                } catch (Exception e) {
-                    log.warn("[DAG Engine] VFS 写入失败: {}", e.getMessage());
-                }
-            }
-
-            // 2. 如果 AutoMedic 注入了反思提示，写入节点的上下文
-            if (report.reflectionHint() != null && !report.reflectionHint().isBlank()) {
-                context.commitNodeOutput(node.instanceId() + "_medic_hint",
-                        Map.of("reflection", report.reflectionHint()));
-                log.info("[DAG Engine] 反思提示已注入: {}", report.reflectionHint().substring(0, Math.min(80, report.reflectionHint().length())));
-            }
-
-            // 3. 重置节点状态为 PENDING（允许重新执行）
-            node.setStatus(WorkflowNode.Status.PENDING);
-            node.putOutput("_medic_healed", true);
-            node.putOutput("_medic_diagnosis", report.diagnosis());
-
-            // 4. 重新执行节点（递归调用 executeNode，但带自愈标记防止无限循环）
-            int healCount = 0;
-            if (node.getOutputData().containsKey("_heal_count")) {
-                healCount = (int) node.getOutputData().get("_heal_count");
-            }
-            if (healCount >= 2) {
-                log.warn("[DAG Engine] 节点 '{}' 已热重启 {} 次，不再重试", node.instanceId(), healCount);
-                return false;
-            }
-            node.putOutput("_heal_count", healCount + 1);
-
-            log.info("[DAG Engine] 节点 '{}' 原地复活！第 {} 次热重启", node.instanceId(), healCount + 1);
-            executeNode(node, Map.of(node.instanceId(), node), context, workflowId);
-
-            // 5. 检查重启后是否成功
-            return node.getStatus() == WorkflowNode.Status.SUCCESS;
-
-        } catch (Exception e) {
-            log.error("[DAG Engine] 节点 '{}' 热重启失败: {}", node.instanceId(), e.getMessage());
-            return false;
-        }
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    //  DAG 拓扑运行时突变 (Dynamic Topology Mutation)
-    //  借鉴 Kubernetes 的 Pod 替换和 Linux 的热插拔
-    // ════════════════════════════════════════════════════════════════
-
-    /**
-     * DAG 拓扑突变 — 当 AutoMedic 判定节点无能时，动态插入替代节点。
-     * <p>
-     * 如果 Medic 发现节点失败的原因是"它根本没有能力完成这个任务"
-     * （比如让一个只能写 Python 的 Agent 去编译 C++），
-     * 那么最高阶的自愈就是动态改写执行图。
-     * <p>
-     * 机制：
-     * 1. 根据 MedicalReport.suggestedRole() 创建新节点 A'
-     * 2. 将原本指向 A 的入度和出度，动态切换到 A' 上
-     * 3. 在 DAG 中执行 A'（虚拟线程并发）
-     *
-     * @return true=突变成功, false=突变失败
-     */
-    private boolean doMutateTopology(WorkflowNode failedNode, AutoMedicAgent.MedicalReport report,
-                                   Map<String, WorkflowNode> nodeMap,
-                                   WorkflowContext context, String workflowId) {
-        try {
-            String suggestedRole = report.suggestedRole();
-            if (suggestedRole == null || suggestedRole.isBlank()) {
-                log.warn("[DAG Engine] AutoMedic 未建议替代角色，无法突变");
-                return false;
-            }
-
-            // 1. 创建替代节点 A'
-            String replacementId = failedNode.instanceId() + "_prime_" + System.currentTimeMillis() % 10000;
-            WorkflowNode replacementNode = new WorkflowNode(
-                    replacementId,
-                    suggestedRole,  // 新角色（如 "C++ Coder" 替代 "Python Coder"）
-                    failedNode.blueprintId(),
-                    failedNode.userParams(),  // 继承用户参数
-                    failedNode.subscribeTopic(),
-                    failedNode.publishTopic(),
-                    failedNode.executor()  // 保留执行器类型
-            );
-
-            // 继承上游依赖
-            for (String depId : failedNode.getUpstreamDependencies()) {
-                replacementNode.addDependency(depId);
-            }
-
-            // 继承条件
-            if (failedNode.getCondition() != null) {
-                replacementNode.setCondition(failedNode.getCondition());
-            }
-
-            // 标记原始节点为 REPLACED（新状态）
-            failedNode.setStatus(WorkflowNode.Status.SKIPPED);
-            failedNode.putOutput("_replaced_by", replacementId);
-            failedNode.putOutput("_replacement_reason", report.diagnosis());
-
-            // 2. 将替代节点加入 DAG
-            nodeMap.put(replacementId, replacementNode);
-            log.info("[DAG Engine] 拓扑突变：节点 '{}' 被 '{}' 替代（角色: {}→{}）",
-                    failedNode.instanceId(), replacementId, failedNode.role(), suggestedRole);
-
-            // 3. 更新下游节点的依赖关系
-            for (WorkflowNode downstream : nodeMap.values()) {
-                if (downstream.getUpstreamDependencies().contains(failedNode.instanceId())) {
-                    downstream.addDependency(replacementId);
-                    log.debug("[DAG Engine] 下游 '{}' 的依赖已更新：+{}", downstream.instanceId(), replacementId);
-                }
-            }
-
-            // 4. 执行替代节点
-            replacementNode.setStatus(WorkflowNode.Status.PENDING);
-            replacementNode.putOutput("_is_mutation", true);
-            replacementNode.putOutput("_replacing", failedNode.instanceId());
-
-            // 将上游输出注入替代节点的上下文
-            for (String depId : failedNode.getUpstreamDependencies()) {
-                Map<String, Object> depOutput = context.getNodeMemorySnapshot(depId);
-                if (depOutput != null) {
-                    context.commitNodeOutput(replacementId, depOutput);
-                }
-            }
-
-            executeNode(replacementNode, nodeMap, context, workflowId);
-
-            // 5. 如果替代节点成功，将其输出映射到原始节点的输出
-            if (replacementNode.getStatus() == WorkflowNode.Status.SUCCESS) {
-                context.commitNodeOutput(failedNode.instanceId(), replacementNode.getOutputData());
-                failedNode.setStatus(WorkflowNode.Status.SUCCESS); // 标记原始节点为成功（由替代完成）
-                log.info("[DAG Engine] 拓扑突变成功！替代节点 '{}' 完成了原节点 '{}' 的任务",
-                        replacementId, failedNode.instanceId());
-                return true;
-            } else {
-                log.warn("[DAG Engine] 替代节点 '{}' 也失败了", replacementId);
-                return false;
-            }
-
-        } catch (Exception e) {
-            log.error("[DAG Engine] 拓扑突变异常: {}", e.getMessage());
-            return false;
-        }
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    //  事件驱动自愈 — 恢复与拓扑突变公开接口
+    //  恢复与拓扑突变 API（委托给 WorkflowHealer）
     //  供 RecoveryOrchestrator 异步调用
     // ════════════════════════════════════════════════════════════════
 
-    /**
-     * 恢复挂起节点 — 供 RecoveryOrchestrator 在修复完成后调用。
-     * <p>
-     * OS 类比：Linux 的 SIGCONT — 进程被 SIGSTOP 挂起后，
-     * 收到 SIGCONT 信号恢复执行。
-     *
-     * @param nodeId     节点 ID
-     * @param workflowId 工作流 ID
-     * @param newContext 修复后的新上下文（可为 null）
-     * @return true=恢复成功, false=恢复失败
-     */
     public boolean resumeNode(String nodeId, String workflowId, Map<String, Object> newContext) {
-        // 从活跃工作流中查找节点
-        WorkflowNode node = findNodeInActiveWorkflows(nodeId);
-        if (node == null) {
-            log.warn("[DAG Engine] resumeNode: 节点 '{}' 未找到", nodeId);
-            return false;
-        }
-
-        if (node.getStatus() != WorkflowNode.Status.SUSPENDED) {
-            log.warn("[DAG Engine] resumeNode: 节点 '{}' 状态为 {}，非 SUSPENDED",
-                    nodeId, node.getStatus());
-            return false;
-        }
-
-        log.info("[DAG Engine] 节点 '{}' 收到 SIGCONT，恢复执行", nodeId);
-
-        // 注入新上下文
-        if (newContext != null) {
-            for (Map.Entry<String, Object> entry : newContext.entrySet()) {
-                node.putOutput(entry.getKey(), entry.getValue());
-            }
-        }
-
-        // 重置状态为 PENDING
-        node.setStatus(WorkflowNode.Status.PENDING);
-        int currentHealCount = 0;
-        Object healCountObj = node.getOutputData().get("_heal_count");
-        if (healCountObj instanceof Integer) {
-            currentHealCount = (Integer) healCountObj;
-        }
-        node.putOutput("_heal_count", currentHealCount + 1);
-
-        // 获取工作流上下文
-        WorkflowContext context = activeContexts.get(workflowId);
-        if (context == null) {
-            log.warn("[DAG Engine] resumeNode: 工作流 '{}' 上下文未找到", workflowId);
-            return false;
-        }
-
-        // 在虚拟线程中重新执行节点（异步，不阻塞调用者）
-        Thread.startVirtualThread(() -> {
-            try {
-                executeNode(node, findNodeMapForWorkflow(workflowId), context, workflowId);
-                log.info("[DAG Engine] 节点 '{}' 恢复执行完成: status={}", nodeId, node.getStatus());
-
-                // ── 恢复成功后，重新触发下游节点 ──
-                // 原始 DAG 执行时，下游节点因本节点 SUSPENDED 而被 SKIPPED。
-                // 现在本节点已 SUCCESS，需要重新执行下游节点。
-                if (node.getStatus() == WorkflowNode.Status.SUCCESS) {
-                    Map<String, WorkflowNode> nodeMap = findNodeMapForWorkflow(workflowId);
-                    if (nodeMap != null) {
-                        for (WorkflowNode downstream : nodeMap.values()) {
-                            if (downstream.getUpstreamDependencies().contains(nodeId)
-                                    && downstream.getStatus() == WorkflowNode.Status.SKIPPED) {
-                                log.info("[DAG Engine] 重新触发下游节点 '{}'（因上游 '{}' 恢复成功）",
-                                        downstream.instanceId(), nodeId);
-                                downstream.setStatus(WorkflowNode.Status.PENDING);
-                                Thread.startVirtualThread(() -> {
-                                    try {
-                                        executeNode(downstream, nodeMap, context, workflowId);
-                                    } catch (Exception e) {
-                                        log.error("[DAG Engine] 下游节点 '{}' 重新执行失败: {}",
-                                                downstream.instanceId(), e.getMessage());
-                                    }
-                                });
-                            }
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                log.error("[DAG Engine] 节点 '{}' 恢复执行失败: {}", nodeId, e.getMessage());
-            }
-
-            // ── 广播恢复完成事件给前端 ──
-            // 前端需要知道节点恢复后的最终状态
-            EventBus.instance().broadcast("sys.workflow.node_resumed",
-                    String.format("{\"workflowId\":\"%s\",\"nodeId\":\"%s\",\"status\":\"%s\"}",
-                            workflowId.replace("\"", "\\\""),
-                            nodeId.replace("\"", "\\\""),
-                            node.getStatus().name()));
-        });
-
-        return true;
+        return healer.resumeNode(nodeId, workflowId, newContext);
     }
 
-    /**
-     * 拓扑突变 — 供 RecoveryOrchestrator 调用。
-     */
-    public boolean mutateTopology(String failedNodeId, String workflowId, String suggestedRole) {
-        WorkflowNode failedNode = findNodeInActiveWorkflows(failedNodeId);
-        if (failedNode == null) return false;
-
-        WorkflowContext context = activeContexts.get(workflowId);
-        Map<String, WorkflowNode> nodeMap = findNodeMapForWorkflow(workflowId);
-        if (context == null || nodeMap == null) return false;
-
-        // 构造一个最小 MedicalReport 用于 doMutateTopology
-        AutoMedicAgent.MedicalReport report = new AutoMedicAgent.MedicalReport(
-                AutoMedicAgent.Outcome.INCAPABLE,
-                "RecoveryOrchestrator requested topology mutation",
-                null, null, suggestedRole, null
-        );
-
-        return doMutateTopology(failedNode, report, nodeMap, context, workflowId);
-    }
-
-    /** 查找活跃工作流中的节点 */
-    private WorkflowNode findNodeInActiveWorkflows(String nodeId) {
-        for (Map<String, WorkflowNode> nodeMap : activeNodeMaps.values()) {
-            WorkflowNode node = nodeMap.get(nodeId);
-            if (node != null) return node;
-        }
-        return null;
-    }
-
-    /** 获取工作流的节点映射 */
-    private Map<String, WorkflowNode> findNodeMapForWorkflow(String workflowId) {
-        return activeNodeMaps.get(workflowId);
-    }
-
-    /**
-     * 标记节点为 FAILED（统一入口）。
-     */
-    private void markNodeFailed(WorkflowNode node, Exception e, String workflowId, long durationMs) {
-        node.setStatus(WorkflowNode.Status.FAILED);
-
-        // Boulder 失败快照
-        BoulderCheckpoint failCheckpoint = new BoulderCheckpoint();
-        failCheckpoint.setWorkflowId(workflowId);
-        failCheckpoint.setNodeId(node.instanceId());
-        failCheckpoint.setStatus(WorkflowNode.Status.FAILED);
-        failCheckpoint.setErrorMessage(e.getMessage());
-        failCheckpoint.setDurationMs(durationMs);
-        BoulderStateManager.loadCheckpoint(workflowId, node.instanceId()).ifPresent(past -> {
-            failCheckpoint.setRetryCount(past.getRetryCount() + 1);
-        });
-        BoulderStateManager.saveCheckpoint(failCheckpoint);
-
-        emitEvent(new GraphEngineEvent.GraphNodeEvent.NodeRunFailedEvent(
-                workflowId, node.instanceId(), node.executor(),
-                e.getMessage(), durationMs, null));
-        invokeLayers(layer -> layer.onNodeRunEnd(node, e));
-
-        log.error("[DAG Engine] Node '{}' FAILED ({}ms): {}", node.instanceId(), durationMs, e.getMessage());
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    //  节点恢复 — 供 RecoveryOrchestrator 在修复完成后调用
-    //  借鉴 Linux 的 SIGCONT：挂起的进程收到恢复信号后继续执行
-    // ════════════════════════════════════════════════════════════════
-
-    /**
-     * 恢复挂起的节点 — RecoveryOrchestrator 修复完成后的回调入口。
-     * <p>
-     * 流程：
-     * 1. 检查节点是否处于 SUSPENDED 状态
-     * 2. 如果修复了代码，写入 VFS
-     * 3. 如果有反思提示，注入到节点上下文
-     * 4. 重置节点状态为 PENDING
-     * 5. 重新执行节点
-     * 6. 如果是拓扑突变，创建替代节点并执行
-     *
-     * @param nodeId      挂起的节点 ID
-     * @param report      AutoMedic 的诊断报告
-     * @param workflowId  工作流 ID
-     * @return true=恢复成功, false=恢复失败
-     */
     public boolean resumeNode(String nodeId, AutoMedicAgent.MedicalReport report, String workflowId) {
-        log.info("[DAG Engine] resumeNode() 被调用: nodeId={}, outcome={}", nodeId, report.outcome());
-
-        // 从活跃工作流中查找节点
-        WorkflowNode node = findNodeInActiveWorkflows(nodeId);
-        if (node == null) {
-            log.error("[DAG Engine] resumeNode: 找不到节点 '{}'", nodeId);
-            return false;
-        }
-
-        if (node.getStatus() != WorkflowNode.Status.SUSPENDED) {
-            log.warn("[DAG Engine] resumeNode: 节点 '{}' 状态不是 SUSPENDED（当前: {}），跳过",
-                    nodeId, node.getStatus());
-            return false;
-        }
-
-        switch (report.outcome()) {
-            case HEALED -> {
-                // AutoMedic 修复成功 → 热重启
-                return hotRestartNode(node, report, workflowId);
-            }
-            case INCAPABLE -> {
-                // AutoMedic 判定节点无能 → 拓扑突变
-                return mutateTopologyFromReport(node, report, workflowId);
-            }
-            case FAILED -> {
-                // AutoMedic 修复失败 → 标记 FAILED
-                log.error("[DAG Engine] resumeNode: AutoMedic 修复失败，节点 '{}' 标记为 FAILED: {}",
-                        nodeId, report.diagnosis());
-                node.setStatus(WorkflowNode.Status.FAILED);
-                emitEvent(new GraphEngineEvent.GraphNodeEvent.NodeRunFailedEvent(
-                        workflowId, nodeId, node.executor(),
-                        report.diagnosis(), 0, null));
-                return false;
-            }
-        }
-        return false;
+        return healer.resumeNode(nodeId, report, workflowId);
     }
 
-    /**
-     * 热重启节点 — AutoMedic 修复成功后的恢复逻辑。
-     */
-    private boolean hotRestartNode(WorkflowNode node, AutoMedicAgent.MedicalReport report, String workflowId) {
-        try {
-            log.info("[DAG Engine] 节点 '{}' 热重启中... (修复内容: {} chars)",
-                    node.instanceId(), report.patchedCode() != null ? report.patchedCode().length() : 0);
-
-            // 1. 如果 AutoMedic 修复了代码，写入 VFS
-            if (report.patchedCode() != null && !report.patchedCode().isBlank()
-                    && report.patchedVfsPath() != null) {
-                try {
-                    VfsManager.instance().writeText(report.patchedVfsPath(), report.patchedCode());
-                    log.info("[DAG Engine] 修复代码已写入 VFS: {}", report.patchedVfsPath());
-                } catch (Exception e) {
-                    log.warn("[DAG Engine] VFS 写入失败: {}", e.getMessage());
-                }
-            }
-
-            // 2. 如果 AutoMedic 注入了反思提示，写入节点的上下文
-            if (report.reflectionHint() != null && !report.reflectionHint().isBlank()) {
-                node.putOutput("_medic_hint", report.reflectionHint());
-                log.info("[DAG Engine] 反思提示已注入: {}",
-                        report.reflectionHint().substring(0, Math.min(80, report.reflectionHint().length())));
-            }
-
-            // 3. 重置节点状态为 PENDING（允许重新执行）
-            node.setStatus(WorkflowNode.Status.PENDING);
-            node.putOutput("_medic_healed", true);
-            node.putOutput("_medic_diagnosis", report.diagnosis());
-
-            // 4. 防止无限重启
-            int healCount = 0;
-            if (node.getOutputData().containsKey("_heal_count")) {
-                healCount = (int) node.getOutputData().get("_heal_count");
-            }
-            if (healCount >= 2) {
-                log.warn("[DAG Engine] 节点 '{}' 已热重启 {} 次，不再重试", node.instanceId(), healCount);
-                node.setStatus(WorkflowNode.Status.FAILED);
-                return false;
-            }
-            node.putOutput("_heal_count", healCount + 1);
-
-            // 5. 重新执行节点
-            log.info("[DAG Engine] 节点 '{}' 原地复活！第 {} 次热重启", node.instanceId(), healCount + 1);
-
-            // 获取工作流上下文
-            WorkflowContext context = getActiveWorkflowContext(workflowId);
-            if (context == null) {
-                log.error("[DAG Engine] 找不到工作流 '{}' 的上下文", workflowId);
-                node.setStatus(WorkflowNode.Status.FAILED);
-                return false;
-            }
-
-            executeNode(node, Map.of(node.instanceId(), node), context, workflowId);
-            return node.getStatus() == WorkflowNode.Status.SUCCESS;
-
-        } catch (Exception e) {
-            log.error("[DAG Engine] 节点 '{}' 热重启失败: {}", node.instanceId(), e.getMessage());
-            node.setStatus(WorkflowNode.Status.FAILED);
-            return false;
-        }
+    public boolean mutateTopology(String failedNodeId, String workflowId, String suggestedRole) {
+        return healer.mutateTopology(failedNodeId, workflowId, suggestedRole);
     }
 
-    /**
-     * 拓扑突变 — AutoMedic 判定节点无能时的替代方案。
-     */
-    private boolean mutateTopologyFromReport(WorkflowNode failedNode, AutoMedicAgent.MedicalReport report, String workflowId) {
-        try {
-            String suggestedRole = report.suggestedRole();
-            if (suggestedRole == null || suggestedRole.isBlank()) {
-                log.warn("[DAG Engine] AutoMedic 未建议替代角色，无法突变");
-                failedNode.setStatus(WorkflowNode.Status.FAILED);
-                return false;
-            }
-
-            // 创建替代节点 A'
-            String replacementId = failedNode.instanceId() + "_prime_" + System.currentTimeMillis() % 10000;
-            WorkflowNode replacementNode = new WorkflowNode(
-                    replacementId,
-                    suggestedRole,
-                    failedNode.blueprintId(),
-                    failedNode.userParams(),
-                    failedNode.subscribeTopic(),
-                    failedNode.publishTopic(),
-                    failedNode.executor()
-            );
-
-            // 继承上游依赖
-            for (String depId : failedNode.getUpstreamDependencies()) {
-                replacementNode.addDependency(depId);
-            }
-
-            // 标记原始节点为 SKIPPED（被替代）
-            failedNode.setStatus(WorkflowNode.Status.SKIPPED);
-            failedNode.putOutput("_replaced_by", replacementId);
-            failedNode.putOutput("_replacement_reason", report.diagnosis());
-
-            log.info("[DAG Engine] 拓扑突变：节点 '{}' 被 '{}' 替代（角色: {}→{}）",
-                    failedNode.instanceId(), replacementId, failedNode.role(), suggestedRole);
-
-            // 执行替代节点
-            replacementNode.setStatus(WorkflowNode.Status.PENDING);
-            replacementNode.putOutput("_is_mutation", true);
-            replacementNode.putOutput("_replacing", failedNode.instanceId());
-
-            WorkflowContext context = getActiveWorkflowContext(workflowId);
-            if (context == null) {
-                log.error("[DAG Engine] 找不到工作流 '{}' 的上下文", workflowId);
-                failedNode.setStatus(WorkflowNode.Status.FAILED);
-                return false;
-            }
-
-            // 将上游输出注入替代节点的上下文
-            for (String depId : failedNode.getUpstreamDependencies()) {
-                Map<String, Object> depOutput = context.getNodeMemorySnapshot(depId);
-                if (depOutput != null) {
-                    context.commitNodeOutput(replacementId, depOutput);
-                }
-            }
-
-            executeNode(replacementNode, Map.of(replacementId, replacementNode), context, workflowId);
-
-            if (replacementNode.getStatus() == WorkflowNode.Status.SUCCESS) {
-                context.commitNodeOutput(failedNode.instanceId(), replacementNode.getOutputData());
-                failedNode.setStatus(WorkflowNode.Status.SUCCESS);
-                log.info("[DAG Engine] 拓扑突变成功！替代节点 '{}' 完成了原节点 '{}' 的任务",
-                        replacementId, failedNode.instanceId());
-                return true;
-            } else {
-                log.warn("[DAG Engine] 替代节点 '{}' 也失败了", replacementId);
-                failedNode.setStatus(WorkflowNode.Status.FAILED);
-                return false;
-            }
-
-        } catch (Exception e) {
-            log.error("[DAG Engine] 拓扑突变异常: {}", e.getMessage());
-            failedNode.setStatus(WorkflowNode.Status.FAILED);
-            return false;
-        }
+    public boolean forceFailNode(String nodeId) {
+        return healer.forceFailNode(nodeId);
     }
 
-    // ── 活跃工作流管理 ──
+    // ── 活跃工作流管理（委托给 WorkflowRegistry）──
 
-    /**
-     * 注册活跃工作流（在 executeDagInternal 开始时调用）。
-     */
     public void registerActiveWorkflow(String workflowId, Map<String, WorkflowNode> nodeMap, WorkflowContext context) {
-        activeNodeMaps.put(workflowId, nodeMap);
-        activeContexts.put(workflowId, context);
+        registry.registerActiveWorkflow(workflowId, nodeMap, context);
     }
 
-    /**
-     * 注销活跃工作流（在 executeDagInternal 结束时调用）。
-     */
     public void unregisterActiveWorkflow(String workflowId) {
-        activeNodeMaps.remove(workflowId);
-        activeContexts.remove(workflowId);
-    }
-
-    /**
-     * 获取活跃工作流的上下文。
-     */
-    private WorkflowContext getActiveWorkflowContext(String workflowId) {
-        return activeContexts.get(workflowId);
+        registry.unregisterActiveWorkflow(workflowId);
     }
 }

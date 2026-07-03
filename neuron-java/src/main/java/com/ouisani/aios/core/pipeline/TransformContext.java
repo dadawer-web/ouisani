@@ -1,6 +1,6 @@
 package com.ouisani.aios.core.pipeline;
 
-import com.ouisani.aios.user.sdk.AiosSdk;
+import com.ouisani.aios.core.tool.ToolSdk;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -13,12 +13,12 @@ import java.util.concurrent.ConcurrentHashMap;
 public class TransformContext {
 
     private final String agentId;
-    private final AiosSdk sdk;
+    private final ToolSdk sdk;
     private final String workingDir;
     private final Map<String, Object> metadata;
     private final Map<String, String> options;
 
-    public TransformContext(String agentId, AiosSdk sdk, String workingDir) {
+    public TransformContext(String agentId, ToolSdk sdk, String workingDir) {
         this.agentId = agentId;
         this.sdk = sdk;
         this.workingDir = workingDir;
@@ -28,7 +28,7 @@ public class TransformContext {
 
     // Getters
     public String agentId() { return agentId; }
-    public AiosSdk sdk() { return sdk; }
+    public ToolSdk sdk() { return sdk; }
     public String workingDir() { return workingDir; }
     public Map<String, Object> metadata() { return metadata; }
     public Map<String, String> options() { return options; }
