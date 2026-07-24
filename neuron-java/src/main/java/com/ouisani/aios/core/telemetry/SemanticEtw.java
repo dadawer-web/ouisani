@@ -71,6 +71,13 @@ public final class SemanticEtw {
 
     private final ConcurrentHashMap<String, AtomicLong> securityStats = new ConcurrentHashMap<>();
 
+    // ── TraceSink 体系 (借鉴 OMA observability) ──
+
+    private volatile TraceSink.TraceCapturePolicy capturePolicy = TraceSink.TraceCapturePolicy.DEFAULT;
+    private final List<TraceSink> sinks = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final TraceSink.DiagnosticReporter diagnostics = new TraceSink.DiagnosticReporter();
+    private volatile boolean sinkShutdown = false;
+
     private SemanticEtw() {}
 
     // ════════════════════════════════════════════════════════════════
@@ -262,6 +269,128 @@ public final class SemanticEtw {
         auditCursor.set(0);
         totalAuditEvents.set(0);
         securityStats.clear();
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  TraceSink 体系 (借鉴 OMA observability)
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 获取当前捕获策略。
+     */
+    public TraceSink.TraceCapturePolicy getCapturePolicy() {
+        return capturePolicy;
+    }
+
+    /**
+     * 设置捕获策略 — 控制 prompt/completion/toolIO 是否记录及如何脱敏。
+     * <p>
+     * 隔夜 Runner 可设置为 NONE 减少开销,或 FULL 做完整记录。
+     */
+    public void setCapturePolicy(TraceSink.TraceCapturePolicy policy) {
+        this.capturePolicy = policy;
+    }
+
+    /**
+     * 注册一个 TraceSink — 所有事件会广播到已注册的 sink。
+     * <p>
+     * 注册不影响零开销写入路径;sink 的 emit 在 {@link #forceFlushSinks()} 时批量进行。
+     */
+    public void registerSink(TraceSink sink) {
+        if (sink != null && !sinkShutdown) {
+            sinks.add(sink);
+        }
+    }
+
+    /**
+     * 强制刷新所有已注册 sink — 隔夜 Runner 早上汇报时调用。
+     * <p>
+     * 将环形缓冲区的记录批量 emit 到每个 sink,然后调用 sink.forceFlush()。
+     * 确保 trace 落盘,不丢数据。
+     */
+    public TraceSink.FlushResult forceFlushSinks() {
+        if (sinks.isEmpty()) return TraceSink.FlushResult.empty();
+
+        // 从环形缓冲区取出所有记录
+        List<EventRecord> records = flushToConsumer();
+        int totalExported = 0;
+        int totalFailed = 0;
+
+        for (TraceSink sink : sinks) {
+            try {
+                for (EventRecord r : records) {
+                    sink.emit(new TraceSink.TraceRecord(
+                            r.timestamp(), r.component(), r.eventType(), r.payload(),
+                            null, TraceSink.TraceRecord.Severity.INFO));
+                }
+                TraceSink.FlushResult result = sink.forceFlush();
+                totalExported += result.exported();
+                totalFailed += result.failed();
+            } catch (Exception e) {
+                diagnostics.report(TraceSink.DiagnosticCode.SINK_EMIT_FAILED,
+                        "forceFlush sink failed: " + e.getMessage());
+                totalFailed += records.size();
+            }
+        }
+
+        return new TraceSink.FlushResult(
+                totalFailed > 0 ? TraceSink.FlushResult.Status.PARTIAL : TraceSink.FlushResult.Status.OK,
+                records.size(), totalExported, 0, totalFailed);
+    }
+
+    /**
+     * 关闭所有 sink — 幂等。关闭后 emit 被拒绝并诊断。
+     * <p>
+     * 先 forceFlush 确保数据落盘,再逐个 shutdown。
+     */
+    public TraceSink.FlushResult shutdownSinks() {
+        if (sinkShutdown) return TraceSink.FlushResult.empty();
+        sinkShutdown = true;
+
+        // 先 flush 确保数据落盘
+        TraceSink.FlushResult flushResult = forceFlushSinks();
+
+        int totalExported = flushResult.exported();
+        int totalFailed = flushResult.failed();
+
+        for (TraceSink sink : sinks) {
+            try {
+                TraceSink.FlushResult r = sink.shutdown();
+                totalExported += r.exported();
+                totalFailed += r.failed();
+            } catch (Exception e) {
+                diagnostics.report(TraceSink.DiagnosticCode.SHUTDOWN_FAILED,
+                        "sink shutdown failed: " + e.getMessage());
+            }
+        }
+
+        return new TraceSink.FlushResult(
+                totalFailed > 0 ? TraceSink.FlushResult.Status.PARTIAL : TraceSink.FlushResult.Status.OK,
+                totalExported, totalExported, 0, totalFailed);
+    }
+
+    /**
+     * 获取诊断报告器。
+     */
+    public TraceSink.DiagnosticReporter diagnostics() {
+        return diagnostics;
+    }
+
+    /**
+     * 获取已注册的 sink 数量。
+     */
+    public int sinkCount() {
+        return sinks.size();
+    }
+
+    /**
+     * 重置 sink 状态 — 清除所有 sink 和 shutdown 标志。
+     * 用于测试隔离和隔夜 Runner 的 run 间重置。
+     */
+    public void resetSinks() {
+        sinks.clear();
+        sinkShutdown = false;
+        diagnostics.reset();
     }
 
     public long totalEvents() {

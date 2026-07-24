@@ -1,6 +1,8 @@
 package com.ouisani.aios.core.tool;
 
 import com.ouisani.aios.core.VfsManager;
+import com.ouisani.aios.core.cgroup.CgroupManager;
+import com.ouisani.aios.core.cgroup.CgroupNode;
 import com.ouisani.aios.core.task.TaskScheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -82,11 +84,25 @@ public class AgentTool implements Tool<AgentTool.Input> {
         // 提取父 Agent ID（从 context 或使用默认值）
         String parentAgentId = context.agentId() != null ? context.agentId() : "unknown_parent";
 
-        log.info("[AgentTool] 正在启动子 Agent: blueprint={}, background={}, parent={}",
+        // ── 委托安全检查 (借鉴 OMA delegate_to_agent) ──
+        // 深度限制(最多3层) + 防环 + 自委托禁止,堵住通过委托绕过 OOM 的漏洞
+        DelegationGuard.DelegationContext delegationCtx;
+        try {
+            delegationCtx = DelegationGuard.enter(parentAgentId, agentId);
+        } catch (DelegationGuard.DelegationException e) {
+            log.warn("[AgentTool] 委托被拒绝: {}", e.getMessage());
+            return ToolOutput.fail("委托被拒绝: " + e.getMessage());
+        }
+
+        // 保存父 Agent 的 cgroup,用于子 Agent 继承 (token 消耗计入父预算)
+        CgroupNode parentCgroup = CgroupManager.instance().currentCgroup();
+
+        log.info("[AgentTool] 正在启动子 Agent: blueprint={}, background={}, parent={}, depth={}",
                 input.blueprintPath().isEmpty() ? "(generic)" : input.blueprintPath(),
-                input.runInBackground(), parentAgentId);
-        System.out.printf("[AgentTool] ├─ 正在启动子 Agent: blueprint=%s, parent=%s%n",
-                input.blueprintPath().isEmpty() ? "(generic)" : input.blueprintPath(), parentAgentId);
+                input.runInBackground(), parentAgentId, delegationCtx.depth());
+        System.out.printf("[AgentTool] ├─ 正在启动子 Agent: blueprint=%s, parent=%s, depth=%d%n",
+                input.blueprintPath().isEmpty() ? "(generic)" : input.blueprintPath(),
+                parentAgentId, delegationCtx.depth());
 
         if (input.runInBackground()) {
             // 异步执行 — 强制沙箱隔离
@@ -99,6 +115,16 @@ public class AgentTool implements Tool<AgentTool.Input> {
                     + "\nStatus: " + task.status()
                     + "\nOutput routed to EventBus: sys.sandbox.agent." + task.taskId());
         } else {
+            // ── 同步执行 — fresh-child-session 模式（借鉴 OpenScience task.ts）──
+            // <b>Fresh context 契约</b>：本分支 line 135 通过 `new QueryEngine(...)` 拉起子 Agent，
+            // QueryEngine 的 HistoryCompressor 是 per-instance 字段（QueryEngine 构造函数内
+            // `new HistoryCompressor(8000, ...)` 初始化），子 Agent 不继承父 Agent 的 compact 历史。
+            // 这保证了 reviewer 等 fresh-child 的 blindness —— 不被父上下文污染。
+            // （ReviewerRunner R2 gate 复用同一契约，见其类 javadoc。）
+            //
+            // 结果回流走 <task_result> 压缩协议（SubagentResultFormatter）：超阈值长结果截断为
+            // head+tail+省略计数，防止父 Agent 上下文被冗长子 Agent 输出污染。
+            //
             // 同步执行 — 使用 waitpid() 阻塞原语
             // 1. 在 WaitRegistry 中注册子 Agent
             AgentWaitRegistry.instance().registerChild(agentId, parentAgentId);
@@ -106,12 +132,26 @@ public class AgentTool implements Tool<AgentTool.Input> {
             // 2. 在虚拟线程中启动子 Agent 的 QueryEngine
             Thread.startVirtualThread(() -> {
                 try {
+                    // 继承父 Agent 的委托上下文 (深度+1, 链+当前节点)
+                    DelegationGuard.activate(delegationCtx);
+
+                    // 绑定父 Agent 的 cgroup,使子 Agent 的 token 消耗计入父预算
+                    // 这堵住了"通过委托绕过 OOM"的漏洞:子 Agent 烧的 token 从父配额扣
+                    if (parentCgroup != null) {
+                        CgroupManager.instance().bindToCurrentThread(parentCgroup);
+                        log.debug("[AgentTool] 子 Agent {} 绑定到父 cgroup (预算计入父 Agent)", agentId);
+                    }
+
                     QueryEngine engine = new QueryEngine(context.sdk(), agentId, context.workingDir());
                     String result = engine.query(prompt);
                     AgentWaitRegistry.instance().completeChild(agentId, result);
                 } catch (Exception e) {
                     log.error("[AgentTool] 子 Agent 执行异常: agentId={}, error={}", agentId, e.getMessage());
                     AgentWaitRegistry.instance().failChild(agentId, e.getMessage());
+                } finally {
+                    // 清理子线程的 ThreadLocal,防止虚拟线程复用时泄漏
+                    DelegationGuard.clear();
+                    CgroupManager.instance().unbindFromCurrentThread();
                 }
             });
 
@@ -126,7 +166,9 @@ public class AgentTool implements Tool<AgentTool.Input> {
             }
 
             log.info("[AgentTool] 子 Agent {} 已完成，结果长度: {}", agentId, result.length());
-            return ToolOutput.ok(result);
+            // 结果回流走 <task_result> 压缩协议 —— 包装+截断，防止父 Agent 上下文污染
+            String formatted = SubagentResultFormatter.format(agentId, input.description(), result);
+            return ToolOutput.ok(formatted);
         }
     }
 

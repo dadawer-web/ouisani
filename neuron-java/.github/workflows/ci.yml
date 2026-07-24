@@ -81,7 +81,6 @@ jobs:
       - name: Maven test
         working-directory: ${{ github.workspace }}/neuron-java
         run: mvn -B -ntp test
-        continue-on-error: true  # 测试目录尚未建立，允许失败
 
       - name: Maven package (shade jar)
         working-directory: ${{ github.workspace }}/neuron-java

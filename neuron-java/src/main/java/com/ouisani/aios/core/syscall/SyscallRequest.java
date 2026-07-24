@@ -14,15 +14,22 @@ import java.util.Map;
  * <p>
  * OS 类比: Linux 的 syscall(number, args...)，namespace.action 等同于 syscall 编号，
  * payload 等同于 syscall 参数结构体。
+ * <p>
+ * <b>幂等性</b>：写操作应携带 {@link #idempotencyKey}，由 {@link IdempotencyLedger}
+ * 去重；{@link #readSafe} 标记无副作用读操作以允许 {@link SyscallRetryPolicy} 自由重试。
  *
- * @param namespace syscall 命名空间（如 "llm"、"memory"、"storage"、"tool"、"vfs"）
- * @param action    命名空间内的操作（如 "think"、"store"、"read"）
- * @param payload   强类型 syscall 载荷
+ * @param namespace       syscall 命名空间（如 "llm"、"memory"、"storage"、"tool"、"vfs"）
+ * @param action          命名空间内的操作（如 "think"、"store"、"read"）
+ * @param payload         强类型 syscall 载荷
+ * @param idempotencyKey  幂等键（可选，写操作必填）；同 key 重复提交仅执行一次
+ * @param readSafe        标记为可安全重试的读操作（无副作用）；默认 false
  */
 public record SyscallRequest(
         String namespace,
         String action,
-        SyscallPayload payload
+        SyscallPayload payload,
+        String idempotencyKey,
+        boolean readSafe
 ) {
     /**
      * Canonical constructor with validation.
@@ -40,6 +47,15 @@ public record SyscallRequest(
     }
 
     /**
+     * Backward-compatible canonical constructor: namespace + action + payload.
+     * <p>
+     * 等价于 idempotencyKey=null、readSafe=false，使所有旧调用点源码兼容。
+     */
+    public SyscallRequest(String namespace, String action, SyscallPayload payload) {
+        this(namespace, action, payload, null, false);
+    }
+
+    /**
      * Construct from a dot-notation full action and a typed payload.
      * <p>
      * Example: {@code new SyscallRequest("llm.think", new LlmPayload("hello"))}
@@ -48,7 +64,7 @@ public record SyscallRequest(
      * @param payload    the typed syscall payload
      */
     public SyscallRequest(String fullAction, SyscallPayload payload) {
-        this(extractNamespace(fullAction), extractAction(fullAction), payload);
+        this(extractNamespace(fullAction), extractAction(fullAction), payload, null, false);
     }
 
     /**
@@ -62,6 +78,18 @@ public record SyscallRequest(
      */
     public SyscallRequest(String fullAction, Map<String, Object> parameters) {
         this(fullAction, new RawPayload(parameters));
+    }
+
+    // ── 幂等性 wither（record 不可变拷贝）──
+
+    /** 返回携带幂等键的新请求拷贝。用于写操作在调用点显式注入 key。 */
+    public SyscallRequest withIdempotencyKey(String key) {
+        return new SyscallRequest(namespace, action, payload, key, readSafe);
+    }
+
+    /** 返回标记为可安全重试读的新请求拷贝。 */
+    public SyscallRequest withReadSafe(boolean readSafe) {
+        return new SyscallRequest(namespace, action, payload, idempotencyKey, readSafe);
     }
 
     /**

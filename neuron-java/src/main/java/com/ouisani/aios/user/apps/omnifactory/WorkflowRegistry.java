@@ -40,4 +40,9 @@ class WorkflowRegistry {
     Map<String, WorkflowNode> findNodeMapForWorkflow(String workflowId) {
         return activeNodeMaps.get(workflowId);
     }
+
+    /** 包内可见 — 快照所有活跃工作流的节点映射,供任务队列提供者枚举。 */
+    Map<String, Map<String, WorkflowNode>> snapshotActiveNodeMaps() {
+        return new java.util.HashMap<>(activeNodeMaps);
+    }
 }

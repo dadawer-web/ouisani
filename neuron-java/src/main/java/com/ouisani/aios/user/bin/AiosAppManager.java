@@ -4,6 +4,8 @@ import com.ouisani.aios.core.AgentTask;
 import com.ouisani.aios.core.ProcessPriority;
 import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.VfsManager;
+import com.ouisani.aios.core.memory.MemoryManager;
+import com.ouisani.aios.core.memory.VersionedMemoryStore;
 import com.ouisani.aios.user.container.AgentfileParser;
 import com.ouisani.aios.user.container.AppManifest;
 import com.ouisani.aios.user.sdk.AbstractAgent;
@@ -36,6 +38,49 @@ public class AiosAppManager {
 
     public static void configure(TaskScheduler taskScheduler) {
         scheduler = taskScheduler;
+        // P3 启动注入：把 MemoryManager 的 currentProvider 包装为 VersionedMemoryStore
+        // 并注册为全局 primary store，让 MemoryViewerRoutes 的端点真正可用
+        // （否则端点路由虽挂载但 store 永远 null，请求一律返回 503）
+        wirePrimaryMemoryStore();
+        // R4.1：从环境变量装配远程执行器配置（SSH/Slurm/Modal/Modal-REST）到
+        // RemoteExecutorConfigRegistry — 幂等、best-effort，无 env 时零注册不影响启动
+        wireRemoteExecutors();
+    }
+
+    /**
+     * 幂等装配远程执行器配置 — 委托 {@link RemoteExecutorWiring#wire()}，永不抛异常。
+     * <p>
+     * 无对应 env var 时 {@code RemoteExecutorWiring.wire()} 不注册任何配置（4 个 wireXxx 均 early-return），
+     * 对现有启动序列零副作用。镜像 {@link #wirePrimaryMemoryStore()} 的 best-effort 模式。
+     */
+    private static void wireRemoteExecutors() {
+        try {
+            RemoteExecutorWiring.wire();
+        } catch (Exception e) {
+            log.warn("[App Manager] 远程执行器装配失败（非致命）: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 幂等注入 VersionedMemoryStore.setPrimaryStore — 重复调用不会覆盖已存在的 store
+     * （避免 clobber 调用方手动注入的 store 或丢失已有 versionTable）。
+     * <p>
+     * 由 {@link #configure(TaskScheduler)} 自动调用；也可独立调用进行测试。
+     */
+    private static void wirePrimaryMemoryStore() {
+        if (VersionedMemoryStore.getPrimaryStore() != null) {
+            log.debug("[App Manager] primary memory store 已注入，跳过");
+            return;
+        }
+        try {
+            VersionedMemoryStore store = new VersionedMemoryStore(
+                    MemoryManager.getInstance().currentProvider());
+            VersionedMemoryStore.setPrimaryStore(store);
+            log.info("[App Manager] 已注入 primary VersionedMemoryStore (delegate={})",
+                    MemoryManager.getInstance().currentProvider().providerName());
+        } catch (Exception e) {
+            log.warn("[App Manager] 注入 primary VersionedMemoryStore 失败: {}", e.getMessage());
+        }
     }
 
     /**

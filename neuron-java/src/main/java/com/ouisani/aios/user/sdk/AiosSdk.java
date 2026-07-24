@@ -1,5 +1,6 @@
 package com.ouisani.aios.user.sdk;
 
+import com.ouisani.aios.core.action.ActionGovernor;
 import com.ouisani.aios.core.syscall.SyscallDispatcher;
 import com.ouisani.aios.core.syscall.SyscallRequest;
 import com.ouisani.aios.core.syscall.SyscallResponse;
@@ -173,6 +174,36 @@ public final class AiosSdk implements ToolSdk {
         if (!resp.success()) {
             log.warn("[SDK] storageWrite failed: agent={}, path={}, error={}", agentId, path, resp.errorMessage());
         }
+    }
+
+    /**
+     * 受治理的 storage.write — 在执行前自动捕获环境快照，执行后 diff 验证，
+     * 失败时可由 {@link ActionGovernor#undoLast} 回滚。
+     * <p>
+     * <b>接入说明</b>：P1 ActionGovernor 建好但原本无生产调用方。此方法作为
+     * 「opt-in 治理路径」的示范接入点 —— 调用方按需选择
+     * {@link #storageWrite}（裸调用，性能优先）或本方法（含快照/undo/diff，安全优先）。
+     * <p>
+     * <b>风险分级</b>：{@code storage.write} 由 {@link com.ouisani.aios.core.action.RiskClassifier}
+     * 判定为 {@code REVERSIBLE}，会触发 before/after 双快照 + diff；可选 undo。
+     * <p>
+     * <b>使用场景</b>：长跑 overnight 任务、关键配置写入、需要审计与回滚能力的场景。
+     * 普通 hot path 写入仍走 {@link #storageWrite}。
+     *
+     * @param agentId 调用方 Agent ID
+     * @param path    存储路径
+     * @param data    要写入的数据
+     * @return ActionGovernor 的动作记录（含 requestId、snapshotId、riskLevel 等）；
+     *         {@code null} 表示未触发治理（如 RiskLevel.SAFE 时）
+     */
+    public com.ouisani.aios.core.action.ActionRecord storageWriteGoverned(String agentId, String path, String data) {
+        SyscallRequest request = new SyscallRequest("storage", "write", StoragePayload.write(path, data));
+        SyscallResponse resp = ActionGovernor.getInstance().executeGoverned(agentId, request);
+        if (!resp.success()) {
+            log.warn("[SDK] storageWriteGoverned failed: agent={}, path={}, error={}",
+                    agentId, path, resp.errorMessage());
+        }
+        return ActionGovernor.getInstance().lastAction(agentId);
     }
 
     // ── 文件句柄（open/read/close） ──

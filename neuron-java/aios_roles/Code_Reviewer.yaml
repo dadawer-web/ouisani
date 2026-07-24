@@ -150,3 +150,18 @@ workflow:
 output_format:
   review_report: "JSON 格式审查报告（如上 verdict 模板）"
   summary: "Markdown 格式审查摘要（含问题统计 + 修复优先级列表）"
+
+# ── 运行时三维分层（借鉴 OpenScience agent.ts：mode/permission/model）──
+# permission 是唯一接线的维度：*:deny + 只读工具白名单 → 在权限层强制 blindness，
+# 比 prompt 里写"你是只读的"可靠（与 BpfManager.preFilter SecurityToken 思路一致）。
+# mode/hidden/model/temperature/steps 为存储元数据，暂不接线调度/LLM 路径。
+runtime:
+  mode: subagent
+  hidden: false
+  model: null
+  temperature: 0.2
+  steps: 30
+  permission:
+    mode: default
+    deny: ["*"]
+    allow: [file_read, grep, glob, web_fetch, web_search]

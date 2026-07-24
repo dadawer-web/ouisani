@@ -1,5 +1,6 @@
 package com.ouisani.aios.core.skill;
 
+import com.ouisani.aios.core.config.AiosPaths;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,23 +31,87 @@ public class SkillLoader {
 
     private static final Logger log = LoggerFactory.getLogger(SkillLoader.class);
 
-    /** 技能来源 */
+    /**
+     * 技能来源。
+     * <p>
+     * 优先级链（早源 shadow 晚源，{@link #loadAll} 按 PROJECT→BUNDLED→USER→LEARNED 顺序加载，
+     * first-wins via {@code putIfAbsent}）：PROJECT > BUNDLED > USER > LEARNED。
+     */
     public enum SkillSource {
-        BUNDLED, USER, PROJECT, PLUGIN, MANAGED
+        BUNDLED, USER, PROJECT, PLUGIN, MANAGED, LEARNED
     }
 
-    /** 技能定义 */
+    /**
+     * 技能定义。
+     * <p>
+     * R1 新增 {@code outputContract} 字段 — 描述 skill 期望的输出契约
+     * （fenced block 语言标签 + JSON schema 描述），让 LLM 非结构化输出
+     * 可被 {@link SkillOutputParser} 提取为结构化结果。
+     * <p>
+     * 格式约定：{@code <languageTag>:<description>}，例如
+     * {@code "json:Reviewer findings as JSON with findings[], severity, sections[]"}。
+     * 为空表示该 skill 无结构化输出契约（纯行为准则类 skill）。
+     * <p>
+     * Skill Catalog 多源加载新增 {@code category}/{@code tags} 字段（frontmatter 索引），
+     * 以及 {@link #body()} 懒加载 API：eager 源（BUNDLED/PROJECT/USER）content 非 null；
+     * LEARNED 源 content=null，body 首次使用才从 path 读取并缓存。
+     */
     public record SkillDef(
             String name,
             String description,
-            String content,         // SKILL.md 内容
+            String content,         // SKILL.md 内容（LEARNED 源为 null，懒加载）
             List<String> allowedTools,
             List<String> arguments,
             String whenToUse,
             String model,
             SkillSource source,
-            Path path
-    ) {}
+            Path path,
+            String outputContract,  // R1: 输出契约（可空）
+            String category,        // 技能分类（frontmatter category，默认空）
+            List<String> tags       // 标签列表（frontmatter tags，默认空）
+    ) {
+
+        /** compact constructor — 兜底 null 默认值 */
+        public SkillDef {
+            if (outputContract == null) outputContract = "";
+            if (category == null) category = "";
+            if (tags == null) tags = List.of();
+        }
+
+        /**
+         * 便利构造器（10-arg，含 outputContract，无 category/tags）— R1 调用方兼容。
+         */
+        public SkillDef(String name, String description, String content,
+                        List<String> allowedTools, List<String> arguments,
+                        String whenToUse, String model, SkillSource source, Path path,
+                        String outputContract) {
+            this(name, description, content, allowedTools, arguments,
+                    whenToUse, model, source, path, outputContract, "", List.of());
+        }
+
+        /**
+         * 便利构造器（9-arg，无 outputContract）— 旧调用方兼容。
+         */
+        public SkillDef(String name, String description, String content,
+                        List<String> allowedTools, List<String> arguments,
+                        String whenToUse, String model, SkillSource source, Path path) {
+            this(name, description, content, allowedTools, arguments,
+                    whenToUse, model, source, path, "", "", List.of());
+        }
+
+        /**
+         * 技能正文（剥离 frontmatter 后的内容）。
+         * <p>
+         * eager 源（BUNDLED/PROJECT/USER）content 非 null → 直接 {@code extractBody}；
+         * LEARNED 源 content=null → 首次使用从 {@link #path} 懒读取并缓存
+         * （{@link SkillLoader#resolveLazyBody}）。借鉴 OpenScience lazy fetch：
+         * catalog 只索引 frontmatter，大 skill 的 body 不污染 prompt，真正激活/调用时才解析。
+         */
+        public String body() {
+            if (content != null) return SkillLoader.extractBody(content);
+            return SkillLoader.resolveLazyBody(this);
+        }
+    }
 
     private static final Map<String, SkillDef> skillCache = new ConcurrentHashMap<>();
 
@@ -54,23 +119,34 @@ public class SkillLoader {
     private static final Set<String> activeSkills = ConcurrentHashMap.newKeySet();
 
     /**
-     * 加载所有技能 — 对标 getSkillDirCommands()。
+     * 加载所有技能 — 对标 OpenScience skill.ts 多源 catalog 组装。
+     * <p>
+     * 按优先级链顺序加载，**早源 shadow 晚源**（{@code putIfAbsent}）：
+     * <ol>
+     *   <li>PROJECT — {@code .aios/skills/} 优先，回退 {@code .claude/skills/}（legacy）</li>
+     *   <li>BUNDLED — classpath {@code resources/skills/}（INDEX 自动发现）</li>
+     *   <li>USER — {@code ~/.aios/skills/} 优先，回退 {@code ~/.claude/skills/}</li>
+     *   <li>LEARNED — {@link AiosPaths#learnedSkillsDir}（懒加载：仅索引 frontmatter）</li>
+     * </ol>
+     * 借鉴 OpenScience：name 冲突时早源 shadow 晚源。
      */
     public static Map<String, SkillDef> loadAll(String workingDir) {
         Map<String, SkillDef> skills = new LinkedHashMap<>();
 
-        // 1. Bundled skills（硬编码）
-        loadBundledSkills(skills);
+        // 1. PROJECT（最高优先级）— .aios/skills 优先，回退 .claude/skills（legacy 兼容）
+        loadSkillsFromDir(skills, Path.of(workingDir, ".aios", "skills"), SkillSource.PROJECT);
+        loadSkillsFromDir(skills, Path.of(workingDir, ".claude", "skills"), SkillSource.PROJECT);
 
-        // 1.5 Bundled skills（classpath resources/skills/）
+        // 2. BUNDLED — classpath resources/skills（INDEX 自动发现）
         loadClasspathSkills(skills);
 
-        // 2. User skills
+        // 3. USER — ~/.aios/skills 优先，回退 ~/.claude/skills
         String userHome = System.getProperty("user.home");
+        loadSkillsFromDir(skills, Path.of(userHome, ".aios", "skills"), SkillSource.USER);
         loadSkillsFromDir(skills, Path.of(userHome, ".claude", "skills"), SkillSource.USER);
 
-        // 3. Project skills
-        loadSkillsFromDir(skills, Path.of(workingDir, ".claude", "skills"), SkillSource.PROJECT);
+        // 4. LEARNED — /var/db/memory/learned-skills（懒加载：仅索引 frontmatter，body 首次使用才读）
+        loadLearnedSkills(skills);
 
         skillCache.clear();
         skillCache.putAll(skills);
@@ -187,10 +263,9 @@ public class SkillLoader {
         sb.append("The following behavioral guidelines are currently active. You MUST follow these principles:\n\n");
 
         for (SkillDef skill : active) {
-            if (skill.content() == null || skill.content().isBlank()) continue;
+            String body = skill.body();
+            if (body.isBlank()) continue;
             sb.append("### Skill: ").append(skill.name()).append("\n\n");
-            // 提取 SKILL.md 中 frontmatter 之后的内容（行为准则正文）
-            String body = extractBody(skill.content());
             sb.append(body).append("\n\n");
         }
 
@@ -212,22 +287,25 @@ public class SkillLoader {
         return content.substring(secondDash + 3).trim();
     }
 
-    private static void loadBundledSkills(Map<String, SkillDef> skills) {
-        // 内置技能定义
-        addBundled(skills, "verify", "Verify code changes by reading and checking the modified files",
-                "After making code changes, use this skill to verify the modifications are correct.");
-        addBundled(skills, "debug", "Debug issues by systematically investigating error messages and code",
-                "When encountering errors, use this skill to systematically debug.");
-        addBundled(skills, "remember", "Save important information to project memory for future reference",
-                "When learning important project details, use this skill to save them.");
-        addBundled(skills, "batch", "Execute the same operation across multiple files",
-                "When you need to apply the same change to many files, use this skill.");
-        addBundled(skills, "stuck", "Get unstuck by trying alternative approaches",
-                "When you're stuck on a problem, use this skill to try different approaches.");
-    }
+    /** LEARNED 源懒加载 body 缓存 — path → 完整 SKILL.md 内容（首次读取后缓存） */
+    private static final Map<Path, String> lazyBodyCache = new ConcurrentHashMap<>();
 
-    private static void addBundled(Map<String, SkillDef> skills, String name, String desc, String whenToUse) {
-        skills.put(name, new SkillDef(name, desc, "", List.of(), List.of(), whenToUse, "", SkillSource.BUNDLED, null));
+    /**
+     * 懒解析 LEARNED 源技能 body — 首次使用从 {@code path} 读取完整 SKILL.md 并缓存，
+     * 返回剥离 frontmatter 后的正文。借鉴 OpenScience lazy fetch：catalog 不持有 body，
+     * 调用时才 resolve。
+     */
+    private static String resolveLazyBody(SkillDef skill) {
+        if (skill.path() == null) return "";
+        String fullContent = lazyBodyCache.computeIfAbsent(skill.path(), p -> {
+            try {
+                return Files.readString(p, StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                log.warn("[SkillLoader] 懒加载技能 body 失败: {} - {}", p, e.getMessage());
+                return "";
+            }
+        });
+        return extractBody(fullContent);
     }
 
     /**
@@ -250,36 +328,45 @@ public class SkillLoader {
                 Path skillsDir = Path.of(resource.toURI());
                 loadSkillsFromDir(skills, skillsDir, SkillSource.BUNDLED);
             } else if ("jar".equals(resource.getProtocol())) {
-                // 生产模式：JAR 包内 — 已知技能列表硬编码扫描
-                loadKnownClasspathSkills(skills);
+                // 生产模式：JAR 包内 — 通过 INDEX 自动发现
+                loadClasspathSkillsFromIndex(skills);
             }
         } catch (Exception e) {
             log.debug("[SkillLoader] Failed to load classpath skills: {}", e.getMessage());
-            // 回退：尝试加载已知技能
-            loadKnownClasspathSkills(skills);
+            // 回退：通过 INDEX 加载
+            loadClasspathSkillsFromIndex(skills);
         }
     }
 
     /**
-     * 加载已知的 classpath 技能 — JAR 包内无法动态列举目录，
-     * 因此维护一个已知技能名列表。
+     * 从 classpath skills/INDEX 加载技能 — JAR 包内无法列举目录,
+     * 故读取 INDEX 文件获取技能名列表,再逐个加载 SKILL.md。
+     *
+     * 借鉴 mobilegym import.meta.glob:加技能 = 丢目录 + SKILL.md + 跑索引脚本,不改 Java。
      */
-    private static void loadKnownClasspathSkills(Map<String, SkillDef> skills) {
-        String[] knownSkills = {"karpathy-guidelines"};
-        for (String skillName : knownSkills) {
-            if (skills.containsKey(skillName)) continue; // 不覆盖已加载的
-            try {
-                var is = SkillLoader.class.getClassLoader()
-                        .getResourceAsStream("skills/" + skillName + "/SKILL.md");
-                if (is != null) {
-                    String content = new String(is.readAllBytes(), StandardCharsets.UTF_8);
-                    SkillDef def = parseSkillMd(skillName, content, SkillSource.BUNDLED, null);
-                    skills.put(skillName, def);
-                    log.info("[SkillLoader] Loaded classpath skill: {}", skillName);
+    private static void loadClasspathSkillsFromIndex(Map<String, SkillDef> skills) {
+        var indexStream = SkillLoader.class.getClassLoader().getResourceAsStream("skills/INDEX");
+        if (indexStream == null) {
+            log.debug("[SkillLoader] No classpath skills/INDEX found");
+            return;
+        }
+        try (var is = indexStream) {
+            String indexContent = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            for (String line : indexContent.split("\n")) {
+                String skillName = line.trim();
+                if (skillName.isEmpty() || skills.containsKey(skillName)) continue;
+                try (var skillStream = SkillLoader.class.getClassLoader()
+                        .getResourceAsStream("skills/" + skillName + "/SKILL.md")) {
+                    if (skillStream != null) {
+                        String content = new String(skillStream.readAllBytes(), StandardCharsets.UTF_8);
+                        SkillDef def = parseSkillMd(skillName, content, SkillSource.BUNDLED, null);
+                        skills.putIfAbsent(skillName, def);
+                        log.info("[SkillLoader] Loaded classpath skill: {}", skillName);
+                    }
                 }
-            } catch (IOException e) {
-                log.warn("[SkillLoader] Failed to load classpath skill {}: {}", skillName, e.getMessage());
             }
+        } catch (IOException e) {
+            log.warn("[SkillLoader] Failed to read skills/INDEX: {}", e.getMessage());
         }
     }
 
@@ -294,7 +381,7 @@ public class SkillLoader {
                         String content = Files.readString(skillMd, StandardCharsets.UTF_8);
                         String name = skillDir.getFileName().toString();
                         SkillDef def = parseSkillMd(name, content, source, skillMd);
-                        skills.put(name, def);
+                        skills.putIfAbsent(name, def);
                         log.debug("[SkillLoader] Loaded {} skill: {}", source, name);
                     } catch (IOException e) {
                         log.warn("[SkillLoader] Failed to read {}: {}", skillMd, e.getMessage());
@@ -307,11 +394,24 @@ public class SkillLoader {
     }
 
     private static SkillDef parseSkillMd(String name, String content, SkillSource source, Path path) {
+        return parseSkillMd(name, content, source, path, false);
+    }
+
+    /**
+     * 解析 SKILL.md frontmatter。
+     *
+     * @param lazy true → LEARNED 源：丢弃 body（content 存为 null），仅索引 frontmatter，
+     *             body 首次使用时从 path 懒读取（{@link SkillDef#body}）
+     */
+    private static SkillDef parseSkillMd(String name, String content, SkillSource source, Path path, boolean lazy) {
         // 简化的 frontmatter 解析
         String description = "";
         List<String> allowedTools = List.of();
         String whenToUse = "";
         String model = "";
+        String outputContract = "";  // R1: 输出契约
+        String category = "";        // 技能分类
+        List<String> tags = List.of(); // 标签
 
         String[] lines = content.split("\n");
         boolean inFrontmatter = false;
@@ -331,10 +431,53 @@ public class SkillLoader {
                     whenToUse = line.substring("when_to_use:".length()).trim().replace("\"", "");
                 } else if (line.startsWith("model:")) {
                     model = line.substring("model:".length()).trim().replace("\"", "");
+                } else if (line.startsWith("output-contract:") || line.startsWith("output_contract:")) {
+                    // R1: 解析输出契约 — 支持 kebab-case 和 snake_case
+                    String key = line.startsWith("output-contract:") ? "output-contract:" : "output_contract:";
+                    outputContract = line.substring(key.length()).trim().replace("\"", "");
+                } else if (line.startsWith("category:")) {
+                    category = line.substring("category:".length()).trim().replace("\"", "");
+                } else if (line.startsWith("tags:")) {
+                    String tagsStr = line.substring("tags:".length()).trim();
+                    tags = Arrays.stream(tagsStr.split("[,\\s]+")).filter(s -> !s.isEmpty()).toList();
                 }
             }
         }
 
-        return new SkillDef(name, description, content, allowedTools, List.of(), whenToUse, model, source, path);
+        // LEARNED 源懒加载：丢弃 body，仅留 frontmatter 索引
+        String storedContent = lazy ? null : content;
+        return new SkillDef(name, description, storedContent, allowedTools, List.of(),
+                whenToUse, model, source, path, outputContract, category, tags);
+    }
+
+    /**
+     * 加载 LEARNED 源技能 — 从 {@link AiosPaths#learnedSkillsDir} 扫描。
+     * <p>
+     * 借鉴 OpenScience learned skills：RSI 从过往 deterministic-PASS 运行蒸馏的技能
+     * （由 {@code LearnedSkillDistiller} 写入）。与 eager 源不同，LEARNED 源懒加载——
+     * catalog 只索引 frontmatter，body 首次使用才读（{@link SkillDef#body}）。
+     */
+    private static void loadLearnedSkills(Map<String, SkillDef> skills) {
+        Path learnedDir = Path.of(AiosPaths.learnedSkillsDir());
+        if (!Files.exists(learnedDir) || !Files.isDirectory(learnedDir)) return;
+        try (Stream<Path> entries = Files.list(learnedDir)) {
+            entries.filter(Files::isDirectory).forEach(skillDir -> {
+                Path skillMd = skillDir.resolve("SKILL.md");
+                if (Files.exists(skillMd)) {
+                    try {
+                        String content = Files.readString(skillMd, StandardCharsets.UTF_8);
+                        String name = skillDir.getFileName().toString();
+                        if (skills.containsKey(name)) return;  // 早源 shadow
+                        SkillDef def = parseSkillMd(name, content, SkillSource.LEARNED, skillMd, true);
+                        skills.putIfAbsent(name, def);
+                        log.debug("[SkillLoader] Loaded LEARNED skill (lazy): {}", name);
+                    } catch (IOException e) {
+                        log.warn("[SkillLoader] Failed to read {}: {}", skillMd, e.getMessage());
+                    }
+                }
+            });
+        } catch (IOException e) {
+            log.debug("[SkillLoader] Failed to list learned-skills dir {}: {}", learnedDir, e.getMessage());
+        }
     }
 }

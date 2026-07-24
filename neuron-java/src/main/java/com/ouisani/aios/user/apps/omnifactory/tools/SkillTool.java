@@ -113,8 +113,9 @@ public class SkillTool implements Tool<SkillTool.Input> {
             sb.append(skillDef.description()).append("\n\n");
         }
 
-        if (skillDef.content() != null && !skillDef.content().isEmpty()) {
-            sb.append(skillDef.content()).append("\n\n");
+        String body = skillDef.body();
+        if (!body.isEmpty()) {
+            sb.append(body).append("\n\n");
         }
 
         if (skillDef.allowedTools() != null && !skillDef.allowedTools().isEmpty()) {

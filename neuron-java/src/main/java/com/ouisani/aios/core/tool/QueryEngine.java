@@ -6,8 +6,11 @@ import com.ouisani.aios.core.network.AiosEventSchema.AiosEvent;
 import com.ouisani.aios.core.network.EventBus;
 import com.ouisani.aios.core.permission.PermissionChecker;
 import com.ouisani.aios.core.permission.PermissionDecision;
+import com.ouisani.aios.core.permission.PermissionMode;
+import com.ouisani.aios.core.permission.PermissionProfile;
 import com.ouisani.aios.core.plugin.DynamicToolBridge;
 import com.ouisani.aios.core.plugin.ToolDefinition;
+import com.ouisani.aios.core.review.ReviewGate;
 import com.ouisani.aios.core.security.Guardrail;
 import com.ouisani.aios.core.security.GuardrailEngine;
 import com.ouisani.aios.core.telemetry.TelemetryService;
@@ -105,6 +108,40 @@ public class QueryEngine {
     }
 
     /**
+     * 创建查询引擎并指定权限模式 — 供 {@link com.ouisani.aios.core.review.ReviewerRunner}
+     * 构造 PLAN-mode reviewer 使用（只读锁定）。
+     *
+     * @param mode 权限模式；null 表示不修改（沿用 DEFAULT）
+     */
+    public QueryEngine(ToolSdk sdk, String agentId, String workingDir,
+                       List<Tool<? extends ToolInput>> extraTools, PermissionMode mode) {
+        this(sdk, agentId, workingDir, extraTools);
+        if (mode != null) {
+            this.permissionChecker.setMode(mode);
+        }
+    }
+
+    /**
+     * 创建查询引擎并应用权限画像 —— 供 RoleBlueprint 驱动的角色拉起使用。
+     * <p>
+     * 借鉴 OpenScience：reviewer 子 agent 的 {@code *:deny + 只读工具白名单} blindness
+     * 由权限层强制（而非 prompt 文字）。画像经 {@link PermissionChecker#applyProfile} 注入，
+     * {@code *:deny} 走"默认拒绝 flag + allow 白名单覆盖"语义。
+     *
+     * @param profile 权限画像；null/empty 为 no-op（零回归）
+     */
+    public QueryEngine(ToolSdk sdk, String agentId, String workingDir,
+                       List<Tool<? extends ToolInput>> extraTools, PermissionProfile profile) {
+        this(sdk, agentId, workingDir, extraTools);
+        this.permissionChecker.applyProfile(profile);
+    }
+
+    /** package-private 访问器 —— 供同包测试验证画像注入后的权限决策。 */
+    PermissionChecker permissionChecker() {
+        return permissionChecker;
+    }
+
+    /**
      * 执行一次完整的查询循环。
      *
      * @param userMessage 用户输入
@@ -181,6 +218,7 @@ public class QueryEngine {
         int syntaxErrorCount = 0;
         final int MAX_SYNTAX_ERRORS = 2; // 参数级错误最多重试 2 次，超过则熔断
         String lastLlmResponse = null;
+        int reviewFixCycles = 0; // ReviewGate soft/hard 修复轮次计数
 
         for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
             log.info("[QueryEngine] 第 {}/{} 轮", round + 1, MAX_TOOL_ROUNDS);
@@ -296,9 +334,31 @@ public class QueryEngine {
                     AiosEventSchema.emit(AiosEventSchema.runFinished(agentId, currentRunId, blocked));
                     return blocked;
                 }
-                // ── 标准化事件协议：RUN_FINISHED ──
-                AiosEventSchema.emit(AiosEventSchema.runFinished(agentId, currentRunId, llmResponse));
-                return llmResponse;
+                // ── ReviewGate: finalize 守门（盲审 reviewer + 确定性兜底）──
+                ReviewGate.ReviewGateResult rgResult;
+                try {
+                    rgResult = ReviewGate.review(new ReviewGate.ReviewContext(
+                            sdk, agentId, currentRunId, workingDir, llmResponse,
+                            reviewFixCycles, /*canReenter*/ true));
+                } catch (Throwable t) {
+                    log.warn("[QueryEngine] ReviewGate 异常，跳过 gate: {}", t.getMessage());
+                    rgResult = ReviewGate.ReviewGateResult.returnOriginal(llmResponse);
+                }
+                switch (rgResult.action()) {
+                    case SKIP, RETURN -> {
+                        AiosEventSchema.emit(AiosEventSchema.runFinished(agentId, currentRunId, rgResult.finalAnswer()));
+                        return rgResult.finalAnswer();
+                    }
+                    case REENTER -> {
+                        // soft/hard：将 review 报告作为 user 提醒注入历史，继续循环
+                        historyCompressor.addMessage("assistant", llmResponse);
+                        historyCompressor.addMessage("user", rgResult.fixReminder());
+                        fullPrompt = systemPrompt + "\n\n" + historyCompressor.buildHistoryText()
+                                + "\n\nPlease address the reviewer findings above.";
+                        reviewFixCycles++;
+                        continue;
+                    }
+                }
             }
 
             // 执行工具调用（并行执行 — 多个工具同时运行，大幅提升吞吐）
@@ -433,9 +493,21 @@ public class QueryEngine {
         }
 
         log.warn("[QueryEngine] 已达到最大工具轮次 ({})", MAX_TOOL_ROUNDS);
+        String maxAnswer = "查询已达到最大工具执行轮次 (" + MAX_TOOL_ROUNDS + ")。";
+        // ── ReviewGate: max-rounds 出口（canReenter=false → 永不 REENTER，降级 annotate/拒绝）──
+        ReviewGate.ReviewGateResult rgResult;
+        try {
+            rgResult = ReviewGate.review(new ReviewGate.ReviewContext(
+                    sdk, agentId, currentRunId, workingDir, maxAnswer,
+                    Integer.MAX_VALUE, /*canReenter*/ false));
+        } catch (Throwable t) {
+            log.warn("[QueryEngine] ReviewGate 异常（max-rounds 出口），跳过 gate: {}", t.getMessage());
+            rgResult = ReviewGate.ReviewGateResult.returnOriginal(maxAnswer);
+        }
+        String finalOut = rgResult.finalAnswer() != null ? rgResult.finalAnswer() : maxAnswer;
         // ── 标准化事件协议：RUN_FINISHED ──
-        AiosEventSchema.emit(AiosEventSchema.runFinished(agentId, currentRunId, lastLlmResponse));
-        return "查询已达到最大工具执行轮次 (" + MAX_TOOL_ROUNDS + ")。";
+        AiosEventSchema.emit(AiosEventSchema.runFinished(agentId, currentRunId, finalOut));
+        return finalOut;
     }
 
     /**

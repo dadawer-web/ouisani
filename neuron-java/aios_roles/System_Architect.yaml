@@ -29,3 +29,7 @@ workflow:
         ]
       }
       (注：以上仅为 JSON 结构与 dependsOn 语法示例，严禁直接照抄！真实拓扑图的宽度和深度完全由你根据当前任务自主决定！)
+
+# 运行时三维分层（借鉴 OpenScience agent.ts）：主角色，默认权限。
+runtime:
+  mode: primary

@@ -743,12 +743,29 @@ public final class VfsManager {
      * 安全边界：只写入 VFS 虚拟文件系统，永远不接触宿主机真实文件系统。
      * 如果文件不存在，自动创建 MutableFileNode 并挂载。
      * 如果父目录不存在，自动创建中间目录。
+     * <p>
+     * <b>Provenance 追溯</b>：写入成功后自动调用 {@code ProvenanceHook.onWrite}
+     * 追加一条版本记录到 {@code .aios/provenance.jsonl}（R1 数据模型）。
+     * Best-effort — 记录失败不中断写主流程。
      *
      * @param path    VFS 虚拟路径
      * @param content 要写入的文本内容
      * @return true 写入成功
      */
     public boolean writeText(String path, String content) {
+        boolean success = writeTextInternal(path, content);
+        // R1: Provenance 追溯 — best-effort，不影响主流程
+        com.ouisani.aios.core.provenance.ProvenanceHook.onWrite(path, content, success);
+        return success;
+    }
+
+    /**
+     * writeText 的内部实现 — 原有逻辑，不挂 Provenance。
+     * <p>
+     * 由 {@link #writeText} 包装调用。也可直接调用以跳过 Provenance 记录
+     * （如系统内部写入 .aios/provenance.jsonl 自身时避免递归）。
+     */
+    private boolean writeTextInternal(String path, String content) {
         rwLock.writeLock().lock();
         try {
             if (!initialized) {

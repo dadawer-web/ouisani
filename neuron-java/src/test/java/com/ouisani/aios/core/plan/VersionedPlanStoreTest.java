@@ -100,6 +100,11 @@ class VersionedPlanStoreTest {
         // now = 2000, stale_for = 1000 > recompileAfterMs=100
         store.sweepOnce(2000L);
 
+        // EventBus 异步派发到虚拟线程 — 等待 handler 投递 payload 后再断言
+        // （与 plan_version_broadcast_on_start_task 同模式，避免时序竞态）
+        Awaitility.await().atMost(2, TimeUnit.SECONDS)
+                .until(() -> !recompilePayloads.isEmpty());
+
         assertFalse(recompilePayloads.isEmpty(),
                 "stale_for exceeds recompileAfter → broadcast topology_recompile_needed");
         assertTrue(recompilePayloads.get(0).contains("t1"),

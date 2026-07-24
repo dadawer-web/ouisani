@@ -378,6 +378,9 @@ public class AiosShell extends AbstractAgent {
         com.ouisani.aios.core.lifecycle.HeartbeatScheduler.instance().start();
         System.out.println("  ✓ HeartbeatScheduler 已启动（由 SystemTick 驱动）");
 
+        // 9. ScienceMcpBootstrap (科研 MCP 网关 — paper-search: arXiv/PubMed/Crossref/Semantic Scholar 等 20+ 学术数据源)
+        com.ouisani.aios.user.init.ScienceMcpBootstrap.registerDefaults();
+
         System.out.println();
         System.out.println("欢迎使用 AIOS。自然语言输入意图，或使用 '/' 执行原生 Syscall。");
         System.out.println("输入 'exit' 停止系统。\n");

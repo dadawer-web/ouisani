@@ -74,8 +74,16 @@ public class PermissionChecker {
         String toolName = tool.name();
 
         // ── 1a. deny 规则检查 ──
+        // 通配符 *:deny 特殊化：不立即拒绝，仅置 flag，留待 2c' 兜底 ——
+        // 这样 allow 白名单可覆盖默认拒绝（reviewer blindness 画像：*:deny + 只读白名单）。
+        // 非通配符 deny 保持绝对性（立即拒绝，零回归）。
+        boolean wildcardDenyActive = false;
         for (PermissionRule rule : denyRules) {
             if (matchesRule(rule, toolName, input)) {
+                if ("*".equals(rule.toolName())) {
+                    wildcardDenyActive = true;
+                    continue;
+                }
                 log.debug("[Permission] Denied by rule: {} → {}", rule.toRuleString(), toolName);
                 return PermissionDecision.deny("Denied by rule: " + rule.toRuleString(), "rule");
             }
@@ -132,6 +140,13 @@ public class PermissionChecker {
             }
         }
 
+        // ── 2c'. 通配符 *:deny 兜底 ──
+        // 1a 的 *:deny 未立即拒绝；若此处仍未被 allow 规则放行，则兜底拒绝。
+        // BYPASS(2a)/ACCEPT_EDITS(2b) 已在上游返回，不会到达此处 —— 故 blindness 画像须用 mode: default。
+        if (wildcardDenyActive) {
+            return PermissionDecision.deny("Denied by wildcard *:deny (no explicit allow rule matched)", "wildcard_deny");
+        }
+
         // ── 2d. auto 模式 + 安全白名单工具 → 自动允许 ──
         if (mode == PermissionMode.AUTO && SAFE_AUTO_TOOLS.contains(toolName)) {
             return PermissionDecision.allow("Auto-allowed (safe tool)", "mode");
@@ -151,9 +166,14 @@ public class PermissionChecker {
 
     /**
      * 规则匹配 — 检查规则是否匹配当前工具调用。
+     * <p>
+     * 通配符 {@code *} 匹配任意工具名（ruleContent 仍按子串匹配）—— 用于 reviewer 子 agent 的
+     * {@code *:deny + 只读工具白名单} blindness 画像。注意与 bash shell 前缀通配（ruleContent 中的
+     * {@code git*}）不同：本通配符作用于工具名字段。
      */
     private boolean matchesRule(PermissionRule rule, String toolName, ToolInput input) {
-        if (!rule.toolName().equalsIgnoreCase(toolName)) return false;
+        boolean toolMatches = "*".equals(rule.toolName()) || rule.toolName().equalsIgnoreCase(toolName);
+        if (!toolMatches) return false;
         if (rule.ruleContent() == null || rule.ruleContent().isEmpty()) return true;
 
         // Shell 规则匹配（Bash 工具）
@@ -213,6 +233,20 @@ public class PermissionChecker {
             case ASK -> askRules.add(rule);
             case ALLOW -> allowRules.add(rule);
         }
+    }
+
+    /**
+     * 应用权限画像 —— 把 RoleBlueprint 的 {@code permission:} 块注入检查器。
+     * <p>
+     * 注入顺序：先设模式（mode），再加 deny/allow 规则（经 {@link #addRule} 按 behavior 分流）。
+     * {@code *:deny} 经 1a 的通配符特殊化 + 2c' 兜底实现"默认拒绝，allow 白名单可覆盖"语义。
+     * null 画像为 no-op（零回归）。
+     */
+    public void applyProfile(PermissionProfile profile) {
+        if (profile == null) return;
+        if (profile.mode() != null) setMode(profile.mode());
+        profile.denyRules().forEach(this::addRule);
+        profile.allowRules().forEach(this::addRule);
     }
 
     public void clearRules() {

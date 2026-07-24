@@ -11,7 +11,7 @@ import {
   type OnNodesChange,
   type OnEdgesChange,
 } from "@xyflow/react";
-import { CheckCircle2, AlertCircle, X, AlertTriangle, Code, Monitor, Eye, EyeOff, Radar, RefreshCw, Play, Loader2 } from "lucide-react";
+import { CheckCircle2, AlertCircle, X, AlertTriangle, Code, Monitor, Eye, EyeOff, Radar, RefreshCw, Play, Loader2, Brain } from "lucide-react";
 import "@xyflow/react/dist/style.css";
 
 import AgentNode from "@/components/AgentNode";
@@ -19,6 +19,7 @@ import Sidebar from "@/components/Sidebar";
 import KernelStatusBar from "@/components/KernelStatusBar";
 import KernelMonitor from "@/components/KernelMonitor";
 import TelemetryRadar from "@/components/TelemetryRadar";
+import MemoryViewer from "@/components/MemoryViewer";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { useSystemStore } from "@/store/systemStore";
 
@@ -46,8 +47,8 @@ export default function App() {
 
   // ── 上帝视角：内核监控抽屉开关 ──
   const [isMonitorOpen, setIsMonitorOpen] = useState(false);
-  // ── 底部抽屉 Tab 切换：kernel | telemetry ──
-  const [monitorTab, setMonitorTab] = useState<"kernel" | "telemetry">("kernel");
+  // ── 底部抽屉 Tab 切换：kernel | telemetry | memory ──
+  const [monitorTab, setMonitorTab] = useState<"kernel" | "telemetry" | "memory">("kernel");
 
   // ── 全息视界：UI Sandbox 渲染状态 ──
   const [htmlPayload, setHtmlPayload] = useState<string>(
@@ -396,6 +397,17 @@ export default function App() {
               <Radar className="h-3 w-3" />
               Telemetry Radar
             </button>
+            <button
+              onClick={() => setMonitorTab("memory")}
+              className={`flex items-center gap-1.5 rounded px-3 py-1 text-[9px] font-bold uppercase tracking-wider transition-all ${
+                monitorTab === "memory"
+                  ? "bg-violet-900/50 text-violet-300 shadow-[0_0_8px_rgba(139,92,246,0.2)]"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              <Brain className="h-3 w-3" />
+              Memory
+            </button>
           </div>
 
           <button
@@ -409,7 +421,13 @@ export default function App() {
         {/* 面板主体 */}
         <div className="h-[calc(100%-2.5rem)] border-t border-emerald-500/20 bg-[#050510]/95 backdrop-blur-xl"
              style={{ boxShadow: "0 -10px 40px rgba(0,255,0,0.05)" }}>
-          {monitorTab === "kernel" ? <KernelMonitor /> : <TelemetryRadar />}
+          {monitorTab === "kernel" ? (
+            <KernelMonitor />
+          ) : monitorTab === "telemetry" ? (
+            <TelemetryRadar />
+          ) : (
+            <MemoryViewer />
+          )}
         </div>
       </div>
 

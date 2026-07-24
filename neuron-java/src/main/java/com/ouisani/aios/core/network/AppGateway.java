@@ -675,6 +675,10 @@ public class AppGateway {
         ManagementRoutes.attachTo(app);
 
         HitlStateRoutes.attachTo(app);
+
+        // P3：记忆查看器 — GET/PATCH/DELETE /api/memory/{agentId}[/{key}]
+        // 依赖 VersionedMemoryStore.setPrimaryStore 在启动时注入；未注入时端点返回 503
+        MemoryViewerRoutes.attachTo(app);
         // ════════════════════════════════════════════════════════════════
         //  Cross-Validation — 多模型对抗与交叉审查（借鉴 OmniGent Debby & Polly）
         // ════════════════════════════════════════════════════════════════

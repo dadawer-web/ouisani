@@ -12,12 +12,17 @@ import com.ouisani.aios.core.plugin.PluginManager;
 import com.ouisani.aios.core.rtos.WatchdogDaemon;
 import com.ouisani.aios.core.sandbox.GraalWasmSandbox;
 import com.ouisani.aios.core.security.BpfManager;
+import com.ouisani.aios.core.snapshot.EnvironmentSnapshotManager;
 import com.ouisani.aios.core.telemetry.SemanticEtw;
 import com.ouisani.aios.core.telemetry.SystemMonitorDaemon;
 import com.ouisani.aios.core.tick.SystemTickGenerator;
 import com.ouisani.aios.core.vfs.VfsJournal;
+import com.ouisani.aios.core.hibernation.HibernationManager;
 import com.ouisani.aios.user.DaemonManager;
 import com.ouisani.aios.user.apps.omnifactory.AgentBlueprint;
+import com.ouisani.aios.user.apps.omnifactory.OmnifactoryCapturerFactory;
+import com.ouisani.aios.user.apps.omnifactory.OmnifactoryTaskQueueProvider;
+import com.ouisani.aios.user.apps.omnifactory.OverlayCapturerFactory;
 import com.ouisani.aios.user.apps.omnifactory.TemplateManager;
 import com.ouisani.aios.user.apps.omnifactory.WorkflowEngine;
 import com.ouisani.aios.user.apps.omnifactory.WorkflowManifest;
@@ -293,6 +298,20 @@ public class InitDaemon extends AbstractAgent {
         }
         bootResults.put("CognitiveDreamDaemon", dreamOk);
 
+        // 3c-bis. EnvironmentSnapshot fork 工厂 + Hibernation 任务队列 provider 注册
+        boolean snapshotRegOk = false;
+        try {
+            EnvironmentSnapshotManager.instance().registerFactory(new OmnifactoryCapturerFactory());
+            EnvironmentSnapshotManager.instance().registerFactory(new OverlayCapturerFactory());
+            HibernationManager.instance().setTaskQueueProvider(new OmnifactoryTaskQueueProvider());
+            snapshotRegOk = true;
+            System.out.println("  │  [SVC] SnapshotFactory + TaskQueueProvider：已注册 ✓        │");
+        } catch (Exception ex) {
+            log.warn("[PID 1] 快照工厂注册失败：{}", ex.getMessage());
+            System.out.println("  │  [SVC] SnapshotFactory 注册：失败 ✗                        │");
+        }
+        bootResults.put("SnapshotRegistration", snapshotRegOk);
+
         // 3d. PluginManager — WASM 插件扫描
         int pluginCount = 0;
         boolean pluginOk = false;
@@ -503,30 +522,99 @@ public class InitDaemon extends AbstractAgent {
     }
 
     /**
-     * 构建系统内置蓝图注册表。
+     * 构建系统内置蓝图注册表 — 从 classpath blueprints/ 目录自动发现。
      * <p>
-     * 内核只提供系统级守护进程的蓝图，业务蓝图由用户通过 VFS 或前端注入。
+     * 借鉴 mobilegym import.meta.glob:加系统蓝图 = 丢目录 + BLUEPRINT.md + 跑索引脚本,不改 Java。
      */
     private Map<String, AgentBlueprint> buildSystemBlueprints() {
         Map<String, AgentBlueprint> blueprints = new LinkedHashMap<>();
 
-        // AutoMedic 蓝图 — 系统自愈守护进程
-        blueprints.put("auto_medic", new AgentBlueprint(
-                "auto_medic",
-                "系统自愈守护进程 — 监听 sys.kernel.panic 事件并自动修复崩溃节点",
-                "# AutoMedic — 系统内置，由 InitDaemon 自动拉起\n" +
-                        "# 实际逻辑由 com.ouisani.aios.user.apps.omnifactory.AutoMedicAgent 提供\n" +
-                        "import BaseAgent\n" +
-                        "import json\n\n" +
-                        "class AutoMedicDaemon(BaseAgent.BaseAgent):\n" +
-                        "    def process_data(self, data):\n" +
-                        "        # AutoMedic 由内核 AutoMedicAgent.java 驱动\n" +
-                        "        # 此 Python 入口仅作为 EventBus 桥接\n" +
-                        "        pass\n",
-                List.of()
-        ));
+        var indexStream = InitDaemon.class.getClassLoader().getResourceAsStream("blueprints/INDEX");
+        if (indexStream == null) {
+            log.warn("[PID 1] No classpath blueprints/INDEX found, no system blueprints loaded");
+            return blueprints;
+        }
+        try (var is = indexStream) {
+            String indexContent = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            for (String line : indexContent.split("\n")) {
+                String bpId = line.trim();
+                if (bpId.isEmpty()) continue;
+                try (var bpStream = InitDaemon.class.getClassLoader()
+                        .getResourceAsStream("blueprints/" + bpId + "/BLUEPRINT.md")) {
+                    if (bpStream != null) {
+                        String content = new String(bpStream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                        AgentBlueprint bp = parseBlueprintManifest(bpId, content);
+                        if (bp != null) {
+                            blueprints.put(bp.blueprintId(), bp);
+                            log.info("[PID 1] Loaded system blueprint: {}", bp.blueprintId());
+                        }
+                    }
+                }
+            }
+        } catch (java.io.IOException e) {
+            log.warn("[PID 1] Failed to load system blueprints: {}", e.getMessage());
+        }
 
         return blueprints;
+    }
+
+    /**
+     * 解析 BLUEPRINT.md manifest 文件 — frontmatter (blueprintId/description/requiredParams) + body (codePayload)。
+     * <p>
+     * 复用 SKILL.md 的 frontmatter 解析模式,不引入 YAML 依赖。
+     */
+    static AgentBlueprint parseBlueprintManifest(String defaultId, String content) {
+        String blueprintId = defaultId;
+        String description = "";
+        List<String> requiredParams = List.of();
+
+        String[] lines = content.split("\n");
+        boolean inFrontmatter = false;
+
+        for (String line : lines) {
+            if (line.trim().equals("---")) {
+                inFrontmatter = !inFrontmatter;
+                continue;
+            }
+            if (inFrontmatter) {
+                if (line.startsWith("blueprintId:")) {
+                    blueprintId = line.substring("blueprintId:".length()).trim().replace("\"", "");
+                } else if (line.startsWith("description:")) {
+                    description = line.substring("description:".length()).trim().replace("\"", "");
+                } else if (line.startsWith("requiredParams:")) {
+                    String raw = line.substring("requiredParams:".length()).trim();
+                    requiredParams = parseStringList(raw);
+                }
+            }
+        }
+
+        String codePayload = extractBodyAfterFrontmatter(content);
+        if (codePayload.isEmpty()) {
+            log.warn("[PID 1] Blueprint {} has empty codePayload", blueprintId);
+        }
+
+        return new AgentBlueprint(blueprintId, description, codePayload, requiredParams);
+    }
+
+    /** 解析 requiredParams 的简单列表语法: [] 或 ["a", "b"] */
+    private static List<String> parseStringList(String raw) {
+        if (!raw.startsWith("[") || !raw.endsWith("]")) return List.of();
+        String inner = raw.substring(1, raw.length() - 1).trim();
+        if (inner.isEmpty()) return List.of();
+        return java.util.Arrays.stream(inner.split(","))
+                .map(s -> s.trim().replace("\"", "").replace("'", ""))
+                .filter(s -> !s.isEmpty())
+                .toList();
+    }
+
+    /** 提取 frontmatter 之后的正文（codePayload）— 逻辑同 SkillLoader.extractBody */
+    private static String extractBodyAfterFrontmatter(String content) {
+        if (content == null || content.isEmpty()) return "";
+        int firstDash = content.indexOf("---");
+        if (firstDash < 0) return content;
+        int secondDash = content.indexOf("---", firstDash + 3);
+        if (secondDash < 0) return content;
+        return content.substring(secondDash + 3).trim();
     }
 
     /**

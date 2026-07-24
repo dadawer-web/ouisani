@@ -46,6 +46,12 @@ public class BoulderCheckpoint {
     /** 节点执行耗时（毫秒） */
     private long durationMs;
 
+    /** 携带状态快照(taskFocus/readFiles/invokedTools/workLog 扁平 Map) */
+    private Map<String, Object> carryoverSnapshot = new ConcurrentHashMap<>();
+
+    /** 关联的 EnvironmentSnapshot ID(双写产出) */
+    private String environmentSnapshotId;
+
     public BoulderCheckpoint() {
         this.timestamp = System.currentTimeMillis();
     }
@@ -79,6 +85,14 @@ public class BoulderCheckpoint {
 
     public long getDurationMs() { return durationMs; }
     public void setDurationMs(long durationMs) { this.durationMs = durationMs; }
+
+    public Map<String, Object> getCarryoverSnapshot() { return carryoverSnapshot; }
+    public void setCarryoverSnapshot(Map<String, Object> carryoverSnapshot) {
+        this.carryoverSnapshot = carryoverSnapshot != null ? new ConcurrentHashMap<>(carryoverSnapshot) : new ConcurrentHashMap<>();
+    }
+
+    public String getEnvironmentSnapshotId() { return environmentSnapshotId; }
+    public void setEnvironmentSnapshotId(String environmentSnapshotId) { this.environmentSnapshotId = environmentSnapshotId; }
 
     /** 递增重试计数 */
     public void incrementRetry() { this.retryCount++; }

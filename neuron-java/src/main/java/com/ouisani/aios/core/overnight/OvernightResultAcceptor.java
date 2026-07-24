@@ -101,6 +101,13 @@ public final class OvernightResultAcceptor {
                 log.info("[OvernightAcceptor] 卡片已接纳（回退至文件写入）: id={}, path={}",
                         card.id(), fallbackPath);
             }
+            // best-effort 蒸馏为 LEARNED skill（opt-in + deterministic-PASS 硬门，失败不影响接纳）
+            try {
+                LearnedSkillDistiller.instance().distill(card);
+            } catch (Throwable t) {
+                log.warn("[OvernightAcceptor] Learned skill 蒸馏失败（不影响接纳）: id={}, error={}",
+                        card.id(), t.getMessage());
+            }
             return Decision.ACCEPTED;
         } catch (Exception e) {
             log.error("[OvernightAcceptor] 接纳卡片失败: id={}, error={}",

@@ -32,7 +32,8 @@ public class TokenZramProvider implements MemoryProvider {
     private final ConcurrentHashMap<String, List<String>> pageStore = new ConcurrentHashMap<>();
 
     @Override
-    public boolean store(String agentId, String memoryContent) {
+    public boolean store(String agentId, MemoryRecord record) {
+        String memoryContent = record.content();
         if (agentId == null || memoryContent == null || memoryContent.isEmpty()) {
             log.warn("[TokenZramProvider] 存储被拒绝: agentId={}, contentEmpty={}",
                     agentId, memoryContent == null || memoryContent.isEmpty());

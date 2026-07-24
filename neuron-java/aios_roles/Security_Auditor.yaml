@@ -155,3 +155,7 @@ output_format:
   scan_report: "VFS 文件 /vfs/security/reports/{module}_{timestamp}.md"
   war_report: "AgentMailbox Markdown 格式战报 (含漏洞统计 + 修复建议)"
   event_broadcast: "EventBus sys.security.audit_complete / sys.security.vulnerability_found"
+
+# 运行时三维分层（借鉴 OpenScience agent.ts）：主角色，默认权限。
+runtime:
+  mode: primary

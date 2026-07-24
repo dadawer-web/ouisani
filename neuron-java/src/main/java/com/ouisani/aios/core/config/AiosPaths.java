@@ -232,6 +232,18 @@ public final class AiosPaths {
         return resolve("AIOS_MEMORY_DB", "aios.memory.db", aiosHome() + "/var/db/memory");
     }
 
+    /**
+     * Learned Skills 目录 — Overnight deterministic-PASS 任务蒸馏出的 SKILL.md 落地处。
+     * <p>
+     * 落真实 FS（{@code Files.writeString} 直写，绕 VFS {@code /var/db/memory} VectorNode），
+     * 与 {@link com.ouisani.aios.core.skill.SkillLoader} 的 {@code Files.list} 读端一致。
+     * 默认 {@code {memoryDbDir}/learned-skills}。
+     */
+    public static String learnedSkillsDir() {
+        return resolve("AIOS_LEARNED_SKILLS_DIR", "aios.learned.skills.dir",
+                memoryDbDir() + "/learned-skills");
+    }
+
     /** 崩溃诊断目录 */
     public static String crashDir() {
         return resolve("AIOS_CRASH_DIR", "aios.crash.dir", aiosHome() + "/var/crash");

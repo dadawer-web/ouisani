@@ -6,6 +6,9 @@ import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.config.AiosPaths;
 import com.ouisani.aios.core.ipc.SignalType;
 import com.ouisani.aios.core.llm.LlmProvider;
+import com.ouisani.aios.core.snapshot.EnvironmentSnapshot;
+import com.ouisani.aios.core.snapshot.EnvironmentSnapshotManager;
+import com.ouisani.aios.core.snapshot.ForkHandle;
 import com.ouisani.aios.core.telemetry.SemanticEtw;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -70,6 +73,12 @@ public final class OvernightRunner {
     private final AtomicBoolean supervisorRunning = new AtomicBoolean(false);
     private volatile OvernightManifest activeManifest;
     private final ConcurrentHashMap<String, OvernightTaskCard> cardIndex = new ConcurrentHashMap<>();
+
+    /** cardId → 该卡片构建时所在 turn 的快照 ID(FAILED 时用于 fork 复现)。 */
+    private final ConcurrentHashMap<String, String> preTaskSnapshotByCardId = new ConcurrentHashMap<>();
+
+    /** 当前 turn 的快照 ID(coordinator 单线程,无需同步)。 */
+    private volatile String currentTurnSnapshotId;
 
     private OvernightRunner() {}
 
@@ -172,6 +181,16 @@ public final class OvernightRunner {
                     parseAndPersistCardUpdates(resp, cur);
                     log.info("[OvernightRunner] coordinator#{} 完成最终收尾", pid);
                     break;
+                }
+
+                // 【每轮快照】— 借鉴 mobilegym,每轮 LLM 调用前冻结环境,FAILED 时可 fork 复现
+                try {
+                    EnvironmentSnapshot turnSnap = EnvironmentSnapshotManager.instance().capture(
+                            "overnight-" + cur.runId() + "-turn-" + history.size());
+                    currentTurnSnapshotId = turnSnap.snapshotId();
+                } catch (Exception ex) {
+                    log.debug("[OvernightRunner] turn 快照捕获失败: {}", ex.getMessage());
+                    currentTurnSnapshotId = null;
                 }
 
                 OvernightResourceSnapshot snapshot = OvernightResourceSnapshot.capture();
@@ -328,6 +347,37 @@ public final class OvernightRunner {
         return OvernightTaskCard.summarize(new ArrayList<>(cardIndex.values()));
     }
 
+    /**
+     * 从种子快照 fork N 个隔离分支 — 借鉴 mobilegym "fork 结构化状态成 N 个并行 rollout"。
+     * <p>
+     * 失败诊断场景:取 FAILED 卡片关联的 turn 快照({@link #snapshotIdForCard}),
+     * fork 出隔离分支重放该 turn,无需重跑整条 DAG。也是 group-RL 策略对比的入口。
+     * <p>
+     * <b>并发约束</b>:返回的 {@link ForkHandle} 尚未 activate;调用方须串行 activate
+     * (activator 会向全局 capturer 注册表注册分支 capturer,并发 activate 会互相覆盖)。
+     *
+     * @param snapshotId 种子快照 ID(通常来自 {@link #snapshotIdForCard})
+     * @param n          分支数
+     * @return fork 分支句柄列表(尚未 activate)
+     * @throws IllegalStateException 种子快照不存在
+     */
+    public List<ForkHandle> reproduceWithFork(String snapshotId, int n) {
+        log.info("[OvernightRunner] fork 复现: seed={}, branches={}", snapshotId, n);
+        return EnvironmentSnapshotManager.instance().forkFromSnapshot(snapshotId, n);
+    }
+
+    /**
+     * 查询某张卡片构建时所在 turn 的快照 ID(仅 FAILED 卡片会被关联)。
+     * <p>
+     * 配合 {@link #reproduceWithFork} 实现"出错前一刻"环境快照的 fork 复现。
+     *
+     * @param cardId 卡片 ID
+     * @return 关联快照 ID;未关联或卡片不存在返回 null
+     */
+    public String snapshotIdForCard(String cardId) {
+        return preTaskSnapshotByCardId.get(cardId);
+    }
+
     /** 获取当前 manifest（只读） */
     public OvernightManifest activeManifest() {
         return activeManifest;
@@ -402,6 +452,13 @@ public final class OvernightRunner {
                         persistCard(card, m);
                         log.debug("[OvernightRunner] 卡片更新: id={}, status={}",
                                 cardId, card.normalizedStatus());
+                        // FAILED 卡片关联 turn 快照,供 fork 复现
+                        if (card.normalizedStatus() == OvernightTaskCard.CardStatus.FAILED
+                                && currentTurnSnapshotId != null) {
+                            preTaskSnapshotByCardId.put(cardId, currentTurnSnapshotId);
+                            log.warn("[OvernightRunner] 卡片 FAILED: id={}, 关联快照={}, 可 reproduceWithFork 复现",
+                                    cardId, currentTurnSnapshotId);
+                        }
                     }
                 }
             }
@@ -455,6 +512,13 @@ public final class OvernightRunner {
         OvernightTaskCard.RiskLevel risk = OvernightTaskCard.RiskLevel.fromString(riskStr);
         String validationResult = extractField(json, "result");
 
+        // 提取声称的变更文件列表,并自动推断确定性校验规格(mobilegym check_goals 借鉴)
+        List<String> filesChanged = extractStringArray(json, "filesChanged");
+        if (filesChanged.isEmpty()) {
+            filesChanged = extractStringArray(json, "files_changed");  // 兼容 snake_case
+        }
+        List<VerificationSpec> specs = OvernightTaskCard.inferSpecsFromFiles(filesChanged);
+
         return new OvernightTaskCard(
                 id,
                 title != null ? title : id,
@@ -466,11 +530,36 @@ public final class OvernightRunner {
                 risk,
                 outcome,
                 new OvernightTaskCard.Before(extractField(json, "problem"), null),
-                new OvernightTaskCard.After(extractField(json, "change"), null, null),
+                new OvernightTaskCard.After(extractField(json, "change"), filesChanged.isEmpty() ? null : filesChanged, null),
                 new OvernightTaskCard.Validation(null, validationResult, null),
                 null,
-                Instant.now().toString()
+                Instant.now().toString(),
+                specs
         );
+    }
+
+    /** 从 JSON 提取字符串数组字段 — 支持 "field": ["a","b","c"] 格式 */
+    private static List<String> extractStringArray(String json, String field) {
+        List<String> result = new ArrayList<>();
+        String key = "\"" + field + "\"";
+        int idx = json.indexOf(key);
+        if (idx < 0) return result;
+        int bracketStart = json.indexOf('[', idx + key.length());
+        if (bracketStart < 0) return result;
+        int depth = 0;
+        for (int i = bracketStart; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == '[') depth++;
+            else if (c == ']') { depth--; if (depth == 0) break; }
+            else if (c == '"') {
+                int end = json.indexOf('"', i + 1);
+                if (end > 0) {
+                    result.add(json.substring(i + 1, end));
+                    i = end;
+                }
+            }
+        }
+        return result;
     }
 
     /** 持久化单张卡片到 VFS */

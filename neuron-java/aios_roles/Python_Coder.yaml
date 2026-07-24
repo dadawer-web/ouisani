@@ -107,3 +107,7 @@ workflow:
 output_format:
   script: "Python 脚本文件 (.py)，可直接 python3 执行"
   output_json: "JSON 格式输出文件 (_output.json)，包含 status/timestamp/data/error"
+
+# 运行时三维分层（借鉴 OpenScience agent.ts）：主角色，默认权限。
+runtime:
+  mode: primary

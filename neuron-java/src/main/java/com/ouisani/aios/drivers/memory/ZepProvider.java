@@ -1,6 +1,7 @@
 package com.ouisani.aios.drivers.memory;
 
 import com.ouisani.aios.core.memory.providers.MemoryProvider;
+import com.ouisani.aios.core.memory.providers.MemoryRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,7 +33,8 @@ public class ZepProvider implements MemoryProvider {
     // private String apiKey;
 
     @Override
-    public boolean store(String agentId, String memoryContent) {
+    public boolean store(String agentId, MemoryRecord record) {
+        String memoryContent = record.content();
         log.info("[Zep] Syncing with external vector database... operation=store, agent='{}', contentLen={}",
                 agentId, memoryContent != null ? memoryContent.length() : 0);
 

@@ -2,6 +2,7 @@ package com.ouisani.aios.core.memory.connector;
 
 import com.ouisani.aios.core.memory.CrossAgentMemoryStore;
 import com.ouisani.aios.core.memory.providers.MemoryProvider;
+import com.ouisani.aios.core.memory.providers.MemoryRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -70,15 +71,18 @@ public class TwoLevelMemoryConnector implements MemoryConnector {
      *   <li>先写冷存储（source of truth）— 冷存储失败则整体失败</li>
      *   <li>best-effort 写热缓存 — 热缓存失败仅记录警告，不影响主流程</li>
      * </ol>
+     * <p>
+     * <b>元数据透传</b>：将完整的 {@link MemoryRecord}（含 source / timestamp /
+     * confidence / domain / version）透传给冷热两层，确保后端可持久化一等元数据。
      *
      * @param agentId Agent 标识
-     * @param content 记忆内容
+     * @param record  记忆条目（含元数据）
      * @return 冷存储的写入结果
      */
     @Override
-    public boolean store(String agentId, String content) {
+    public boolean store(String agentId, MemoryRecord record) {
         // 1. 先写冷存储（source of truth）
-        boolean coldResult = coldStore.store(agentId, content);
+        boolean coldResult = coldStore.store(agentId, record);
         if (!coldResult) {
             log.warn("[TwoLevel] 冷存储写入失败: agentId={}", agentId);
             return false;
@@ -86,7 +90,7 @@ public class TwoLevelMemoryConnector implements MemoryConnector {
 
         // 2. best-effort 写热缓存
         try {
-            hotStore.store(agentId, content);
+            hotStore.store(agentId, record);
         } catch (Exception e) {
             log.warn("[TwoLevel] 热缓存写入失败（不影响主流程）: agentId={}, error={}", agentId, e.getMessage());
         }

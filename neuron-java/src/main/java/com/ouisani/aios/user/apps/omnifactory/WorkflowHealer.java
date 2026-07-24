@@ -355,6 +355,19 @@ class WorkflowHealer {
             return false;
         }
 
+        // 【恢复 carryover】— 从 BoulderCheckpoint 还原工作记忆,避免节点恢复后失忆
+        try {
+            BoulderStateManager.loadCheckpoint(workflowId, nodeId).ifPresent(cp -> {
+                if (cp.getCarryoverSnapshot() != null && !cp.getCarryoverSnapshot().isEmpty()) {
+                    CarryoverStateSectionMapper.fromMap(cp.getCarryoverSnapshot(), context.getCarryoverState());
+                    log.info("[DAG Engine] resumeNode '{}' 已恢复 carryover (taskFocus={} entries)",
+                            nodeId, context.getCarryoverState().getTaskFocus().size());
+                }
+            });
+        } catch (Exception ex) {
+            log.warn("[DAG Engine] resumeNode '{}' carryover 恢复失败: {}", nodeId, ex.getMessage());
+        }
+
         Thread.startVirtualThread(() -> {
             try {
                 engine.executeNode(node, registry.findNodeMapForWorkflow(workflowId), context, workflowId);

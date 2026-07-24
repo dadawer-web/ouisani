@@ -3,6 +3,10 @@ package com.ouisani.aios.user.apps.omnifactory;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.ipc.VariablePool;
 import com.ouisani.aios.core.network.EventBus;
+import com.ouisani.aios.core.snapshot.CarryoverSection;
+import com.ouisani.aios.core.snapshot.EnvironmentSnapshot;
+import com.ouisani.aios.core.snapshot.EnvironmentSnapshotManager;
+import com.ouisani.aios.core.snapshot.NodeOutputSection;
 import com.ouisani.aios.core.state.BoulderCheckpoint;
 import com.ouisani.aios.core.state.BoulderStateManager;
 import com.ouisani.aios.core.tool.Port;
@@ -76,6 +80,11 @@ public class WorkflowEngine {
     /** Alias for getInstance() — used by RecoveryStrategy implementations */
     public static WorkflowEngine instance() {
         return getInstance();
+    }
+
+    /** 包内可见 — 快照所有活跃工作流节点映射,供 OmnifactoryTaskQueueProvider 枚举。 */
+    Map<String, Map<String, WorkflowNode>> snapshotActiveNodeMaps() {
+        return registry.snapshotActiveNodeMaps();
     }
 
     private WorkflowEngine() {
@@ -606,6 +615,18 @@ public class WorkflowEngine {
             checkpoint.setDurationMs(durationMs);
             BoulderStateManager.saveCheckpoint(checkpoint);
 
+            // 【EnvironmentSnapshot 双写】— 借鉴 mobilegym,节点成功后冻结完整执行环境
+            try {
+                NodeOutputSection nodeOut = (NodeOutputSection) new WorkflowContextCapturer(context).capture();
+                CarryoverSection carry = (CarryoverSection) new CarryoverCapturer(context).capture();
+                EnvironmentSnapshot envSnap = EnvironmentSnapshotManager.instance().capture(workflowId, nodeOut, carry);
+                checkpoint.setCarryoverSnapshot(CarryoverStateSectionMapper.toMap(context.getCarryoverState()));
+                checkpoint.setEnvironmentSnapshotId(envSnap.snapshotId());
+                BoulderStateManager.saveCheckpoint(checkpoint);
+            } catch (Exception ex) {
+                log.warn("[DAG Engine] EnvironmentSnapshot 双写失败(成功路径): {}", ex.getMessage());
+            }
+
             emitEvent(new GraphEngineEvent.GraphNodeEvent.NodeRunSucceededEvent(
                     workflowId, node.instanceId(), node.executor(),
                     node.getOutputData(), durationMs, null));
@@ -707,14 +728,27 @@ public class WorkflowEngine {
                 }
             });
 
-            // 保存 Boulder 检查点
+            // 保存 Boulder 检查点(基础现场)
             BoulderCheckpoint crashCheckpoint = new BoulderCheckpoint();
             crashCheckpoint.setWorkflowId(workflowId);
             crashCheckpoint.setNodeId(node.instanceId());
             crashCheckpoint.setStatus(WorkflowNode.Status.SUSPENDED);
+            crashCheckpoint.setOutputSnapshot(context.getNodeMemorySnapshot(node.instanceId()));
             crashCheckpoint.setErrorMessage(e.getMessage());
             crashCheckpoint.setDurationMs(durationMs);
             BoulderStateManager.saveCheckpoint(crashCheckpoint);
+
+            // 【EnvironmentSnapshot 双写】— 借鉴 mobilegym,崩溃瞬间冻结完整执行环境供诊断
+            try {
+                NodeOutputSection nodeOut = (NodeOutputSection) new WorkflowContextCapturer(context).capture();
+                CarryoverSection carry = (CarryoverSection) new CarryoverCapturer(context).capture();
+                EnvironmentSnapshot envSnap = EnvironmentSnapshotManager.instance().capture(workflowId, nodeOut, carry);
+                crashCheckpoint.setCarryoverSnapshot(CarryoverStateSectionMapper.toMap(context.getCarryoverState()));
+                crashCheckpoint.setEnvironmentSnapshotId(envSnap.snapshotId());
+                BoulderStateManager.saveCheckpoint(crashCheckpoint);
+            } catch (Exception ex) {
+                log.warn("[DAG Engine] EnvironmentSnapshot 双写失败(崩溃路径): {}", ex.getMessage());
+            }
         }
     }
 

@@ -67,11 +67,19 @@ public class GraphValidator {
             }
         }
 
-        // ── 检查 2: 循环依赖检测 ──
-        List<String> cyclePath = detectCycle(nodes, nodeMap);
-        if (cyclePath != null) {
-            errors.add("检测到循环依赖: " + String.join(" → ", cyclePath));
-            suggestions.add("请打破循环: " + String.join(" → ", cyclePath) + " → " + cyclePath.get(0) + "。DAG 不允许有环。");
+        // ── 检查 2: 循环依赖检测 (Kahn 全枚举 + DFS 首路径建议) ──
+        Set<String> cyclicSet = new HashSet<>(allCycleNodeIds(nodes, nodeMap));
+        if (!cyclicSet.isEmpty()) {
+            List<String> sortedCycle = new ArrayList<>(cyclicSet);
+            Collections.sort(sortedCycle);
+            errors.add("检测到循环依赖,环内节点: " + String.join(", ", sortedCycle));
+            List<String> cyclePath = detectCycle(nodes, nodeMap);
+            if (cyclePath != null) {
+                suggestions.add("请打破循环: " + String.join(" → ", cyclePath)
+                        + " → " + cyclePath.get(0) + "。DAG 不允许有环。");
+            } else {
+                suggestions.add("请移除上述环内节点之间的相互依赖。");
+            }
         }
 
         // ── 检查 3: 类型兼容性 — 遍历每条边验证 Schema ──
@@ -111,6 +119,14 @@ public class GraphValidator {
                 errors.add("节点 '" + node.instanceId() + "' 是孤立节点（无入边无出边），可能是幻觉");
                 suggestions.add("请将节点 '" + node.instanceId() + "' 连接到 DAG 中，或移除它。");
             }
+        }
+
+        // ── 检查 5: 不可达节点检测 (从源点正向 BFS,排除已知环内节点) ──
+        List<String> unreachable = findUnreachableNodes(nodes, nodeMap, cyclicSet);
+        for (String nodeId : unreachable) {
+            log.warn("[GraphValidator] 不可达节点: {} (漂浮/上游悬空/上游在环内)", nodeId);
+            errors.add("节点 '" + nodeId + "' 从任何源点都不可达(漂浮子图 / 上游悬空 / 上游在环内)");
+            suggestions.add(unreachableSuggestion(nodeId, nodeMap));
         }
 
         log.info("[GraphValidator] 验证完成: {} 个节点, {} 条边 ({} 通过), {} 个错误",
@@ -334,6 +350,115 @@ public class GraphValidator {
             return incompatibility.substring(start + 1, end);
         }
         return "未知字段";
+    }
+
+    /**
+     * Kahn 拓扑排序枚举所有环内节点 id — 镜像 PlanGraphQuery.cycleItemIds,
+     * 返回无法拓扑排序到的节点 id 列表(即所有环内节点),已排序。
+     * 与 detectCycle(DFS 首路径)互补:本方法用于错误枚举,前者用于修正建议。
+     */
+    private List<String> allCycleNodeIds(List<WorkflowNode> nodes, Map<String, WorkflowNode> nodeMap) {
+        Map<String, Integer> indegree = new HashMap<>();
+        Map<String, List<String>> dependents = new HashMap<>();
+        for (WorkflowNode n : nodes) {
+            indegree.putIfAbsent(n.instanceId(), 0);
+            dependents.computeIfAbsent(n.instanceId(), k -> new ArrayList<>());
+        }
+        for (WorkflowNode n : nodes) {
+            for (String upstreamId : n.getUpstreamDependencies()) {
+                if (nodeMap.containsKey(upstreamId)) {  // 跳过悬空引用(已在检查 1 报告)
+                    indegree.merge(n.instanceId(), 1, Integer::sum);
+                    dependents.computeIfAbsent(upstreamId, k -> new ArrayList<>()).add(n.instanceId());
+                }
+            }
+        }
+        Queue<String> queue = new ArrayDeque<>();
+        for (Map.Entry<String, Integer> e : indegree.entrySet()) {
+            if (e.getValue() == 0) queue.add(e.getKey());
+        }
+        Set<String> visited = new HashSet<>();
+        while (!queue.isEmpty()) {
+            String id = queue.poll();
+            if (!visited.add(id)) continue;
+            List<String> deps = dependents.get(id);
+            if (deps != null) {
+                for (String child : deps) {
+                    int newDeg = indegree.merge(child, -1, Integer::sum);
+                    if (newDeg == 0) queue.add(child);
+                }
+            }
+        }
+        List<String> cycleIds = new ArrayList<>();
+        for (WorkflowNode n : nodes) {
+            if (!visited.contains(n.instanceId())) cycleIds.add(n.instanceId());
+        }
+        Collections.sort(cycleIds);
+        return cycleIds;
+    }
+
+    /**
+     * 从源点(upstreamDependencies 为空)正向 BFS,返回任何源点都到不了的节点。
+     * 减去 cyclicSet 以免与检查 2 重复报环内节点。
+     * 注:源点定义用"字段空"而非 Kahn 入度 0,以暴露悬空引用下游受害者。
+     */
+    private List<String> findUnreachableNodes(List<WorkflowNode> nodes,
+                                              Map<String, WorkflowNode> nodeMap,
+                                              Set<String> cyclicSet) {
+        // 反向邻接:upstreamId -> [downstreamIds]
+        Map<String, List<String>> dependents = new HashMap<>();
+        Set<String> sources = new LinkedHashSet<>();
+        for (WorkflowNode n : nodes) {
+            List<String> ups = n.getUpstreamDependencies();
+            if (ups == null || ups.isEmpty()) {
+                sources.add(n.instanceId());
+            }
+            dependents.computeIfAbsent(n.instanceId(), k -> new ArrayList<>());
+        }
+        for (WorkflowNode n : nodes) {
+            for (String upstreamId : n.getUpstreamDependencies()) {
+                if (nodeMap.containsKey(upstreamId)) {  // 跳过悬空引用
+                    dependents.computeIfAbsent(upstreamId, k -> new ArrayList<>()).add(n.instanceId());
+                }
+            }
+        }
+        // BFS
+        Set<String> visited = new HashSet<>(sources);
+        Queue<String> queue = new ArrayDeque<>(sources);
+        while (!queue.isEmpty()) {
+            String id = queue.poll();
+            List<String> downs = dependents.get(id);
+            if (downs == null) continue;
+            for (String child : downs) {
+                if (visited.add(child)) queue.add(child);
+            }
+        }
+        // 不可达 = 全部节点 - visited - cyclicSet
+        List<String> unreachable = new ArrayList<>();
+        for (WorkflowNode n : nodes) {
+            String id = n.instanceId();
+            if (!visited.contains(id) && !cyclicSet.contains(id)) {
+                unreachable.add(id);
+            }
+        }
+        return unreachable;
+    }
+
+    private String unreachableSuggestion(String nodeId, Map<String, WorkflowNode> nodeMap) {
+        WorkflowNode n = nodeMap.get(nodeId);
+        if (n == null) return "请移除节点 '" + nodeId + "'。";
+        List<String> ups = n.getUpstreamDependencies();
+        if (ups == null || ups.isEmpty()) {
+            return "节点 '" + nodeId + "' 无上游却不可达(可能自环或被排除)。请检查它是否应作为源点。";
+        }
+        // 判断上游是否都在环内或都悬空
+        boolean allDanglingOrCyclic = true;
+        for (String up : ups) {
+            if (nodeMap.containsKey(up)) { allDanglingOrCyclic = false; break; }
+        }
+        if (allDanglingOrCyclic) {
+            return "节点 '" + nodeId + "' 的所有上游均为悬空引用。请补充缺失的上游节点定义,或移除该节点。";
+        }
+        return "节点 '" + nodeId + "' 的上游链路无法从源点到达。请将其直接上游之一改为源点可达节点,或新增源点连接到该链路。";
     }
 
     /**

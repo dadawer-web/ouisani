@@ -76,6 +76,16 @@ public final class HibernationManager {
     private HibernationManager() {
     }
 
+    /** 可注入的任务队列快照提供者(无则为 null,captureTaskQueue 返回空列表,保持兼容)。 */
+    private volatile TaskQueueSnapshotProvider taskQueueProvider;
+
+    /** 注入任务队列快照提供者 — 由 InitDaemon 在服务层调用。 */
+    public void setTaskQueueProvider(TaskQueueSnapshotProvider provider) {
+        this.taskQueueProvider = provider;
+        log.info("[Hibernation] 已注入 TaskQueueSnapshotProvider: {}",
+                provider != null ? provider.getClass().getName() : "null");
+    }
+
     // ════════════════════════════════════════════════════════════════
     //  Phase 1: 挂起到硬盘 (suspend_to_disk)
     // ════════════════════════════════════════════════════════════════
@@ -259,9 +269,17 @@ public final class HibernationManager {
      * 需要外部调用者提供任务状态。
      */
     private List<AgentSnapshot.TaskState> captureTaskQueue() {
-        // 任务队列由 WorkflowEngine 管理，这里返回空列表
-        // 外部调用者可以通过 setTaskQueue 方法预设任务状态
-        return List.of();
+        if (taskQueueProvider == null) {
+            return List.of();
+        }
+        try {
+            List<AgentSnapshot.TaskState> tasks = taskQueueProvider.capture();
+            log.debug("[Hibernation] 捕获了 {} 个任务", tasks.size());
+            return tasks;
+        } catch (Exception e) {
+            log.warn("[Hibernation] captureTaskQueue 失败: {}", e.getMessage());
+            return List.of();
+        }
     }
 
     /**

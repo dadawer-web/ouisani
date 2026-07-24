@@ -5,12 +5,14 @@ module com.ouisani.aios {
     requires java.desktop;
     requires java.management;
     requires jdk.management;
+    requires jdk.httpserver;
     requires org.graalvm.polyglot;
     requires io.javalin;
     requires com.fasterxml.jackson.databind;
     requires ai.djl.api;
     requires ai.djl.tokenizers;
     requires ai.djl.onnxruntime_engine;
+    requires org.yaml.snakeyaml;
     exports com.ouisani.aios.core;
     exports com.ouisani.aios.core.bridge;
     exports com.ouisani.aios.core.cache;
@@ -128,6 +130,7 @@ module com.ouisani.aios {
     opens com.ouisani.aios.core.swarm;
     opens com.ouisani.aios.core.plan;
     opens com.ouisani.aios.core.ranking;
+    opens com.ouisani.aios.core.role;
     opens com.ouisani.aios.core.syscall;
     opens com.ouisani.aios.core.syscall.schema;
     opens com.ouisani.aios.core.task;

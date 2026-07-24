@@ -157,6 +157,8 @@ public class ToolRegistry {
         reg.register(new GlobTool());
         reg.register(new WebFetchTool());
         reg.register(new AgentTool());
+        // ── Provenance DAG 查询（Phase 6：reviewer 走 DAG 找 claim 来源，只读） ──
+        reg.register(new ProvenanceQueryTool());
         // AskUserQuestionTool 已删除 — 阻塞式人类 I/O 违反异步 IPC 原则
         // 智能体如需与人类交互，必须通过 SendMessageTool 发送 type:user_prompt 到 EventBus UI 频道
         reg.register(new SendMessageTool());

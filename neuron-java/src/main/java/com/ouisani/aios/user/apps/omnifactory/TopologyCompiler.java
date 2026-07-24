@@ -176,14 +176,45 @@ public class TopologyCompiler {
                 11. 先用 think 标签写出数据流转倒推逻辑，然后输出纯 JSON，不要任何其他文字！
                 """);
 
-        // 4. 调用 LLM
+        // 4. 调用 LLM + schema 验证 + 自旋反馈重试 (借鉴 OMA structured-output)
         AiosSdk sdk = AiosSdk.getInstance();
-        String response = sdk.think("topology_compiler", fullPrompt.toString());
+        final int maxAttempts = 3;
+        String currentPrompt = fullPrompt.toString();
+        String cleanJson = null;
 
-        log.debug("[TopologyCompiler] LLM 原始响应长度: {}", response.length());
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            log.info("[TopologyCompiler] compileTopology 尝试 {}/{}", attempt, maxAttempts);
+            String response = sdk.think("topology_compiler", currentPrompt);
+            log.debug("[TopologyCompiler] LLM 原始响应长度: {}", response.length());
 
-        // 5. 极其暴力的 JSON 截取清洗，防止大模型废话
-        String cleanJson = extractPureJson(response);
+            // 三级 fallback 提取 + 拓扑 schema 验证
+            StructuredOutputValidator.ValidationResult result =
+                    StructuredOutputValidator.extractAndValidate(response);
+
+            if (result.isValid()) {
+                cleanJson = result.cleanedJson();
+                log.info("[TopologyCompiler] compileTopology 验证通过 (尝试 {}), jsonLen={}",
+                        attempt, cleanJson.length());
+                break;
+            }
+
+            // 验证失败 — 将逐字段错误信息塞回 prompt 让 LLM 修正
+            log.warn("[TopologyCompiler] compileTopology 尝试 {} 验证失败: {}",
+                    attempt, result.formattedErrors());
+            if (attempt < maxAttempts) {
+                currentPrompt = fullPrompt + "\n\n【上次输出存在以下问题】\n"
+                        + result.formattedErrors()
+                        + "\n请修正以上问题，重新输出纯 JSON（不要 Markdown 标记）。";
+            }
+        }
+
+        // 3 次都失败 — fallback 到旧的暴力提取，让前端报错（向后兼容）
+        if (cleanJson == null) {
+            log.error("[TopologyCompiler] compileTopology {} 次尝试均未通过 schema 验证, fallback 到暴力提取",
+                    maxAttempts);
+            String lastResponse = sdk.think("topology_compiler", fullPrompt.toString());
+            cleanJson = extractPureJson(lastResponse);
+        }
 
         log.info("[TopologyCompiler] compileTopology complete: responseLen={}", cleanJson.length());
         return cleanJson;
@@ -341,28 +372,28 @@ public class TopologyCompiler {
     /**
      * 从 LLM 原始输出中提取纯 JSON 字符串。
      * <p>
-     * 清理策略：
-     * 1. 极其暴力地抹除所有的 &lt;think&gt;...&lt;/think&gt; 思考过程 (支持跨行，兼容 DeepSeek 等推理模型)
-     * 2. 去除 ```json ... ``` Markdown 代码块包裹
-     * 3. 提取第一个 { 到最后一个 } 之间的内容
+     * 委托给 {@link StructuredOutputValidator#extractJson} 做三级 fallback 提取
+     * (直接 parse → markdown fence → 首尾大括号),每级都用 Jackson 验证。
+     * 如果三级都失败,fallback 到旧的暴力正则提取,保证向后兼容。
      */
     private static String extractPureJson(String raw) {
         if (raw == null || raw.isBlank()) return "{}";
 
-        // 1. 极其暴力地抹除所有的 <think>...</think> 思考过程 (支持跨行)
+        // 优先用 StructuredOutputValidator 做真正的 JSON parse 验证
+        String extracted = StructuredOutputValidator.extractJson(raw);
+        if (extracted != null) {
+            return extracted;
+        }
+
+        // Fallback: 旧的暴力正则提取 (不验证 JSON 合法性,让下游报错)
+        log.warn("[TopologyCompiler] StructuredOutputValidator 提取失败, fallback 到暴力正则");
         String cleaned = raw.replaceAll("(?s)<think>.*?</think>", "").trim();
-
-        // 2. 抹除可能的 Markdown 标记
         cleaned = cleaned.replaceAll("```json", "").replaceAll("```", "").trim();
-
-        // 3. 安全截取真正的 JSON 块
         int start = cleaned.indexOf("{");
         int end = cleaned.lastIndexOf("}");
         if (start != -1 && end != -1 && start < end) {
             return cleaned.substring(start, end + 1);
         }
-
-        // 如果什么都找不到，直接原样返回，让前端去报错
         return cleaned;
     }
 
@@ -510,6 +541,28 @@ public class TopologyCompiler {
                     topologyJson.length(), elapsedMs);
             log.info("[TopologyCompiler] Attempt {}: LLM generated {} chars ({}ms)",
                     attempt, topologyJson.length(), elapsedMs);
+
+            // ── Step 1.5: 结构化输出验证 (借鉴 OMA structured-output) ──
+            // 在正则解析前用 Jackson 做 JSON parse + schema 验证,提前拦截格式错误
+            StructuredOutputValidator.ValidationResult schemaResult =
+                    StructuredOutputValidator.extractAndValidate(topologyJson);
+            if (!schemaResult.isValid()) {
+                System.out.printf("[OmniFactory]   [Step 1.5] ⚠ Schema 验证失败: %s%n",
+                        schemaResult.formattedErrors());
+                log.warn("[TopologyCompiler] Attempt {} schema validation failed: {}",
+                        attempt, schemaResult.formattedErrors());
+                if (attempt < maxCompileAttempts) {
+                    currentPrompt = basePrompt
+                            + "\n\n【上次输出存在以下格式问题】\n"
+                            + schemaResult.formattedErrors()
+                            + "\n请修正以上问题，重新输出纯 JSON。";
+                    continue;
+                }
+                break;
+            }
+            // 用验证后的清洗 JSON 替代原始响应,提高后续正则解析成功率
+            topologyJson = schemaResult.cleanedJson();
+            System.out.printf("[OmniFactory]   [Step 1.5] ✓ Schema 验证通过%n");
 
             // ── Step 2: 反序列化为 WorkflowManifest ──
             manifest = TopologyJsonParser.parseTopologyToManifest(topologyJson, userRequest);

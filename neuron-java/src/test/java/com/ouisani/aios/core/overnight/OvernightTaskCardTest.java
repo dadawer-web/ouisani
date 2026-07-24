@@ -1,5 +1,7 @@
 package com.ouisani.aios.core.overnight;
 
+import com.ouisani.aios.core.VfsManager;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Nested;
 
@@ -200,7 +202,7 @@ class OvernightTaskCardTest {
             OvernightTaskCard card = new OvernightTaskCard(
                     "id", "title", "completed", "high", "src", "why", "verifiable",
                     OvernightTaskCard.RiskLevel.LOW, "outcome",
-                    null, null, null, null, "2026-01-01T00:00:00Z");
+                    null, null, null, null, "2026-01-01T00:00:00Z", null);
             assertFalse(card.isValidated());
         }
 
@@ -395,7 +397,70 @@ class OvernightTaskCardTest {
                 new OvernightTaskCard.After("change description", null, null),
                 validation,
                 List.of("followup1"),
-                "2026-01-01T00:00:00Z"
+                "2026-01-01T00:00:00Z",
+                null
         );
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  确定性校验 hard gate 测试 (mobilegym check_goals 借鉴)
+    // ════════════════════════════════════════════════════════════════
+
+    @Nested
+    class DeterministicValidationTest {
+
+        private VfsManager vfs;
+
+        @BeforeEach
+        void setup() {
+            vfs = VfsManager.instance();
+            vfs.init();
+            vfs.writeText("/test/exists.txt", "hello");
+        }
+
+        @Test
+        void isValidated_true_whenDeterministicChecksPass() {
+            // 确定性 PASS → true,即使 LLM validation 为 null
+            OvernightTaskCard card = new OvernightTaskCard(
+                    "id", "title", "completed", "low", "src", "why", "verif",
+                    OvernightTaskCard.RiskLevel.LOW, "outcome",
+                    null, null, null, null, "now",
+                    List.of(new VerificationSpec.FileExistsSpec("/test/exists.txt")));
+            assertTrue(card.isValidated());
+        }
+
+        @Test
+        void isValidated_false_whenDeterministicChecksFail() {
+            // 确定性 FAIL → false,即使 LLM validation 自报 "pass"
+            OvernightTaskCard card = new OvernightTaskCard(
+                    "id", "title", "completed", "low", "src", "why", "verif",
+                    OvernightTaskCard.RiskLevel.LOW, "outcome",
+                    null, null,
+                    new OvernightTaskCard.Validation(null, "pass", null),  // LLM 自报 pass
+                    null, "now",
+                    List.of(new VerificationSpec.FileExistsSpec("/test/missing.txt")));
+            assertFalse(card.isValidated());
+        }
+
+        @Test
+        void isValidated_fallsBackToLlm_whenDeterministicChecksNull() {
+            // 无确定性规格 → 回退 LLM 字符串匹配(向后兼容)
+            OvernightTaskCard card = new OvernightTaskCard(
+                    "id", "title", "completed", "low", "src", "why", "verif",
+                    OvernightTaskCard.RiskLevel.LOW, "outcome",
+                    null, null,
+                    new OvernightTaskCard.Validation(null, "pass", null),
+                    null, "now",
+                    null);  // 无确定性规格
+            assertTrue(card.isValidated());
+        }
+
+        @Test
+        void inferSpecsFromFiles_createsFileExistsSpecs() {
+            List<VerificationSpec> specs = OvernightTaskCard.inferSpecsFromFiles(
+                    List.of("/a.txt", "/b.txt"));
+            assertEquals(2, specs.size());
+            assertInstanceOf(VerificationSpec.FileExistsSpec.class, specs.get(0));
+        }
     }
 }

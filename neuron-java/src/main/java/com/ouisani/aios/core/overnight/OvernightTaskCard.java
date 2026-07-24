@@ -1,5 +1,6 @@
 package com.ouisani.aios.core.overnight;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -30,7 +31,8 @@ public record OvernightTaskCard(
         After after,
         Validation validation,
         List<String> followups,
-        String updatedAt
+        String updatedAt,
+        List<VerificationSpec> deterministicChecks
 ) {
 
     /** 风险等级 — 驱动接纳决策 */
@@ -129,17 +131,44 @@ public record OvernightTaskCard(
     }
 
     /**
-     * 是否已通过验证 — 镜像 jcode task_card_validated()。
+     * 是否已通过验证 — 镜像 jcode task_card_validated()，叠加 mobilegym check_goals() 确定性 hard gate。
      * <p>
-     * 当 validation.result 包含 pass/success/ok（不区分大小写）时视为已验证。
+     * 判定顺序（hard gate + LLM 回退）：
+     * <ol>
+     *   <li>若 {@code deterministicChecks} 非空，由 {@link NodeCompletionVerifier} 执行代码级校验：
+     *     FAIL → false，PASS → true，INCONCLUSIVE → 落回下方 LLM 自报</li>
+     *   <li>回退：validation.result 包含 pass/success/ok（不区分大小写）时视为已验证（向后兼容）</li>
+     * </ol>
      */
     public boolean isValidated() {
+        // 确定性校验优先(hard gate)— 借鉴 mobilegym check_goals() 取代 LLM-as-judge
+        if (deterministicChecks != null && !deterministicChecks.isEmpty()) {
+            VerificationResult result = NodeCompletionVerifier.instance().verify(deterministicChecks);
+            if (result.verdict() == VerificationResult.Verdict.FAIL) return false;
+            if (result.verdict() == VerificationResult.Verdict.PASS) return true;
+            // INCONCLUSIVE → 落回 LLM 自报(下方原逻辑)
+        }
+        // 回退:LLM 自报的 validation.result 字符串匹配(原逻辑,向后兼容)
         if (validation == null || validation.result() == null || validation.result().isBlank()) {
             return false;
         }
         String r = validation.result().toLowerCase();
         return r.contains("pass") || r.contains("success") || r.contains("ok")
                 || r.contains("verified") || r.contains("confirmed");
+    }
+
+    /**
+     * 从声称的变更文件列表自动推断确定性校验规格 — 每个文件一个 {@link VerificationSpec.FileExistsSpec}。
+     * <p>
+     * 借鉴 mobilegym:节点原子性(一个文件创建或一次工具调用)使文件存在性成为天然完成判据。
+     */
+    public static List<VerificationSpec> inferSpecsFromFiles(List<String> filesChanged) {
+        if (filesChanged == null || filesChanged.isEmpty()) return List.of();
+        List<VerificationSpec> specs = new ArrayList<>();
+        for (String path : filesChanged) {
+            specs.add(new VerificationSpec.FileExistsSpec(path));
+        }
+        return List.copyOf(specs);
     }
 
     /**

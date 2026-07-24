@@ -1,6 +1,7 @@
 package com.ouisani.aios.drivers.memory;
 
 import com.ouisani.aios.core.memory.providers.MemoryProvider;
+import com.ouisani.aios.core.memory.providers.MemoryRecord;
 import com.ouisani.aios.core.syscall.SyscallException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,9 +59,10 @@ public class Mem0Provider implements MemoryProvider {
     // ════════════════════════════════════════════════════════════════
 
     @Override
-    public boolean store(String agentId, String memoryContent) {
+    public boolean store(String agentId, MemoryRecord record) {
         ensureApiKey();
 
+        String memoryContent = record.content();
         String jsonPayload = buildStorePayload(agentId, memoryContent);
 
         log.info("[Mem0 Driver] Issuing POST {} — agent='{}', contentLen={}",

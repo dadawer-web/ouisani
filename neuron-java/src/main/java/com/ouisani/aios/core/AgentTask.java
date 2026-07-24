@@ -8,7 +8,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -93,6 +95,8 @@ public final class AgentTask {
     private volatile long deadlineMs;
     /** 安全令牌 — 类比 Linux capability，控制 Agent 的权限范围 */
     private SecurityToken primaryToken;
+    /** 已授权工具集 — default-deny: 默认空集,Agent 不声明就零工具访问权 (借鉴 OMA toolPreset) */
+    private Set<String> grantedTools = Set.of();
     /** 取消标志 — 原子操作，支持异步取消 */
     private final AtomicBoolean cancelled;
     /** 待处理信号队列 — 类比 POSIX 信号队列（SIGTERM/SIGINT/SIGUSR1） */
@@ -284,6 +288,51 @@ public final class AgentTask {
         log.info("Task#{} primaryToken transition: {} -> {}", pid,
                 prev != null ? prev.ownerId() : "null",
                 primaryToken != null ? primaryToken.ownerId() : "null");
+    }
+
+    // ── 工具授权 (default-deny, 借鉴 OMA toolPreset) ──
+
+    /**
+     * 获取已授权工具集 (不可变)。
+     * <p>
+     * Default-deny: 默认返回空集,Agent 不显式声明就零工具访问权。
+     *
+     * @return 已授权工具名集合,默认空集
+     */
+    public Set<String> grantedTools() {
+        return grantedTools;
+    }
+
+    /**
+     * 设置已授权工具集。
+     * <p>
+     * 通常配合 {@code ToolPreset.READONLY.tools()} 等预设使用:
+     * <pre>{@code
+     * task.setGrantedTools(ToolPreset.READWRITE.tools());
+     * }</pre>
+     *
+     * @param tools 工具名集合,null 视为空集 (default-deny)
+     */
+    public void setGrantedTools(Set<String> tools) {
+        Set<String> prev = this.grantedTools;
+        this.grantedTools = (tools == null) ? Set.of() : Collections.unmodifiableSet(tools);
+        log.info("Task#{} grantedTools updated: {} -> {} tools", pid,
+                prev != null ? prev.size() : 0, this.grantedTools.size());
+    }
+
+    /**
+     * 检查此 Agent 是否有权访问指定工具。
+     * <p>
+     * Default-deny 核心: grantedTools 为空时,任何工具都返回 false。
+     * REALTIME 优先级 Agent 绕过检查 (类比 root 绕过 DAC)。
+     *
+     * @param toolName 工具名
+     * @return true 如果有访问权
+     */
+    public boolean hasToolAccess(String toolName) {
+        // REALTIME 优先级绕过工具检查 (类比 root)
+        if (processPriority == ProcessPriority.REALTIME) return true;
+        return grantedTools.contains(toolName);
     }
 
     public TaskType type() {

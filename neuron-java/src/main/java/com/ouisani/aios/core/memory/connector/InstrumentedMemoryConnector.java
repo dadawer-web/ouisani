@@ -1,5 +1,7 @@
 package com.ouisani.aios.core.memory.connector;
 
+import com.ouisani.aios.core.memory.providers.MemoryRecord;
+
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
@@ -47,17 +49,18 @@ public class InstrumentedMemoryConnector implements MemoryConnector {
      * 计时、计数并记录 debug 日志后委托给被包装连接器。
      */
     @Override
-    public boolean store(String agentId, String memoryContent) {
+    public boolean store(String agentId, MemoryRecord record) {
         long begin = System.nanoTime();
         try {
-            return delegate.store(agentId, memoryContent);
+            return delegate.store(agentId, record);
         } finally {
             long elapsedMs = (System.nanoTime() - begin) / 1_000_000L;
             storeCount.incrementAndGet();
             totalStoreTimeMs.addAndGet(elapsedMs);
-            log.debug("[Instrumented] store: agent='{}', elapsedMs={}, contentLen={}",
+            log.debug("[Instrumented] store: agent='{}', elapsedMs={}, contentLen={}, domain={}, version={}",
                     agentId, elapsedMs,
-                    memoryContent != null ? memoryContent.length() : 0);
+                    record.content() != null ? record.content().length() : 0,
+                    record.domain(), record.version());
         }
     }
 

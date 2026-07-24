@@ -74,6 +74,9 @@ public final class SyscallDispatcher {
     /** Seccomp/eBPF-style syscall firewall filter chain. */
     private final List<SyscallFilter> filters = new CopyOnWriteArrayList<>();
 
+    /** 幂等性账本 — 写操作去重的最后一道防线。 */
+    private final IdempotencyLedger idempotencyLedger = IdempotencyLedger.getInstance();
+
     private SyscallDispatcher() {}
 
     public void configure(LlmRouter llmRouter, VfsManager vfsManager, ObjectManager objectManager) {
@@ -187,6 +190,36 @@ public final class SyscallDispatcher {
             }
         }
 
+        // ── 幂等性账本：写操作去重 ──
+        // 命中终态 → 直接重放，跳过执行；命中 PENDING → 重放 pending 响应（不重复执行）；
+        // 未命中 → tryReserve 占位 PENDING，执行后 resolve。
+        String idemKey = request.idempotencyKey();
+        if (idemKey != null && !idemKey.isEmpty()) {
+            var cached = idempotencyLedger.lookup(idemKey);
+            if (cached.isPresent()) {
+                SyscallResponse replay = cached.get().toResponse();
+                SemanticEtw.getInstance().logEvent("IDEMPOTENCY", "REPLAY",
+                        "agent=" + agentId + " action=" + fullAction
+                        + " key=" + idemKey + " state=" + cached.get().resultState());
+                log.info("[Idempotency] 命中账本，重放: agent={}, action={}, key={}, state={}",
+                        agentId, fullAction, idemKey, cached.get().resultState());
+                return replay;
+            }
+            if (!idempotencyLedger.tryReserve(idemKey)) {
+                // 并发竞争：另一个线程刚占位，重放其 pending
+                var raced = idempotencyLedger.lookup(idemKey);
+                if (raced.isPresent()) {
+                    SyscallResponse replay = raced.get().toResponse();
+                    log.info("[Idempotency] 并发占位冲突，重放 pending: agent={}, action={}, key={}",
+                            agentId, fullAction, idemKey);
+                    return replay;
+                }
+                // 极端竞态：占位失败又查不到，继续执行（降级，不阻断）
+                log.warn("[Idempotency] 占位失败但查无记录，降级执行: agent={}, action={}, key={}",
+                        agentId, fullAction, idemKey);
+            }
+        }
+
         SemanticEtw.getInstance().logEvent("SYSCALL", "ENTER",
                 "agent=" + agentId + " namespace=" + request.namespace() + " action=" + fullAction);
 
@@ -229,6 +262,15 @@ public final class SyscallDispatcher {
             response = SyscallResponse.fail("SECURITY: " + e.getMessage());
         } catch (Exception e) {
             response = SyscallResponse.fail(e);
+        }
+
+        // ── 幂等性账本：记录终态结果 ──
+        // 仅记录 response 自身的 resultState（ok→COMMITTED, fail→FAILED）。
+        // PENDING_UNKNOWN 不在此设置——由外层超时包装器显式 markPending。
+        if (idemKey != null && !idemKey.isEmpty() && response != null
+                && response.resultState() != ResultState.PENDING_UNKNOWN) {
+            idempotencyLedger.resolve(idemKey, response.resultState(),
+                    response.data(), response.errorMessage());
         }
 
         // ── PostToolUse Hook (后置钩子) ──
@@ -277,6 +319,61 @@ public final class SyscallDispatcher {
                 TracingManager.instance().endSpan(syscallSpan.spanId());
             }
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  RETRY — 读/写差异化重试
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 带重试策略的 syscall 执行入口。
+     * <p>
+     * 读操作：失败按 {@link SyscallRetryPolicy} 指数退避重试。
+     * 写操作：仅当响应为 {@link ResultState#PENDING_UNKNOWN} 且 ledger 无 COMMITTED 记录、
+     * 且策略允许（{@code allowWriteRetryOnPending}）时重试一次。写重试必须携带
+     * idempotencyKey，由 {@link IdempotencyLedger} 保证不重复执行。
+     * <p>
+     * <b>注意</b>：超时检测由调用方负责。调用方在超时应先
+     * {@link IdempotencyLedger#markPending} 再调用本方法，本方法据此判定是否重试。
+     *
+     * @param agentId the agent issuing the syscall
+     * @param request the syscall request（写操作应携带 idempotencyKey）
+     * @param policy  重试策略
+     * @return 最终响应
+     */
+    public SyscallResponse executeWithRetry(String agentId, SyscallRequest request,
+                                            SyscallRetryPolicy policy) {
+        SyscallResponse last = null;
+        int attempt = 0;
+        while (true) {
+            attempt++;
+            try {
+                last = execute(agentId, request);
+            } catch (Exception e) {
+                // execute 内部已包装异常为 fail，此处兜底极端未捕获异常
+                last = SyscallResponse.fail(e);
+            }
+            if (!policy.shouldRetry(request, attempt, last, idempotencyLedger)) {
+                return last;
+            }
+            long backoff = policy.nextBackoffMs(attempt);
+            if (backoff > 0) {
+                try {
+                    Thread.sleep(backoff);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return last;
+                }
+            }
+            log.info("[Retry] syscall 将重试: agent={}, action={}, attempt={}, lastState={}, backoffMs={}",
+                    agentId, request.fullAction(), attempt + 1,
+                    last != null ? last.resultState() : "null", backoff);
+        }
+    }
+
+    /** 暴露幂等账本，供外层超时包装器/governance 层调用 markPending/lookup。 */
+    public IdempotencyLedger getIdempotencyLedger() {
+        return idempotencyLedger;
     }
 
     // ════════════════════════════════════════════════════════════════
