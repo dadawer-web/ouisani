@@ -1,5 +1,7 @@
 package com.ouisani.aios.core.network;
 
+import com.ouisani.aios.core.observability.UpstreamMeta;
+import com.ouisani.aios.core.observability.UpstreamMetaContext;
 import io.javalin.http.sse.SseClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +25,15 @@ import java.util.function.Consumer;
 public class EventBus {
 
     private static final Logger log = LoggerFactory.getLogger(EventBus.class);
+
+    /**
+     * UpstreamMeta 伴生事件通道名 — 调用方通过 {@link #broadcast(String, String, UpstreamMeta)}
+     * 或 {@link #broadcastWithCurrentMeta(String, String)} 发起的广播会额外在此通道多发一条
+     * 伴生事件，payload 为 {@link UpstreamMeta#toJsonLine()}。
+     * <p>
+     * 订阅者 opt-in：不订阅此通道则零影响，订阅后可获取每次上游调用的元数据快照。
+     */
+    public static final String COMPANION_UPSTREAM_META_CHANNEL = "sys.upstream.meta";
 
     private static final class Holder {
         static final EventBus INSTANCE = new EventBus();
@@ -109,6 +120,54 @@ public class EventBus {
                 });
             }
         }
+    }
+
+    /**
+     * 广播事件并附带上游调用元数据（伴生事件策略）。
+     * <p>
+     * 原 {@code eventType} 通道的 payload 字节级不变；额外在
+     * {@code sys.upstream.meta} 通道多发一条伴生事件，payload 为
+     * {@link UpstreamMeta#toJsonLine()}。订阅者 opt-in：
+     * <ul>
+     *   <li>不需要 meta 的订阅者：不订阅 {@code sys.upstream.meta}，零影响</li>
+     *   <li>需要 meta 的订阅者：订阅 {@code sys.upstream.meta} 通道</li>
+     * </ul>
+     * <p>
+     * <b>设计权衡</b>：选择伴生事件而非合并字段到原 payload，原因：
+     * <ol>
+     *   <li>现有 SSE 客户端 schema 不破坏（如 GUI DOM、CostTracker 等）</li>
+     *   <li>原 payload 不保证是 JSON 对象（可能是任意字符串），无法保证合并可行</li>
+     *   <li>订阅者 opt-in，零回归</li>
+     * </ol>
+     *
+     * @param eventType 事件通道
+     * @param payload   事件载荷（JSON 字符串，原通道字节级不变）
+     * @param meta      上游调用元数据（null 时不发伴生事件，等价于调用 {@link #broadcast(String, String)})
+     */
+    public void broadcast(String eventType, String payload, UpstreamMeta meta) {
+        broadcast(eventType, payload);
+        if (meta != null) {
+            broadcast(COMPANION_UPSTREAM_META_CHANNEL, meta.toJsonLine());
+        }
+    }
+
+    /**
+     * 广播事件并自动从 {@link UpstreamMetaContext#current()} 读取上游调用元数据。
+     * <p>
+     * 便捷方法，等价于：
+     * <pre>{@code
+     * broadcast(eventType, payload, UpstreamMetaContext.current());
+     * }</pre>
+     * <p>
+     * <b>虚拟线程约束</b>：仅在同一调用链上的同步代码中可用。
+     * EventBus 内部订阅者在虚拟线程上执行，看不到 {@link UpstreamMetaContext#current()}，
+     * 必须通过伴生事件 payload 获取 meta。
+     *
+     * @param eventType 事件通道
+     * @param payload   事件载荷
+     */
+    public void broadcastWithCurrentMeta(String eventType, String payload) {
+        broadcast(eventType, payload, UpstreamMetaContext.current());
     }
 
     public int activeClientCount() {
