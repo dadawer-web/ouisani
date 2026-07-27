@@ -37,6 +37,7 @@ module com.ouisani.aios {
     exports com.ouisani.aios.core.llm.decode;
     exports com.ouisani.aios.core.lsp;
     exports com.ouisani.aios.core.mcp;
+    exports com.ouisani.aios.core.middleware;
     exports com.ouisani.aios.core.memory;
     exports com.ouisani.aios.core.memory.connector;
     exports com.ouisani.aios.core.memory.providers;
@@ -104,6 +105,7 @@ module com.ouisani.aios {
     opens com.ouisani.aios.core.llm.decode;
     opens com.ouisani.aios.core.lsp;
     opens com.ouisani.aios.core.mcp;
+    opens com.ouisani.aios.core.middleware;
     opens com.ouisani.aios.core.memory;
     opens com.ouisani.aios.core.memory.connector;
     opens com.ouisani.aios.core.memory.providers;

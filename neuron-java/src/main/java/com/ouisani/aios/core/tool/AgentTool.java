@@ -84,14 +84,36 @@ public class AgentTool implements Tool<AgentTool.Input> {
         // 提取父 Agent ID（从 context 或使用默认值）
         String parentAgentId = context.agentId() != null ? context.agentId() : "unknown_parent";
 
-        // ── 委托安全检查 (借鉴 OMA delegate_to_agent) ──
-        // 深度限制(最多3层) + 防环 + 自委托禁止,堵住通过委托绕过 OOM 的漏洞
+        int currentDepth = DelegationGuard.currentDepth();
+
+        // ── 派生预算预检查（深度 + 广度 + 全局总数，借鉴 1 优雅降级）──
+        // 三维超限都返回原因字符串，AgentTool 据此降级为 in-context（不拒绝、不 spawn）。
+        // 旧实现：DelegationGuard.enter 抛 DelegationException → AgentTool 返回 fail
+        //   → 母体拿到"委托被拒绝"错误 → 可能触发 MAX_SELF_HEAL_RETRIES 自愈白烧 token。
+        // 新实现：返回 ok + 明确的"在上下文内完成"指令，LLM 直接用其他工具干活，省一轮自愈。
+        String spawnLimit = DelegationGuard.checkSpawnAllowed();
+        if (spawnLimit != null) {
+            return degradeToInContext(input, currentDepth, spawnLimit);
+        }
+
+        // ── SoA 类型切换主动告知（层 B·优化）──
+        // 子 agent 将处于叶子层（currentDepth+1 == maxDepth）时，在其 prompt 前注入叶子约束，
+        // 让 LLM 知道自己不应再派生，减少无效的 agent 工具调用往返。
+        // 即使 LLM 仍尝试调 agent 工具，上方 checkSpawnAllowed 会兜底降级。
+        // 用 final 变量捕获，供下方 async/sync 两个分支的 lambda 与方法调用统一引用。
+        final String effectivePrompt = (currentDepth + 1 == DelegationGuard.maxDepth())
+                ? injectLeafConstraint(prompt)
+                : prompt;
+
+        // ── enter: 原子计数 + 兜底检查 + 自委托/防环 ──
+        // 兜底：防 checkSpawnAllowed 与 enter 间的 TOCTOU 竞态，或自委托/防环错误。
+        // 统一降级为 in-context（借鉴 1 精神：任何无法派生的情况都返回 ok 让母体自己干）。
         DelegationGuard.DelegationContext delegationCtx;
         try {
             delegationCtx = DelegationGuard.enter(parentAgentId, agentId);
         } catch (DelegationGuard.DelegationException e) {
-            log.warn("[AgentTool] 委托被拒绝: {}", e.getMessage());
-            return ToolOutput.fail("委托被拒绝: " + e.getMessage());
+            log.warn("[AgentTool] enter 兜底拒绝，降级为 in-context: {}", e.getMessage());
+            return degradeToInContext(input, currentDepth, "enter-guard");
         }
 
         // 保存父 Agent 的 cgroup,用于子 Agent 继承 (token 消耗计入父预算)
@@ -107,7 +129,7 @@ public class AgentTool implements Tool<AgentTool.Input> {
         if (input.runInBackground()) {
             // 异步执行 — 强制沙箱隔离
             TaskScheduler.SandboxAgentTask task = TaskScheduler.instance().submitAgentTask(
-                    prompt, agentId, context.workingDir(), context.sdk());
+                    effectivePrompt, agentId, context.workingDir(), context.sdk());
 
             return ToolOutput.ok("Agent launched in SANDBOX. Task ID: " + task.taskId()
                     + "\nBlueprint: " + (input.blueprintPath().isEmpty() ? "(generic)" : input.blueprintPath())
@@ -143,7 +165,7 @@ public class AgentTool implements Tool<AgentTool.Input> {
                     }
 
                     QueryEngine engine = new QueryEngine(context.sdk(), agentId, context.workingDir());
-                    String result = engine.query(prompt);
+                    String result = engine.query(effectivePrompt);
                     AgentWaitRegistry.instance().completeChild(agentId, result);
                 } catch (Exception e) {
                     log.error("[AgentTool] 子 Agent 执行异常: agentId={}, error={}", agentId, e.getMessage());
@@ -170,6 +192,48 @@ public class AgentTool implements Tool<AgentTool.Input> {
             String formatted = SubagentResultFormatter.format(agentId, input.description(), result);
             return ToolOutput.ok(formatted);
         }
+    }
+
+    /**
+     * SoA 类型切换降级 — 派生预算超限时，不拒绝、不 spawn，
+     * 返回 in-context 指令让母体直接用其他工具完成子任务。
+     * <p>
+     * 借鉴 SoA (self-organized-agent) 的 ChildAgent 模式：深度/广度/总数边界处的 agent
+     * 不再派生子智能体，而是直接产出。本方法是其等价简化——不 spawn 叶子子 Agent，
+     * 而是让当前 agent 在自己的上下文内完成，省一次虚拟线程 + QueryEngine 实例。
+     * <p>
+     * 相对旧实现（抛 DelegationException → 返回 fail）的关键改进：返回 {@code ok}
+     * 而非 {@code fail}，母体 LLM 拿到的是"在上下文内完成"的明确指令而非"委托失败"错误，
+     * 避免触发 {@code MAX_SELF_HEAL_RETRIES} 自愈重试白烧 token。
+     *
+     * @param reason 超限原因："depth" / "breadth" / "total" / "enter-guard"
+     */
+    static ToolOutput degradeToInContext(Input input, int currentDepth, String reason) {
+        log.info("[AgentTool] 派生降级 (reason={}, depth={}/{}) → in-context: task='{}'",
+                reason, currentDepth, DelegationGuard.maxDepth(), input.description());
+        System.out.printf("[AgentTool] ├─ 派生降级: reason=%s, depth=%d/%d, task='%s' → in-context%n",
+                reason, currentDepth, DelegationGuard.maxDepth(), input.description());
+        return ToolOutput.ok("【系统·派生降级】原因: " + reason
+                + " | 当前委托深度 " + currentDepth + " / 上限 " + DelegationGuard.maxDepth()
+                + "（借鉴 SoA ChildAgent 模式：叶子节点不再派生，直接在上下文内完成）。"
+                + "请勿再次调用 agent 工具，直接使用 bash/file_write/web_search 等工具"
+                + "在当前上下文内完成以下子任务：\n\n"
+                + input.prompt());
+    }
+
+    /**
+     * SoA 类型切换主动告知（层 B）— 子 agent 将处于叶子层时，在其 prompt 前注入叶子约束，
+     * 让 LLM 知道自己不应再派生，减少无效的 agent 工具调用往返。
+     * <p>
+     * 对应 SoA {@code generate_agent} 中 {@code depth+1 == max_depth} 时生成 ChildAgent
+     * 的类型切换：在子 Agent 启动前就告知它"你是叶子"，从源头减少递归派生企图。
+     * 即使 LLM 无视约束仍尝试调 agent 工具，层 A 会兜底降级。
+     */
+    static String injectLeafConstraint(String prompt) {
+        log.info("[AgentTool] 子 Agent 将处于叶子层，已注入叶子约束（SoA ChildAgent 模式）");
+        return "【系统·叶子节点约束】你处于最大派生深度，禁止使用 agent 工具派生子智能体。"
+                + "如需分解子任务，请在当前上下文内用 bash/file_write/web_search 等工具直接完成。\n\n"
+                + prompt;
     }
 
     /**

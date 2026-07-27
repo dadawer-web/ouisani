@@ -55,6 +55,16 @@ public class SkillLoader {
      * Skill Catalog 多源加载新增 {@code category}/{@code tags} 字段（frontmatter 索引），
      * 以及 {@link #body()} 懒加载 API：eager 源（BUNDLED/PROJECT/USER）content 非 null；
      * LEARNED 源 content=null，body 首次使用才从 path 读取并缓存。
+     * <p>
+     * <b>Cap 模型升级（用户需求）</b>：新增 {@link SkillCap} 字段，承载 4 个结构化能力字段
+     * （author / artifactSrcUrl / supportedInputs / providerId）。与既有
+     * {@link RoleBlueprintLoader} 的"双读模式"对齐：
+     * <ul>
+     *   <li><b>原文 prompt 侧</b> — {@link #content} / {@link #body()} 完全保留</li>
+     *   <li><b>结构化 Cap 侧</b> — {@link #cap()} 供调度器/沙箱/权限层加载时决策</li>
+     * </ul>
+     * 缺新字段的存量 SKILL.md 仍能正常加载，{@link #cap} 降级为 {@link SkillCap#DEFAULT}
+     * （零回归）。所有旧便利构造器自动填充 DEFAULT cap，调用方源码兼容。
      */
     public record SkillDef(
             String name,
@@ -68,7 +78,8 @@ public class SkillLoader {
             Path path,
             String outputContract,  // R1: 输出契约（可空）
             String category,        // 技能分类（frontmatter category，默认空）
-            List<String> tags       // 标签列表（frontmatter tags，默认空）
+            List<String> tags,      // 标签列表（frontmatter tags，默认空）
+            SkillCap cap            // Cap 模型（author/srcUrl/inputs/providerId，默认 DEFAULT）
     ) {
 
         /** compact constructor — 兜底 null 默认值 */
@@ -76,17 +87,31 @@ public class SkillLoader {
             if (outputContract == null) outputContract = "";
             if (category == null) category = "";
             if (tags == null) tags = List.of();
+            if (cap == null) cap = SkillCap.DEFAULT;
         }
 
         /**
-         * 便利构造器（10-arg，含 outputContract，无 category/tags）— R1 调用方兼容。
+         * 便利构造器（11-arg，含 outputContract/category/tags，无 cap）— 旧调用方兼容。
+         * <p>
+         * cap 自动填充为 {@link SkillCap#DEFAULT}，等价于未升级的存量 SKILL.md。
+         */
+        public SkillDef(String name, String description, String content,
+                        List<String> allowedTools, List<String> arguments,
+                        String whenToUse, String model, SkillSource source, Path path,
+                        String outputContract, String category, List<String> tags) {
+            this(name, description, content, allowedTools, arguments,
+                    whenToUse, model, source, path, outputContract, category, tags, SkillCap.DEFAULT);
+        }
+
+        /**
+         * 便利构造器（10-arg，含 outputContract，无 category/tags/cap）— R1 调用方兼容。
          */
         public SkillDef(String name, String description, String content,
                         List<String> allowedTools, List<String> arguments,
                         String whenToUse, String model, SkillSource source, Path path,
                         String outputContract) {
             this(name, description, content, allowedTools, arguments,
-                    whenToUse, model, source, path, outputContract, "", List.of());
+                    whenToUse, model, source, path, outputContract, "", List.of(), SkillCap.DEFAULT);
         }
 
         /**
@@ -96,7 +121,7 @@ public class SkillLoader {
                         List<String> allowedTools, List<String> arguments,
                         String whenToUse, String model, SkillSource source, Path path) {
             this(name, description, content, allowedTools, arguments,
-                    whenToUse, model, source, path, "", "", List.of());
+                    whenToUse, model, source, path, "", "", List.of(), SkillCap.DEFAULT);
         }
 
         /**
@@ -413,6 +438,12 @@ public class SkillLoader {
         String category = "";        // 技能分类
         List<String> tags = List.of(); // 标签
 
+        // ── Cap 模型新增字段（用户需求：Skill 升级为结构化 Cap 模型）──
+        String author = "";                       // author 命名空间
+        String artifactSrcUrl = "";                // artifact.srcUrl（远程代码载荷）
+        List<String> supportedInputs = List.of();  // supportedInputs（v1 强制 ["text"]）
+        String providerId = "";                    // providerId 枚举
+
         String[] lines = content.split("\n");
         boolean inFrontmatter = false;
 
@@ -440,14 +471,49 @@ public class SkillLoader {
                 } else if (line.startsWith("tags:")) {
                     String tagsStr = line.substring("tags:".length()).trim();
                     tags = Arrays.stream(tagsStr.split("[,\\s]+")).filter(s -> !s.isEmpty()).toList();
+                } else if (line.startsWith("author:")) {
+                    // Cap: author 命名空间字段
+                    author = line.substring("author:".length()).trim().replace("\"", "");
+                } else if (line.startsWith("artifact.srcUrl:") || line.startsWith("artifact_src_url:")
+                        || line.startsWith("artifact.srcurl:") || line.startsWith("artifact-src-url:")) {
+                    // Cap: artifact.srcUrl（远程代码载荷）— 支持 dotted/snake/kebab 多种写法
+                    int colon = line.indexOf(':');
+                    artifactSrcUrl = line.substring(colon + 1).trim().replace("\"", "");
+                } else if (line.startsWith("supported-inputs:") || line.startsWith("supported_inputs:")) {
+                    // Cap: supportedInputs（v1 强制 ["text"]，其他值由 SkillCap 规范化）
+                    int colon = line.indexOf(':');
+                    String inputsStr = line.substring(colon + 1).trim();
+                    supportedInputs = Arrays.stream(inputsStr.split("[,\\s]+"))
+                            .filter(s -> !s.isEmpty()).toList();
+                } else if (line.startsWith("provider-id:") || line.startsWith("provider_id:")
+                        || line.startsWith("providerId:")) {
+                    // Cap: providerId 枚举
+                    int colon = line.indexOf(':');
+                    providerId = line.substring(colon + 1).trim().replace("\"", "");
                 }
+            }
+        }
+
+        // ── 构造 SkillCap（best-effort：未知 providerId 降级 AIOS_CORE；非法 URL 降级 null）──
+        SkillCap cap = author.isEmpty() && artifactSrcUrl.isEmpty()
+                && supportedInputs.isEmpty() && providerId.isEmpty()
+                ? SkillCap.DEFAULT
+                : SkillCap.of(author, artifactSrcUrl, supportedInputs, providerId);
+
+        if (!cap.equals(SkillCap.DEFAULT)) {
+            log.debug("[SkillLoader] Skill '{}' 升级为 Cap 模型: author={}, providerId={}, srcUrl={}",
+                    name, cap.author(), cap.providerId(),
+                    cap.artifactSrcUrl() == null ? "(none)" : cap.artifactSrcUrl());
+            if (!cap.isAuthorConsistentWithProvider()) {
+                log.warn("[SkillLoader] Skill '{}' author/providerId 不一致: author={}, providerId={}",
+                        name, cap.author(), cap.providerId());
             }
         }
 
         // LEARNED 源懒加载：丢弃 body，仅留 frontmatter 索引
         String storedContent = lazy ? null : content;
         return new SkillDef(name, description, storedContent, allowedTools, List.of(),
-                whenToUse, model, source, path, outputContract, category, tags);
+                whenToUse, model, source, path, outputContract, category, tags, cap);
     }
 
     /**

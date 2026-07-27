@@ -179,6 +179,43 @@ public final class VfsManager {
         return bestMatch;
     }
 
+    /**
+     * 将命令字符串中的 VFS 虚拟路径前缀翻译为宿主机物理路径。
+     * <p>
+     * 用于 BashTool 等宿主机执行场景：LLM 经 VFS 写文件（如 {@code /factory/agent_1.py}），
+     * 但 bash 在宿主机执行时 {@code /factory} 不存在，必须翻译为物理目录才能找到文件。
+     * <p>
+     * 按注册前缀长度降序匹配（最具体的优先，如 {@code /factory/wf_xxx} 优先于 {@code /factory}），
+     * 仅替换作为独立路径起点的前缀（前缀前不能是 {@code \w - .} 字符，避免 {@code /factoryX}、
+     * {@code my_factory} 等误匹配）。正则风格与 {@code AiosAppManager.applyKernelPathTranslation}
+     * 保持一致（已生产验证）。
+     *
+     * @param command 含 VFS 路径的命令字符串（如 {@code python3 -u /factory/agent_1.py}）
+     * @return 翻译后的命令；无映射或无匹配时原样返回
+     */
+    public String translateVfsPathsInCommand(String command) {
+        if (command == null || command.isEmpty() || physicalWorkspaceMap.isEmpty()) {
+            return command;
+        }
+        // 按前缀长度降序，先匹配最具体的（/factory/wf_xxx 优先于 /factory）
+        List<String> prefixes = new ArrayList<>(physicalWorkspaceMap.keySet());
+        prefixes.sort((a, b) -> Integer.compare(b.length(), a.length()));
+
+        String result = command;
+        for (String prefix : prefixes) {
+            String physical = physicalWorkspaceMap.get(prefix);
+            if (physical == null || physical.isEmpty()) continue;
+            // 仅替换作为独立路径起点的前缀：
+            //   - 前缀前不能是 \w - . 字符（避免 my_factory、x/factory 误匹配）
+            //   - 前缀后必须跟 / 、结尾或非路径字符（避免 /factoryX 被替换成 {PHYSICAL}X 破坏路径）
+            String regex = "(?<![\\w\\-\\.])" + java.util.regex.Pattern.quote(prefix) + "(?=/|$|[^\\w/.-])";
+            result = java.util.regex.Pattern.compile(regex)
+                    .matcher(result)
+                    .replaceAll(java.util.regex.Matcher.quoteReplacement(physical));
+        }
+        return result;
+    }
+
     public TaskScheduler getTaskScheduler() {
         return taskScheduler;
     }

@@ -67,6 +67,13 @@ public class TopologyCompiler {
      * @return 纯 JSON 字符串，格式为 {"nodes": [...], "edges": [...]}
      */
     public static String compileTopology(String prompt, List<String> enabledSkills, List<String> enabledRoles) {
+        // ── 输入守卫：歧义/极短输入直接返回澄清 JSON，不调用 LLM ──
+        // 修复 Terminal#374-430 bug：用户说"做环境的科研"被锚定到 AIOS 系统环境搭建。
+        // 守卫在 LLM 调用之前短路，避免歧义输入浪费 token 并生成偏题拓扑。
+        if (shouldClarify(prompt)) {
+            return buildClarificationJson(prompt);
+        }
+
         log.info("[TopologyCompiler] compileTopology 已调用: promptLen={}, skills={}, roles={}",
                 prompt.length(), enabledSkills, enabledRoles);
 
@@ -195,6 +202,25 @@ public class TopologyCompiler {
                 cleanJson = result.cleanedJson();
                 log.info("[TopologyCompiler] compileTopology 验证通过 (尝试 {}), jsonLen={}",
                         attempt, cleanJson.length());
+
+                // ── DomainBiasCheck：科研意图被锚定到系统搭建 → 注入去偏反馈重编译 ──
+                // 修复 Terminal#374-430：schema 验证通过但节点是 INSTALL/CLONE/CONFIGURE 等系统搭建动作。
+                DomainBiasCheck.BiasResult bias = DomainBiasCheck.check(prompt, cleanJson);
+                if (bias.biased()) {
+                    log.warn("[TopologyCompiler] compileTopology 尝试 {} 检测到领域偏差: {}",
+                            attempt, bias.reason());
+                    if (attempt < maxAttempts) {
+                        currentPrompt = fullPrompt + "\n\n【领域偏差纠正 — 必须修正】\n" + bias.reason()
+                                + "\n命中系统搭建动作标记: " + bias.hitMarkers()
+                                + "\n用户意图是科研/调研，必须走 WebSearch → WebScrape → 总结对比 → 生成报告 的 ETL 路径。"
+                                + "\n严禁生成 INSTALL/CLONE/CONFIGURE/项目结构/pom.xml/Dockerfile 等系统搭建节点。"
+                                + "\n请重新输出纯 JSON（不要 Markdown 标记）。";
+                        continue;
+                    }
+                    // 优雅降级：偏差在 maxAttempts 次重编译后仍持续，返回 best-effort 拓扑而非死循环
+                    log.warn("[TopologyCompiler] compileTopology 偏差在 {} 次重编译后仍持续，优雅降级返回当前拓扑",
+                            maxAttempts);
+                }
                 break;
             }
 
@@ -218,6 +244,112 @@ public class TopologyCompiler {
 
         log.info("[TopologyCompiler] compileTopology complete: responseLen={}", cleanJson.length());
         return cleanJson;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  输入守卫 (Input Guard) — 歧义/极短输入澄清
+    // ════════════════════════════════════════════════════════════════
+
+    /** 歧义词集合 — 单独出现不构成具体任务主题（如"环境"可能是生态/市场/政策/开发环境） */
+    private static final Set<String> AMBIGUOUS_KEYWORDS = Set.of(
+            "环境", "系统", "搭建", "部署", "配置", "工具", "服务", "框架", "平台", "架构"
+    );
+
+    /** 停用词 + 意图动词 — 剥离后用于判断是否残留具体主题 */
+    private static final Set<String> STOPWORDS = Set.of(
+            "帮我", "帮", "做", "做一个", "一个", "一下", "的", "了", "是",
+            "这", "那", "和", "与", "及", "以及", "到", "去", "给", "把", "让", "请",
+            "科研", "调研", "研究", "分析", "调查", "写", "翻译", "总结", "对比", "生成", "报告"
+    );
+
+    /**
+     * 输入守卫判定 — 是否应对用户输入返回澄清反问而非直接编译。
+     * <p>
+     * 两段式：
+     * <ul>
+     *   <li>Stage A：null / 空白输入 → 澄清</li>
+     *   <li>Stage B：含歧义词，且剥离歧义词+停用词后无具体主题残留 → 澄清</li>
+     * </ul>
+     * 关键不误杀设计：仅当输入含歧义词才进入 Stage B 的剥离判定；无歧义词的短请求
+     * （如"研究特斯拉电池"7字、"翻译这段文档"6字）直接放行。剥离后若残留具体主题
+     * （如"搭建Python开发环境"→残留"Python开发"）也放行。
+     *
+     * @param prompt 用户原始输入
+     * @return true 表示应返回澄清 JSON，false 表示可正常编译
+     */
+    public static boolean shouldClarify(String prompt) {
+        // Stage A: null / 空白
+        if (prompt == null || prompt.isBlank()) {
+            return true;
+        }
+        // Stage B: 含歧义词 + 剥离歧义词/停用词后无具体主题残留
+        if (!containsAnyKeyword(prompt, AMBIGUOUS_KEYWORDS)) {
+            return false;
+        }
+        String stripped = stripKeywords(prompt, AMBIGUOUS_KEYWORDS, STOPWORDS);
+        return stripped.isBlank();
+    }
+
+    /** 查找输入中命中的歧义词（用于澄清反问指明具体歧义点） */
+    private static List<String> findAmbiguousKeywords(String prompt) {
+        if (prompt == null || prompt.isBlank()) return List.of();
+        List<String> hits = new ArrayList<>();
+        for (String kw : AMBIGUOUS_KEYWORDS) {
+            if (prompt.contains(kw)) hits.add(kw);
+        }
+        return hits;
+    }
+
+    /** 构建澄清 JSON — 守卫触发时返回，含 needClarification/agentType/nodes/clarificationQuestion */
+    private static String buildClarificationJson(String prompt) {
+        List<String> hits = findAmbiguousKeywords(prompt);
+        String hitWord = hits.isEmpty() ? "需求" : String.join("、", hits);
+        String question = "您的需求「" + (prompt == null ? "" : prompt.trim()) + "」中的「"
+                + hitWord + "」一词存在歧义，无法确定具体的任务主题。"
+                + "请补充您想针对的具体对象/领域/主题，例如："
+                + "「调研XX的环境问题」「搭建XX开发环境」「分析XX系统的架构」。";
+        log.info("[TopologyCompiler] 输入守卫触发澄清: prompt='{}', hitKeywords={}", prompt, hits);
+        return "{\"needClarification\":true,\"agentType\":\"omni\",\"nodes\":[],"
+                + "\"clarificationQuestion\":\"" + escapeJson(question) + "\"}";
+    }
+
+    /** 最小 JSON 字符串转义（引号/反斜杠/控制字符） */
+    private static String escapeJson(String s) {
+        if (s == null) return "";
+        StringBuilder sb = new StringBuilder(s.length() + 8);
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    private static boolean containsAnyKeyword(String text, Set<String> keywords) {
+        if (text == null || text.isEmpty()) return false;
+        for (String kw : keywords) {
+            if (text.contains(kw)) return true;
+        }
+        return false;
+    }
+
+    /** 剥离歧义词 + 停用词，返回残留字符串（用于判断是否有具体主题）。按长度降序剥离避免短词破坏长词。 */
+    private static String stripKeywords(String text, Set<String> ambiguous, Set<String> stopwords) {
+        List<String> all = new ArrayList<>(ambiguous.size() + stopwords.size());
+        all.addAll(ambiguous);
+        all.addAll(stopwords);
+        all.sort((a, b) -> Integer.compare(b.length(), a.length()));
+        String result = text;
+        for (String kw : all) {
+            result = result.replace(kw, "");
+        }
+        return result.trim();
     }
 
     /**
@@ -465,6 +597,14 @@ public class TopologyCompiler {
                   5) 节点列表：按依赖顺序列出所有微任务节点（10-20 个），标注 E/T/L 类型。
                 - %s 标签内的内容不会被解析为 JSON，你可以自由思考。
                 - 完成思考后，紧接着输出纯 JSON（不要包裹在 %s 中，直接以 { 开头）。
+
+                法则 6: 去偏指令 (Anti-Anchoring Bias) — 极度重要，违反即重编译
+                - 严禁把用户输入中的"环境"一词默认锚定到 AIOS 系统环境或操作系统环境。
+                - 中文"环境"有歧义：可能是"生态环境/市场环境/政策环境/投资环境"等科研主题，也可能是"开发环境/运行环境"等系统主题。
+                - 当用户意图是科研/调研/分析/综述（如"做XX的科研"、"调研XX环境问题"、"研究XX的环境政策"），必须走 WebSearch → WebScrape → 总结对比 → 生成报告 的 ETL 路径。
+                - 禁止为科研类输入生成 INSTALL/CLONE/CONFIGURE/项目结构/pom.xml/Dockerfile/requirements.txt 等系统搭建节点，也禁止生成 FETCH_SYSTEM/FETCH_AIOS/AIOS_ARCHITECTURE/OS_UTILS 等获取系统级文档的节点。
+                - 仅当用户明确说"搭建/部署/安装/配置 XX 环境"时，才允许生成系统搭建节点。
+                - 自检：若你的节点里出现了上述系统搭建动作，但用户意图是科研，立即改为 WebSearch/WebScrape ETL 路径重写拓扑。
                 """.formatted(thinkOpen, thinkOpen, thinkOpen, thinkClose);
     }
 

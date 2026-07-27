@@ -1,19 +1,19 @@
 package com.ouisani.aios.core.tool;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
-import java.util.ArrayList;
+import com.ouisani.aios.core.sandbox.ExecOptions;
+import com.ouisani.aios.core.sandbox.ExecResult;
+
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.regex.Pattern;
 
 /**
  * Grep 工具 — 内容搜索，对标 Claude Code 的 GrepTool。
  * <p>
  * 使用 ripgrep (rg) 进行高性能正则搜索，回退到 Java 内置实现。
+ * <p>
+ * <b>执行后端可插拔</b>：所有 shell 执行走 {@link com.ouisani.aios.core.sandbox.BackendBase#exec_shell}，
+ * 由 {@link ToolContext#backend()} 决定路由目标。工具代码不感知后端类型。
  * <p>
  * OS 类比：相当于 Linux 的 grep 命令。
  */
@@ -51,50 +51,49 @@ public class GrepTool implements Tool<GrepTool.Input> {
     @Override
     public ToolOutput call(Input input, ToolContext context) {
         try {
-            // Try ripgrep first
-            List<String> cmd = new ArrayList<>();
-            cmd.add("rg");
-            cmd.add("--no-heading");
-            cmd.add("--line-number");
-            cmd.add("--color=never");
-            cmd.add("--max-count=" + MAX_RESULTS);
+            // Build ripgrep command line — shell-quote pattern to avoid injection
+            StringBuilder cmd = new StringBuilder("rg --no-heading --line-number --color=never --max-count=");
+            cmd.append(MAX_RESULTS);
             if (input.contextLines() > 0) {
-                cmd.add("-C" + input.contextLines());
+                cmd.append(" -C").append(input.contextLines());
             }
             if (!input.glob().isEmpty()) {
-                cmd.add("--glob=" + input.glob());
+                cmd.append(" --glob=").append(shellQuote(input.glob()));
             }
-            cmd.add(input.pattern());
-            cmd.add(input.path());
+            cmd.append(" ").append(shellQuote(input.pattern()));
+            cmd.append(" ").append(shellQuote(input.path()));
 
-            ProcessBuilder pb = new ProcessBuilder(cmd);
-            if (context.workingDir() != null) {
-                pb.directory(new java.io.File(context.workingDir()));
+            // ── 后端可插拔：走 context.backend().exec_shell ──
+            ExecOptions options = new ExecOptions(
+                    30,                        // 30s 超时（与原 process.waitFor(30s) 一致）
+                    context.workingDir(),
+                    Map.of(),
+                    0,                         // 不截断（结果由 MAX_RESULTS 控制）
+                    true
+            );
+            ExecResult result = context.backend().exec_shell(cmd.toString(), options);
+
+            if (result.errorMessage() != null) {
+                return ToolOutput.fail("Grep failed: " + result.errorMessage());
             }
-            pb.redirectErrorStream(true);
-
-            Process process = pb.start();
-            StringBuilder output = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                int count = 0;
-                while ((line = reader.readLine()) != null && count < MAX_RESULTS) {
-                    output.append(line).append("\n");
-                    count++;
-                }
-            }
-            process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS);
-            process.destroyForcibly();
-
-            String result = output.toString();
-            if (result.isBlank()) {
+            // rg 退出码：0=有匹配，1=无匹配，2=错误
+            String output = result.output();
+            if (output.isBlank() || result.exitCode() == 1) {
                 return ToolOutput.ok("No matches found for pattern: " + input.pattern());
             }
-            return ToolOutput.ok(result);
+            if (result.exitCode() == 2) {
+                return ToolOutput.fail("Grep error: " + output);
+            }
+            return ToolOutput.ok(output);
         } catch (Exception e) {
             return ToolOutput.fail("Grep failed: " + e.getMessage());
         }
+    }
+
+    /** 单引号 shell 引用 — 防止 pattern/path 中的特殊字符被 bash 解析。 */
+    private static String shellQuote(String s) {
+        if (s == null || s.isEmpty()) return "''";
+        return "'" + s.replace("'", "'\\''") + "'";
     }
 
     @Override public boolean readOnly() { return true; }

@@ -1,11 +1,7 @@
 package com.ouisani.aios.core.tool;
 
-import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.security.ContainmentZoneManager;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -13,8 +9,12 @@ import java.util.Optional;
 /**
  * 文件读取工具 — 对标 Claude Code 的 FileReadTool。
  * <p>
- * 读取策略：优先从 VFS 虚拟文件系统读取；若 VFS 中不存在，
- * 回退到宿主机真实文件系统读取（Agent 常传入宿主机路径）。
+ * 读取策略：所有读取走 {@link com.ouisani.aios.core.sandbox.BackendBase#read_file}，
+ * 由 {@link ToolContext#backend()} 决定路由目标。LocalBackend 默认优先从 VFS 虚拟文件
+ * 系统读取；若 VFS 中不存在，回退到宿主机真实文件系统（Agent 常传入宿主机路径）。
+ * <p>
+ * <b>执行后端可插拔</b>：未来切换到 DockerBackend/E2BBackend 时，读取自动路由到容器/云沙箱
+ * 内的文件系统，工具代码零改动。
  * <p>
  * OS 类比：相当于 Linux 的 read() 系统调用，但经过 VFS 层的命名空间隔离。
  */
@@ -53,25 +53,14 @@ public class FileReadTool implements Tool<FileReadTool.Input> {
             ContainmentZoneManager.instance().enforceAccess(input.path(),
                     ContainmentZoneManager.Operation.READ);
 
-            // 1. 优先从 VFS 读取
-            VfsManager vfs = VfsManager.instance();
-            if (vfs.exists(input.path())) {
-                String content = vfs.readText(input.path());
-                if (content != null) {
-                    return formatOutput(content, input.offset(), input.limit());
-                }
+            // 1. 后端可插拔：所有读取走 context.backend().read_file
+            //    LocalBackend 默认优先从 VFS 读取，VFS 不存在时回退宿主机文件系统
+            String content = context.backend().read_file(input.path());
+            if (content == null) {
+                return ToolOutput.fail("File not found: " + input.path()
+                        + " (checked VFS and host filesystem)");
             }
-
-            // 2. VFS 中不存在，回退到宿主机文件系统
-            Path hostPath = Paths.get(input.path());
-            if (Files.exists(hostPath) && Files.isRegularFile(hostPath)) {
-                String content = Files.readString(hostPath);
-                return formatOutput(content, input.offset(), input.limit());
-            }
-
-            // 3. 两处都不存在
-            return ToolOutput.fail("File not found: " + input.path()
-                    + " (checked VFS and host filesystem)");
+            return formatOutput(content, input.offset(), input.limit());
         } catch (Exception e) {
             return ToolOutput.fail("Failed to read file: " + e.getMessage());
         }

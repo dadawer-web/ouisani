@@ -1,5 +1,6 @@
 package com.ouisani.aios.user.apps.omnifactory;
 
+import com.ouisani.aios.core.selection.SelectionPolicy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,6 +38,13 @@ public class WorkflowContext {
     // Agent 也不会"失忆"——记住自己读过什么文件、做过什么操作。
     private final CarryoverState carryoverState = new CarryoverState();
 
+    // ── Selection Policy（角色选择策略）— 借鉴 DyLAN listwise agent team selection ──
+    // 工作流级配置：listwise top-K 裁剪。executeDagInternal 开头读取此字段，
+    // 若声明了 listwise_top_k 则在 DAG 调度前裁剪未选中 role 的节点（标记 SKIPPED）。
+    // null = 未声明（零行为变化，向后兼容）；NONE_POLICY = 显式无策略。
+    // 不放入构造器：用 setter 注入，避免破坏现有 new WorkflowContext(workflowId) 调用。
+    private SelectionPolicy selectionPolicy;
+
     /** 根上下文构造（顶层 DAG 使用） */
     public WorkflowContext(String workflowId) {
         this.workflowId = workflowId;
@@ -51,6 +59,16 @@ public class WorkflowContext {
 
     public String getWorkflowId() {
         return workflowId;
+    }
+
+    /** 获取角色选择策略；null = 未声明（不触发 listwise 裁剪） */
+    public SelectionPolicy getSelectionPolicy() {
+        return selectionPolicy;
+    }
+
+    /** 注入角色选择策略（由 WorkflowEngine.executeWorkflow 从 manifest 传入） */
+    public void setSelectionPolicy(SelectionPolicy selectionPolicy) {
+        this.selectionPolicy = selectionPolicy;
     }
 
     /** 将某个节点的所有输出快照写入总线 */

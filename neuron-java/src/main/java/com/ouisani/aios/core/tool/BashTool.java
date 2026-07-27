@@ -1,12 +1,14 @@
 package com.ouisani.aios.core.tool;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
+import com.ouisani.aios.core.permission.PermissionChecker.BashToolLike;
+import com.ouisani.aios.core.permission.SafetyCheckResult;
+import com.ouisani.aios.core.sandbox.ExecOptions;
+import com.ouisani.aios.core.sandbox.ExecResult;
+
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 
 /**
  * Bash 工具 — 执行 Shell 命令，对标 Claude Code 的 BashTool。
@@ -16,9 +18,9 @@ import java.util.concurrent.TimeUnit;
  * - 输出截断（默认 30000 字符）
  * - 只读检测（dry-run 模式下只允许读取命令）
  * <p>
- * ⚠️ 安全风险：当前使用 ProcessBuilder 为宿主机直接执行，存在越权风险！
- * TODO: 后续必须将执行逻辑切换到 com.ouisani.aios.core.sandbox.SandboxProvider
- * （如 Docker 容器）中执行，确保环境隔离。当前实现仅适用于受控开发环境。
+ * <b>执行后端可插拔</b>：所有 shell 执行走 {@link com.ouisani.aios.core.sandbox.BackendBase#exec_shell}，
+ * 由 {@link ToolContext#backend()} 决定路由到 LocalBackend / DockerBackend / E2BBackend。
+ * 工具代码不感知后端类型 — 借鉴 AgentScope 的 BackendBase 抽象。
  * <p>
  * OS 类比：相当于 Linux 的 execve() 系统调用。
  */
@@ -27,7 +29,7 @@ public class BashTool implements Tool<BashTool.Input> {
     private static final int DEFAULT_TIMEOUT_SECONDS = 120;
     private static final int MAX_OUTPUT_LENGTH = 30000;
 
-    public record Input(String command, int timeoutSeconds) implements ToolInput {
+    public record Input(String command, int timeoutSeconds) implements ToolInput, BashToolLike {
         public Input {
             if (timeoutSeconds <= 0) timeoutSeconds = DEFAULT_TIMEOUT_SECONDS;
         }
@@ -39,6 +41,8 @@ public class BashTool implements Tool<BashTool.Input> {
         @Override public String toJson() {
             return "{\"command\":\"" + (command == null ? "" : command.replace("\"", "\\\"")) + "\",\"timeout\":" + timeoutSeconds + "}";
         }
+
+        @Override public String getCommand() { return command; }
     }
 
     @Override public String name() { return "bash"; }
@@ -62,60 +66,138 @@ public class BashTool implements Tool<BashTool.Input> {
         }
 
         try {
-            ProcessBuilder pb = new ProcessBuilder("bash", "-c", input.command());
-            if (context.workingDir() != null) {
-                pb.directory(new java.io.File(context.workingDir()));
-            }
-            pb.redirectErrorStream(true);
-            // 强制非交互模式 — 防止 sudo/apt 等命令等待用户输入导致死锁
-            pb.environment().put("DEBIAN_FRONTEND", "noninteractive");
-            pb.environment().put("APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE", "1");
-            pb.environment().put("PIP_NO_INPUT", "1");
+            // ── 后端可插拔：所有 shell 执行走 context.backend().exec_shell ──
+            // VFS 路径翻译、PYTHONPATH 注入、非交互式环境变量由 LocalBackend.exec_shell 统一处理。
+            // 未来切换到 DockerBackend/E2BBackend 时，工具代码零改动。
+            ExecOptions options = new ExecOptions(
+                    input.timeoutSeconds(),
+                    context.workingDir(),
+                    buildPythonPathEnv(),
+                    MAX_OUTPUT_LENGTH,
+                    true
+            );
 
-            // ── PYTHONPATH 注入：使 Python 可解析 from skills.xxx import yyy ──
-            // 技能库物理路径：通过 AiosPaths 动态获取
-            // Python import skills.web_scraper 需要父目录在 PYTHONPATH 中
-            String skillsPhysicalDir = com.ouisani.aios.core.config.AiosPaths.skillsDir();
-            String existingPythonPath = pb.environment().getOrDefault("PYTHONPATH", "");
-            String newPythonPath = existingPythonPath.isEmpty()
-                    ? skillsPhysicalDir
-                    : skillsPhysicalDir + ":" + existingPythonPath;
-            pb.environment().put("PYTHONPATH", newPythonPath);
+            ExecResult result = context.backend().exec_shell(input.command(), options);
 
-            Process process = pb.start();
-
-            StringBuilder output = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    output.append(line).append("\n");
-                }
-            }
-
-            boolean finished = process.waitFor(input.timeoutSeconds(), TimeUnit.SECONDS);
-            if (!finished) {
-                process.destroyForcibly();
+            if (result.timedOut()) {
                 return ToolOutput.fail("Command timed out after " + input.timeoutSeconds() + "s: " + input.command());
             }
-
-            int exitCode = process.exitValue();
-            String result = output.toString();
-            if (result.length() > MAX_OUTPUT_LENGTH) {
-                result = result.substring(0, MAX_OUTPUT_LENGTH) + "\n... [truncated at " + MAX_OUTPUT_LENGTH + " chars]";
+            if (result.errorMessage() != null) {
+                return ToolOutput.fail("Execution failed: " + result.errorMessage());
             }
 
-            if (exitCode == 0) {
-                return ToolOutput.ok(result.isEmpty() ? "(no output)" : result);
+            String output = result.output();
+            if (result.exitCode() == 0) {
+                return ToolOutput.ok(output.isEmpty() ? "(no output)" : output);
             } else {
-                return ToolOutput.fail("Exit code " + exitCode + "\n" + result);
+                return ToolOutput.fail("Exit code " + result.exitCode() + "\n" + output);
             }
         } catch (Exception e) {
             return ToolOutput.fail("Execution failed: " + e.getMessage());
         }
     }
 
+    /**
+     * 构建 PYTHONPATH 环境变量 — 使 Python 可解析 {@code from skills.xxx import yyy}。
+     * <p>
+     * 技能库物理路径通过 {@link com.ouisani.aios.core.config.AiosPaths#skillsDir()} 动态获取。
+     * Python import skills.web_scraper 需要父目录在 PYTHONPATH 中。
+     * <p>
+     * 保留原有"prepend to existing PYTHONPATH"语义（零回归）：LocalBackend 会先从
+     * ProcessBuilder 默认环境读取现有 PYTHONPATH，再追加 skillsPhysicalDir 到最前。
+     */
+    private static Map<String, String> buildPythonPathEnv() {
+        try {
+            String skillsPhysicalDir = com.ouisani.aios.core.config.AiosPaths.skillsDir();
+            if (skillsPhysicalDir != null && !skillsPhysicalDir.isBlank()) {
+                String existing = System.getenv("PYTHONPATH");
+                String merged = (existing == null || existing.isEmpty())
+                        ? skillsPhysicalDir
+                        : skillsPhysicalDir + ":" + existing;
+                return Map.of("PYTHONPATH", merged);
+            }
+        } catch (Exception e) {
+            // AiosPaths 未配置时不注入 PYTHONPATH — 零回归
+        }
+        return Map.of();
+    }
+
     @Override public boolean readOnly() { return false; }
+
+    /**
+     * 危险命令模式 — 借鉴 AgentScope 2.0 的 bypass_immune 标记。
+     * <p>
+     * 命中以下模式时返回 {@link SafetyCheckResult#safetyAsk(String)}，标记为不可被 allow 规则覆盖：
+     * <ul>
+     *   <li>递归强制删除根目录 / 系统目录（rm -rf /, /usr, /etc, /bin, /lib, ~）</li>
+     *   <li>修改 shell 启动文件（~/.bashrc, ~/.bash_profile, ~/.profile, ~/.zshrc）— 防持久化注入</li>
+     *   <li>命令注入模式：$(...), `...`, | sh, | bash, > /dev/sda</li>
+     *   <li>fork bomb</li>
+     *   <li>提权：sudo, su（除显式 allow 外）</li>
+     * </ul>
+     * 在权限引擎中的处理：
+     * <ul>
+     *   <li>DEFAULT / ACCEPT_EDITS / AUTO / DONT_ASK：safetyAsk 转 ASK 或 DENY（危险操作不放行）</li>
+     *   <li>BYPASS：safetyAsk 跳过（按 BYPASS 契约）</li>
+     * </ul>
+     */
+    @Override
+    public SafetyCheckResult checkPermissionDetailed(Input input, ToolContext context) {
+        String cmd = input.command();
+        if (cmd == null) return SafetyCheckResult.allowed();
+        String trimmed = cmd.trim();
+
+        // 1. rm -rf 危险路径
+        if (DANGEROUS_RM_RF.matcher(trimmed).find()) {
+            return SafetyCheckResult.safetyAsk(
+                    "Dangerous pattern: recursive force-delete of system/home directory — " + truncate(trimmed, 80));
+        }
+
+        // 2. 修改 shell 启动文件（持久化注入风险）
+        if (SHELL_RC_PATTERN.matcher(trimmed).find()) {
+            return SafetyCheckResult.safetyAsk(
+                    "Dangerous pattern: modifying shell startup file — " + truncate(trimmed, 80));
+        }
+
+        // 3. 命令注入 / 管道执行
+        if (INJECTION_PATTERN.matcher(trimmed).find()) {
+            return SafetyCheckResult.safetyAsk(
+                    "Dangerous pattern: command injection or pipe-to-shell — " + truncate(trimmed, 80));
+        }
+
+        // 4. fork bomb
+        if (trimmed.contains(":(){ :|:& };:") || trimmed.contains(":(){:|:&};:")) {
+            return SafetyCheckResult.safetyAsk(
+                    "Dangerous pattern: fork bomb detected — " + truncate(trimmed, 80));
+        }
+
+        // 5. 提权
+        if (SUDO_PATTERN.matcher(trimmed).find()) {
+            return SafetyCheckResult.safetyAsk(
+                    "Dangerous pattern: privilege escalation (sudo/su) — " + truncate(trimmed, 80));
+        }
+
+        return Tool.super.checkPermissionDetailed(input, context);
+    }
+
+    private static String truncate(String s, int maxLen) {
+        return s.length() <= maxLen ? s : s.substring(0, maxLen) + "...";
+    }
+
+    // ── 危险模式正则 ──
+    // rm -rf /, rm -rf /usr, rm -rf ~, rm -rf $HOME, rm -rf /* 等
+    // 注意：末尾用 (?![a-zA-Z]) 而非 \b，因为 "/" 是非字字符，
+    // \b 在 "rm -rf /" 末尾（/ 后接字符串结束）不匹配，会导致裸根目录删除漏检。
+    private static final Pattern DANGEROUS_RM_RF = Pattern.compile(
+            "\\brm\\s+(-[a-zA-Z]*r[a-zA-Z]*f?|--recursive)\\s+(/|/\\*|~/|\\$HOME|/usr|/etc|/bin|/lib|/boot|/sys|/proc)(?![a-zA-Z])");
+    // 修改 ~/.bashrc, ~/.bash_profile, ~/.profile, ~/.zshrc
+    private static final Pattern SHELL_RC_PATTERN = Pattern.compile(
+            "(~|\\$HOME)?/\\.?(bashrc|bash_profile|profile|zshrc|zshenv)\\b");
+    // $(cmd), `cmd`, | sh, | bash, > /dev/sda, curl|sh, wget|sh
+    private static final Pattern INJECTION_PATTERN = Pattern.compile(
+            "(\\$\\([^)]*\\)|`[^`]*`|\\|\\s*(sh|bash)\\b|>\\s*/dev/(sda|null|zero)|;\\s*(sh|bash)\\b)");
+    // sudo, su（提权）
+    private static final Pattern SUDO_PATTERN = Pattern.compile("^\\s*(sudo|su)\\b");
 
     @Override public String prompt() {
         return "When using bash: prefer absolute paths, avoid interactive commands, use timeout for long-running operations. For file operations, prefer dedicated file tools.";

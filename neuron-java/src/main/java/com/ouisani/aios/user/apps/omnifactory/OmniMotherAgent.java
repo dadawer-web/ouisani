@@ -5,6 +5,7 @@ import com.ouisani.aios.core.compact.CompactService;
 import com.ouisani.aios.core.context.ClaudeMdLoader;
 import com.ouisani.aios.core.context.SystemPromptBuilder;
 import com.ouisani.aios.core.cost.CostTracker;
+import com.ouisani.aios.core.cost.GlobalIterationBudget;
 import com.ouisani.aios.core.dream.AutoDreamService;
 import com.ouisani.aios.core.hook.HookManager;
 import com.ouisani.aios.core.lsp.LspManager;
@@ -21,6 +22,7 @@ import com.ouisani.aios.core.swarm.InProcessWorker;
 import com.ouisani.aios.core.task.DreamTask;
 import com.ouisani.aios.core.task.TaskScheduler;
 import com.ouisani.aios.core.telemetry.TelemetryService;
+import com.ouisani.aios.core.tool.DelegationGuard;
 import com.ouisani.aios.core.tool.QueryEngine;
 import com.ouisani.aios.core.tool.Tool;
 import com.ouisani.aios.core.tool.ToolExecutionPipeline;
@@ -192,7 +194,35 @@ public class OmniMotherAgent extends AbstractAgent {
 
         StringBuilder shellScriptBuilder = new StringBuilder();
 
+        // ── 全局迭代预算（借鉴 SoA max_iters）──
+        // 任务级 LLM 调用次数熔断：超限时 wind-down 剩余节点，防止 N 节点 × M 重试无帽烧 token。
+        // 与 CostTracker（token 维度、进程级）正交：本预算管迭代次数维度、任务级。
+        GlobalIterationBudget globalBudget = new GlobalIterationBudget(MAX_GLOBAL_ITERS);
+        int processedNodes = 0;
+
+        // ── DelegationGuard per-workflow 作用域绑定（借鉴 3：max_depth 配置化 + 并发工作流隔离）──
+        // 简单任务（节点 ≤5）depth=2，复杂任务 depth=3。env AIOS_MAX_SPAWN_DEPTH 优先级最高（运维强制覆盖）。
+        // breadth/total 由 createScope 自动从 env（AIOS_MAX_SUBAGENTS_PER_NODE / AIOS_MAX_TOTAL_SPAWNS）解析。
+        // 作用域通过 ThreadLocal 绑定到母体虚拟线程，再通过 DelegationContext.activate 传播到所有同步子 agent
+        // — 实现并发工作流间配置与计数器隔离（旧实现进程级 static 会被并发工作流互相污染）。
+        // 每个 scope 自带 0 初始 totalSpawns，无需再调 resetTotalSpawns（且调它反而会污染全局回退 scope）。
+        int depthTier = System.getenv("AIOS_MAX_SPAWN_DEPTH") != null
+                ? Integer.parseInt(System.getenv("AIOS_MAX_SPAWN_DEPTH").trim())
+                : (manifest.nodes().size() <= 5 ? 2 : DelegationGuard.DEFAULT_MAX_DEPTH);
+        DelegationGuard.bindScope(DelegationGuard.createScope(manifest.workflowName(), depthTier));
+
         for (WorkflowNode node : manifest.nodes()) {
+            // ── 全局迭代预算 wind-down：预算耗尽则剩余节点全部跳过 ──
+            if (globalBudget.isExhausted()) {
+                int remaining = manifest.nodes().size() - processedNodes;
+                log.warn("[OmniMother] 全局迭代预算 {} 已耗尽，wind-down 跳过剩余 {} 个节点（当前: {}）",
+                        globalBudget.maxIters(), remaining, node.instanceId());
+                System.err.println("[Mother Agent]   ├─ 全局预算耗尽，跳过节点: " + node.instanceId()
+                        + " (剩余 " + remaining + " 个节点 wind-down)");
+                break;
+            }
+            processedNodes++;
+
             // ── God Hand Protocol: 预创建配置文件 ──
             sdk.writeFile(this.agentId, "/factory/configs/" + node.instanceId() + ".json", "{}");
 
@@ -217,6 +247,14 @@ public class OmniMotherAgent extends AbstractAgent {
             String lastNodeError = "";
 
             for (int attempt = 1; attempt <= MAX_SELF_HEAL_RETRIES && !nodeVerified; attempt++) {
+                // ── 全局迭代预算：每次 LLM 调用前 trySpend，超限则 wind-down 本节点 ──
+                if (!globalBudget.trySpend()) {
+                    log.warn("[OmniMother] 全局迭代预算 {} 已耗尽，节点 {} wind-down（已花费 {}）",
+                            globalBudget.maxIters(), node.instanceId(), globalBudget.spent());
+                    System.err.println("[Mother Agent]   ├─ 全局预算耗尽，节点 " + node.instanceId()
+                            + " 提前终止（尝试 " + attempt + "/" + MAX_SELF_HEAL_RETRIES + "）");
+                    break;
+                }
                 try {
                     String prompt = codePrompt;
                     // 【修复雪球效应】反思注入：只传最后一次错误，绝不传完整历史
@@ -393,8 +431,17 @@ public class OmniMotherAgent extends AbstractAgent {
     //  Team Mailbox: Actor Mode 任务处理 + 多层自愈编排
     // ════════════════════════════════════════════════════════════════
 
-    /** 自愈最大重试次数 */
+    /** 自愈最大重试次数（per-node） */
     private static final int MAX_SELF_HEAL_RETRIES = 3;
+
+    /**
+     * 全局迭代预算帽 — 任务级 LLM 调用次数熔断（借鉴 SoA max_iters）。
+     * <p>
+     * 20 节点 × 3 重试 = 60，覆盖 TopologyCompiler 最坏情况。超限时 wind-down：
+     * 剩余节点直接跳过，而非继续烧 token。与 per-node {@link #MAX_SELF_HEAL_RETRIES}
+     * 正交：前者限单节点重试，后者限整次工作流的总 LLM 调用数。
+     */
+    private static final int MAX_GLOBAL_ITERS = GlobalIterationBudget.DEFAULT_MAX_ITERS;
 
     /**
      * Actor 模式任务处理 — 多层自愈编排器驱动。
@@ -654,8 +701,14 @@ public class OmniMotherAgent extends AbstractAgent {
 
     private void initializeClaudeCodeCapabilities() {
         // ── 1. QueryEngine — 工具增强推理循环（内核全局 + 母体专属工具） ──
+        // overnight 上下文感知：若当前线程在 overnight run 中（InheritableThreadLocal 继承自 coordinator），
+        // 用 DONT_ASK 权限画像构造，把散落在 prompt 的硬约束收编到结构化规则层强制。
         List<Tool<? extends ToolInput>> motherTools = buildMotherToolList();
-        this.queryEngine = new QueryEngine(sdk, this.agentId, workingDir, motherTools);
+        com.ouisani.aios.core.permission.PermissionProfile overnightProfile =
+                com.ouisani.aios.core.overnight.OvernightRunner.getCurrentPermissionProfile();
+        this.queryEngine = overnightProfile != null
+                ? new QueryEngine(sdk, this.agentId, workingDir, motherTools, overnightProfile)
+                : new QueryEngine(sdk, this.agentId, workingDir, motherTools);
 
         // ── 2. SessionMemory — 会话记忆 ──
         this.sessionMemory = new SessionMemoryService.SessionMemory();

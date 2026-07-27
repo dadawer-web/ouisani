@@ -1,9 +1,8 @@
 package com.ouisani.aios.core.tool;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
+import com.ouisani.aios.core.sandbox.ExecOptions;
+import com.ouisani.aios.core.sandbox.ExecResult;
+
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -12,6 +11,9 @@ import java.util.Optional;
  * Glob 工具 — 文件模式匹配搜索，对标 Claude Code 的 GlobTool。
  * <p>
  * 使用系统 find 命令进行高性能文件名搜索。
+ * <p>
+ * <b>执行后端可插拔</b>：所有 shell 执行走 {@link com.ouisani.aios.core.sandbox.BackendBase#exec_shell}，
+ * 由 {@link ToolContext#backend()} 决定路由目标。工具代码不感知后端类型。
  * <p>
  * OS 类比：相当于 Linux 的 find + glob 模式匹配。
  */
@@ -46,49 +48,40 @@ public class GlobTool implements Tool<GlobTool.Input> {
     @Override
     public ToolOutput call(Input input, ToolContext context) {
         try {
-            // Use find with pattern matching
-            List<String> cmd = new ArrayList<>();
-            cmd.add("find");
-            cmd.add(input.path());
-            cmd.add("-type");
-            cmd.add("f");
-            cmd.add("-name");
-            cmd.add(input.pattern());
-            cmd.add("-not");
-            cmd.add("-path");
-            cmd.add("*/node_modules/*");
-            cmd.add("-not");
-            cmd.add("-path");
-            cmd.add("*/.git/*");
+            // Build find command line — shell-quote path and pattern to avoid injection
+            StringBuilder cmd = new StringBuilder("find ");
+            cmd.append(shellQuote(input.path()));
+            cmd.append(" -type f -name ").append(shellQuote(input.pattern()));
+            cmd.append(" -not -path '*/node_modules/*' -not -path '*/.git/*'");
+            cmd.append(" | head -n ").append(MAX_RESULTS);
 
-            ProcessBuilder pb = new ProcessBuilder(cmd);
-            if (context.workingDir() != null) {
-                pb.directory(new java.io.File(context.workingDir()));
+            // ── 后端可插拔：走 context.backend().exec_shell ──
+            ExecOptions options = new ExecOptions(
+                    15,                        // 15s 超时（与原 process.waitFor(15s) 一致）
+                    context.workingDir(),
+                    Map.of(),
+                    0,                         // 不截断（结果由 head -n 控制）
+                    true
+            );
+            ExecResult result = context.backend().exec_shell(cmd.toString(), options);
+
+            if (result.errorMessage() != null) {
+                return ToolOutput.fail("Glob failed: " + result.errorMessage());
             }
-            pb.redirectErrorStream(true);
-
-            Process process = pb.start();
-            StringBuilder output = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                int count = 0;
-                while ((line = reader.readLine()) != null && count < MAX_RESULTS) {
-                    output.append(line).append("\n");
-                    count++;
-                }
-            }
-            process.waitFor(15, java.util.concurrent.TimeUnit.SECONDS);
-            process.destroyForcibly();
-
-            String result = output.toString();
-            if (result.isBlank()) {
+            String output = result.output();
+            if (output.isBlank()) {
                 return ToolOutput.ok("No files matched pattern: " + input.pattern());
             }
-            return ToolOutput.ok(result);
+            return ToolOutput.ok(output);
         } catch (Exception e) {
             return ToolOutput.fail("Glob failed: " + e.getMessage());
         }
+    }
+
+    /** 单引号 shell 引用 — 防止 path/pattern 中的特殊字符被 bash 解析。 */
+    private static String shellQuote(String s) {
+        if (s == null || s.isEmpty()) return "''";
+        return "'" + s.replace("'", "'\\''") + "'";
     }
 
     @Override public boolean readOnly() { return true; }

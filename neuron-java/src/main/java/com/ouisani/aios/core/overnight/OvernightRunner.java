@@ -6,6 +6,9 @@ import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.config.AiosPaths;
 import com.ouisani.aios.core.ipc.SignalType;
 import com.ouisani.aios.core.llm.LlmProvider;
+import com.ouisani.aios.core.permission.PermissionChecker;
+import com.ouisani.aios.core.permission.PermissionDecision;
+import com.ouisani.aios.core.permission.PermissionProfile;
 import com.ouisani.aios.core.snapshot.EnvironmentSnapshot;
 import com.ouisani.aios.core.snapshot.EnvironmentSnapshotManager;
 import com.ouisani.aios.core.snapshot.ForkHandle;
@@ -19,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -80,6 +84,26 @@ public final class OvernightRunner {
     /** 当前 turn 的快照 ID(coordinator 单线程,无需同步)。 */
     private volatile String currentTurnSnapshotId;
 
+    /**
+     * Overnight 上下文标志 — InheritableThreadLocal 让 overnight 上下文自动传播到
+     * coordinator 虚拟线程及其 spawn 的子 agent（OmniMotherAgent/OperatorAgent）。
+     * <p>
+     * 子 agent 创建 QueryEngine 时调 {@link #getCurrentPermissionProfile()} 检查：
+     * 非 null 则用 DONT_ASK 画像构造 QueryEngine，否则用默认（无画像）构造。
+     */
+    private static final InheritableThreadLocal<PermissionProfile> overnightProfile =
+            new InheritableThreadLocal<>();
+
+    /**
+     * 全局 denials 缓冲区 — 收集所有子 agent PermissionChecker 转发的 DENY 决策，
+     * 供晨报聚合呈现给用户"被拒操作 + 建议规则"清单。
+     * <p>
+     * 通过 {@link PermissionChecker#setGlobalDenialSink} 注册为 sink；容量 1024 防爆炸。
+     */
+    private final ConcurrentLinkedDeque<PermissionChecker.DenialRecord> aggregatedDenials =
+            new ConcurrentLinkedDeque<>();
+    private static final int MAX_AGGREGATED_DENIALS = 1024;
+
     private OvernightRunner() {}
 
     /** 注入依赖 — 启动时由 init 序列调用（与 CognitiveDreamDaemon.configure 一致） */
@@ -118,6 +142,15 @@ public final class OvernightRunner {
         persistManifest(m);
         activeManifest = m;
 
+        // 设置 overnight 上下文 — coordinator 虚拟线程通过 InheritableThreadLocal 继承，
+        // 进而传播到其 spawn 的子 agent（OmniMotherAgent/OperatorAgent），让它们用 DONT_ASK 画像。
+        PermissionProfile profile = OvernightPermissionProfile.build();
+        overnightProfile.set(profile);
+        aggregatedDenials.clear();
+        PermissionChecker.setGlobalDenialSink(this::collectDenial);
+        log.info("[OvernightRunner] 已注入 DONT_ASK 权限画像: deny={} rules, allow={} rules",
+                profile.denyRules().size(), profile.allowRules().size());
+
         // spawn coordinator agent
         AgentTask coordTask = new AgentTask(
                 taskScheduler.nextPid(),
@@ -146,6 +179,48 @@ public final class OvernightRunner {
         log.info("[OvernightRunner] overnight run 已启动: runId={}, pid={}, targetWake={}",
                 runId, pid, m.targetWakeLabel());
         return runId;
+    }
+
+    /**
+     * 取当前线程的 overnight 权限画像（供子 agent 创建 QueryEngine 时检查）。
+     * <p>
+     * 由 {@link com.ouisani.aios.user.apps.omnifactory.OmniMotherAgent} /
+     * {@link com.ouisani.aios.user.apps.omnifactory.OperatorAgent} 在构造 QueryEngine 时调用：
+     * <pre>{@code
+     * PermissionProfile profile = OvernightRunner.getCurrentPermissionProfile();
+     * this.queryEngine = profile != null
+     *     ? new QueryEngine(sdk, agentId, workingDir, tools, profile)
+     *     : new QueryEngine(sdk, agentId, workingDir, tools);
+     * }</pre>
+     *
+     * @return 当前 overnight 画像；非 overnight 上下文返回 null
+     */
+    public static PermissionProfile getCurrentPermissionProfile() {
+        return overnightProfile.get();
+    }
+
+    /** 清除当前线程的 overnight 上下文 — coordinator 主循环退出时调用。 */
+    private static void clearOvernightContext() {
+        overnightProfile.remove();
+    }
+
+    /**
+     * 全局 denial sink 回调 — 由 {@link PermissionChecker#setGlobalDenialSink} 注册。
+     * <p>
+     * 收集到 {@link #aggregatedDenials} 缓冲区，供晨报聚合。
+     */
+    private void collectDenial(PermissionChecker.DenialRecord record) {
+        aggregatedDenials.addLast(record);
+        while (aggregatedDenials.size() > MAX_AGGREGATED_DENIALS) {
+            aggregatedDenials.pollFirst();
+        }
+    }
+
+    /**
+     * 取出（不清空）聚合的 denials — 供晨报构造时调用。
+     */
+    public List<PermissionChecker.DenialRecord> getAggregatedDenials() {
+        return new ArrayList<>(aggregatedDenials);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -202,6 +277,17 @@ public final class OvernightRunner {
                     log.debug("[OvernightRunner] coordinator#{} phase={} 无 prompt，跳过", pid, phase);
                 } else {
                     history.add(LlmProvider.ChatMessage.user(prompt));
+                    // 晨报轮：在主 prompt 之后追加被拒操作清单，让 LLM 据此生成完整晨报
+                    if (phase == OvernightPhase.MORNING_REPORT && cur.morningReportPostedAt() == null) {
+                        List<PermissionChecker.DenialRecord> denials = getAggregatedDenials();
+                        String denialSection = OvernightContract.formatDenialsForMorningReport(denials);
+                        if (!denialSection.isBlank()) {
+                            history.add(LlmProvider.ChatMessage.user(denialSection));
+                            log.info("[OvernightRunner] 晨报聚合: {} 条 DENY 决策已注入 prompt", denials.size());
+                            SemanticEtw.getInstance().logEvent("OVERNIGHT", "DENIALS_AGGREGATED",
+                                    "runId=" + cur.runId() + " count=" + denials.size());
+                        }
+                    }
                     String resp = llmProvider.thinkWithHistory(history,
                             OvernightContract.COORDINATOR_SYSTEM_PROMPT);
                     if (resp != null && !resp.isBlank()) {
@@ -231,6 +317,10 @@ public final class OvernightRunner {
             log.error("[OvernightRunner] coordinator#{} 异常: {}", pid, e.getMessage(), e);
             activeManifest = activeManifest.withStatus(OvernightManifest.OvernightRunStatus.FAILED);
         } finally {
+            // 清理 overnight 上下文：注销 sink + 清 ThreadLocal
+            // 注意：sink 是全局静态，必须显式注销，否则会泄漏到非 overnight 时段
+            PermissionChecker.clearGlobalDenialSink();
+            clearOvernightContext();
             terminalize(pid);
         }
     }

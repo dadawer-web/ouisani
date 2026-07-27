@@ -233,6 +233,30 @@ public final class AiosPaths {
     }
 
     /**
+     * 会话级 offload 目录 — 跨会话检索的轻量方案落盘根。
+     * <p>
+     * 借鉴 AgentScope {@code workspace/_base.py::offload_context / offload_tool_result}：
+     * 每个 session 一个子目录 {@code sessions/<session_id>/}，内含
+     * {@code context.jsonl}（会话上下文）与 {@code tool_result-<id>.txt}（大工具结果）。
+     * base64 DataBlock 自动 offload 到 {@link #dataDir()} 并改写为 {@code file://} URL，
+     * 保证 JSONL 行大小有界。
+     */
+    public static String sessionsDir() {
+        return resolve("AIOS_SESSIONS_DIR", "aios.sessions.dir", aiosHome() + "/sessions");
+    }
+
+    /**
+     * DataBlock offload 目录 — 内容寻址的二进制 blob 存储。
+     * <p>
+     * 文件名 {@code <sha256>.bin}，相同内容自动去重。被 {@code context.jsonl} /
+     * {@code tool_result-*.txt} / 未来 {@code MemoryRecord} 的 base64 DataBlock 引用为
+     * {@code file://<absolute-path>}。
+     */
+    public static String dataDir() {
+        return resolve("AIOS_DATA_DIR", "aios.data.dir", aiosHome() + "/data");
+    }
+
+    /**
      * Learned Skills 目录 — Overnight deterministic-PASS 任务蒸馏出的 SKILL.md 落地处。
      * <p>
      * 落真实 FS（{@code Files.writeString} 直写，绕 VFS {@code /var/db/memory} VectorNode），

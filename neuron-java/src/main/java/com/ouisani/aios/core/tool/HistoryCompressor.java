@@ -250,6 +250,20 @@ public class HistoryCompressor {
     public synchronized int midCount() { return mid.size(); }
     public synchronized int oldCount() { return old.size(); }
 
+    /**
+     * 快照当前消息（recent + mid）——供 {@code on_compress_context} 中间件观察。
+     * <p>
+     * <b>防御性拷贝</b>：返回新列表，调用方修改不影响内部状态。仅含 recent + mid
+     * （old 区是 {@link Summary} 聚合摘要，非单条消息，不在此快照中——
+     * 中间件若需完整历史文本，可通过 leaf 的 {@link #buildHistoryText()} 获取）。
+     */
+    public synchronized List<Message> snapshotMessages() {
+        List<Message> snap = new ArrayList<>(recent.size() + mid.size());
+        snap.addAll(recent);
+        snap.addAll(mid);
+        return snap;
+    }
+
     public synchronized void clear() {
         recent.clear();
         mid.clear();

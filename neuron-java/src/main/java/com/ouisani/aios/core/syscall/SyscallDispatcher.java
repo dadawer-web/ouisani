@@ -6,9 +6,12 @@ import com.ouisani.aios.core.llm.LlmRouter;
 import com.ouisani.aios.core.memory.ContextInjector;
 import com.ouisani.aios.core.memory.MemoryManager;
 import com.ouisani.aios.core.mcp.McpClientRegistry;
+import com.ouisani.aios.core.observability.UpstreamMeta;
+import com.ouisani.aios.core.observability.UpstreamMetaHook;
 import com.ouisani.aios.core.plugin.AgentToolContext;
 import com.ouisani.aios.core.plugin.PluginManager;
 import com.ouisani.aios.core.plugin.ToolDefinition;
+import com.ouisani.aios.core.provenance.ProvenanceHook;
 import com.ouisani.aios.core.sandbox.DockerSandboxProvider;
 import com.ouisani.aios.user.bridge.rpa.HostRpaManager;
 import com.ouisani.aios.user.bridge.rpa.SecurityToken;
@@ -171,6 +174,8 @@ public final class SyscallDispatcher {
         }
 
         SyscallResponse response = null;
+        // ── UpstreamMeta 拒绝码：filter / Hook 早返回路径用，正常路径为 null ──
+        String rejectionCode = null;
         try {
         log.info("[Syscall Dispatcher] 拦截命名空间='{}' 动作='{}' 来自 Agent '{}'",
                 request.namespace(), request.action(), agentId);
@@ -186,7 +191,10 @@ public final class SyscallDispatcher {
                         + " reason=" + e.getMessage());
                 log.warn("[Security BPF] 恶意 Syscall 已拦截! agent={}, action={}, filter={}",
                         agentId, fullAction, filter.getClass().getSimpleName());
-                return SyscallResponse.fail("SECURITY: " + e.getMessage());
+                // 赋值给 response，使 finally 块能记录 UpstreamMeta（标记 errorCode="SECURITY"）
+                response = SyscallResponse.fail("SECURITY: " + e.getMessage());
+                rejectionCode = "SECURITY";
+                return response;
             }
         }
 
@@ -244,7 +252,10 @@ public final class SyscallDispatcher {
                         agentId, fullAction, preResult.message());
                 SemanticEtw.getInstance().logEvent("HOOK", "PRE_TOOL_USE_DENIED",
                         "agent=" + agentId + " action=" + fullAction + " reason=" + preResult.message());
-                return SyscallResponse.fail("HOOK_DENIED: " + preResult.message());
+                // 赋值给 response，使 finally 块能记录 UpstreamMeta（标记 errorCode="HOOK_DENIED"）
+                response = SyscallResponse.fail("HOOK_DENIED: " + preResult.message());
+                rejectionCode = "HOOK_DENIED";
+                return response;
             }
         }
 
@@ -315,10 +326,174 @@ public final class SyscallDispatcher {
                     syscallSpan.setAttribute("success", response.success());
                     syscallSpan.setStatus(response.success()
                             ? TraceSpan.Status.OK : TraceSpan.Status.ERROR);
+                    // ── UpstreamMeta 注入：捕获 per-call 元数据，落盘 + 桥接 Span attributes ──
+                    // 幂等重放路径 response == null 时跳过（重放是缓存命中，非真实上游调用）
+                    recordUpstreamMeta(agentId, request, response, latencyMs, syscallSpan, rejectionCode);
                 }
                 TracingManager.instance().endSpan(syscallSpan.spanId());
             }
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  UpstreamMeta — 上游调用元数据捕获
+    //  借鉴 nuwa UpstreamMeta 模式：把 res.locals.upstream 中间件链元数据透传
+    //  适配为 Java：落盘到 .aios/upstream_meta.jsonl + TraceSpan attributes 桥接
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 构造 UpstreamMeta 并落盘 + 桥接 TraceSpan。
+     * <p>
+     * <b>Best-effort</b>：所有异常 catch，永不中断 syscall 主流程（与 ProvenanceHook 一致）。
+     * <p>
+     * 字段映射详见 plan 文档 .trae/documents/upstream-meta-eventbus-propagation.md §4.1。
+     *
+     * @param agentId       syscall 调用方
+     * @param request       syscall 请求（用于解析 upstreamName）
+     * @param response      syscall 响应（用于解析 status_code / bytes / error_code）
+     * @param latencyMs     墙钟耗时（毫秒）
+     * @param span          已激活的 TraceSpan（用于桥接 upstream.* attributes）
+     * @param rejectionCode 早返回路径的拒绝码（"SECURITY" / "HOOK_DENIED" / null）
+     */
+    private void recordUpstreamMeta(String agentId, SyscallRequest request,
+                                    SyscallResponse response, long latencyMs,
+                                    TraceSpan span, String rejectionCode) {
+        try {
+            String upstreamName = resolveUpstreamName(request);
+            int statusCode = resolveUpstreamStatusCode(response, rejectionCode);
+            long bytes = response.data() == null ? 0L
+                    : response.data().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            String errorCode = resolveUpstreamErrorCode(response, request, rejectionCode);
+
+            UpstreamMeta meta = new UpstreamMeta(
+                    upstreamName,
+                    latencyMs,
+                    statusCode,
+                    null,           // v1: cost_units 留 null，待 LlmProvider 暴露 per-call token usage
+                    bytes,
+                    errorCode,
+                    System.currentTimeMillis(),
+                    ProvenanceHook.CURRENT_AGENT_ID.get(),
+                    ProvenanceHook.CURRENT_SESSION_ID.get()
+            );
+
+            // 1. 落盘到 .aios/upstream_meta.jsonl（best-effort，永不抛）
+            UpstreamMetaHook.onUpstreamCall(meta);
+
+            // 2. 桥接 TraceSpan：设置 upstream.* attributes，让 OpenTelemetry 后端可查询
+            span.setAttribute("upstream.name", meta.upstreamName());
+            span.setAttribute("upstream.duration_ms", meta.upstreamDurationMs());
+            span.setAttribute("upstream.status_code", meta.upstreamStatusCode());
+            span.setAttribute("upstream.bytes", meta.upstreamBytes());
+            if (meta.upstreamCostUnits() != null) {
+                span.setAttribute("upstream.cost_units", meta.upstreamCostUnits());
+            }
+            if (meta.errorCode() != null) {
+                span.setAttribute("upstream.error_code", meta.errorCode());
+            }
+        } catch (Throwable t) {
+            // best-effort: 永不中断主流程
+            log.warn("[UpstreamMeta] 记录失败 (action={}): {}", request.fullAction(), t.getMessage());
+        }
+    }
+
+    /**
+     * 解析 upstream_name — 根据 namespace + payload 类型给出有意义的上游标识。
+     * <p>
+     * 映射规则：
+     * <ul>
+     *   <li>{@code llm} → {@code "llm." + action}</li>
+     *   <li>{@code tool} → {@code tool.toolName()} 或 {@code "tool." + action}</li>
+     *   <li>{@code storage} → {@code "storage." + mode}</li>
+     *   <li>{@code memory} → {@code "memory." + operation}</li>
+     *   <li>default → {@code request.fullAction()}</li>
+     * </ul>
+     */
+    private String resolveUpstreamName(SyscallRequest request) {
+        try {
+            return switch (request.namespace()) {
+                case "llm" -> "llm." + request.action();
+                case "tool" -> {
+                    if (request.payload() instanceof com.ouisani.aios.core.syscall.schema.ToolPayload tp) {
+                        yield "tool." + tp.toolName();
+                    }
+                    yield "tool." + request.action();
+                }
+                case "storage" -> {
+                    if (request.payload() instanceof com.ouisani.aios.core.syscall.schema.StoragePayload sp) {
+                        yield "storage." + sp.mode();
+                    }
+                    yield "storage." + request.action();
+                }
+                case "memory" -> {
+                    if (request.payload() instanceof com.ouisani.aios.core.syscall.schema.MemoryPayload mp) {
+                        yield "memory." + mp.operation();
+                    }
+                    yield "memory." + request.action();
+                }
+                default -> request.fullAction();
+            };
+        } catch (Exception e) {
+            return request.fullAction();
+        }
+    }
+
+    /**
+     * 解析 upstream_status_code — HTTP 风格状态码。
+     * <p>
+     * 映射规则：
+     * <ul>
+     *   <li>rejectionCode="SECURITY" / "HOOK_DENIED" → 403</li>
+     *   <li>COMMITTED → 200</li>
+     *   <li>PENDING_UNKNOWN → 408</li>
+     *   <li>ROLLED_BACK → 409</li>
+     *   <li>FAILED → 500</li>
+     * </ul>
+     */
+    private int resolveUpstreamStatusCode(SyscallResponse response, String rejectionCode) {
+        if ("SECURITY".equals(rejectionCode) || "HOOK_DENIED".equals(rejectionCode)) {
+            return 403;
+        }
+        ResultState state = response.resultState();
+        return switch (state) {
+            case COMMITTED -> 200;
+            case PENDING_UNKNOWN -> 408;
+            case ROLLED_BACK -> 409;
+            case FAILED -> 500;
+        };
+    }
+
+    /**
+     * 解析 errorCode — 失败时的错误码（成功为 null）。
+     * <p>
+     * 映射规则：
+     * <ul>
+     *   <li>success → null</li>
+     *   <li>rejection → rejectionCode（SECURITY / HOOK_DENIED）</li>
+     *   <li>其他失败 → errorMessage 中 {@code :} 前缀（异常类名，由 SyscallResponse.fail(Throwable) 格式保证）</li>
+     * </ul>
+     */
+    private String resolveUpstreamErrorCode(SyscallResponse response, SyscallRequest request,
+                                            String rejectionCode) {
+        if (response.success()) {
+            return null;
+        }
+        if (rejectionCode != null) {
+            return rejectionCode;
+        }
+        // SyscallException → 显式标记
+        if (response.errorMessage() != null && response.errorMessage().startsWith("SyscallException")) {
+            return "SYSCALL_" + request.action();
+        }
+        // 其他异常：errorMessage 格式为 "SimpleName: message"，取前缀作为 errorCode
+        if (response.errorMessage() != null) {
+            int colonIdx = response.errorMessage().indexOf(':');
+            if (colonIdx > 0) {
+                return response.errorMessage().substring(0, colonIdx);
+            }
+            return response.errorMessage();
+        }
+        return "UNKNOWN";
     }
 
     // ════════════════════════════════════════════════════════════════

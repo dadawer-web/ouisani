@@ -1,8 +1,15 @@
 package com.ouisani.aios.user.apps.omnifactory;
 
 import com.ouisani.aios.core.VfsManager;
+import com.ouisani.aios.core.importance.ImportanceBackwardPass;
+import com.ouisani.aios.core.importance.ImportanceRecord;
+import com.ouisani.aios.core.importance.ImportanceStore;
 import com.ouisani.aios.core.ipc.VariablePool;
 import com.ouisani.aios.core.network.EventBus;
+import com.ouisani.aios.core.role.RoleBlueprint;
+import com.ouisani.aios.core.role.RoleBlueprintLoader;
+import com.ouisani.aios.core.selection.RoleSelector;
+import com.ouisani.aios.core.selection.SelectionPolicy;
 import com.ouisani.aios.core.snapshot.CarryoverSection;
 import com.ouisani.aios.core.snapshot.EnvironmentSnapshot;
 import com.ouisani.aios.core.snapshot.EnvironmentSnapshotManager;
@@ -176,6 +183,9 @@ public class WorkflowEngine {
 
         // ── 直接调度执行（跳过 executeDag 的目录创建，因为上面已经做了） ──
         WorkflowContext rootContext = new WorkflowContext(manifest.workflowName());
+        // 借鉴 DyLAN listwise agent team selection：把 manifest 的 selectionPolicy 塞进 context，
+        // executeDagInternal 开头据此裁剪未选中 role 的节点。null = 未声明（零行为变化）。
+        rootContext.setSelectionPolicy(manifest.selectionPolicy());
         executeDagInternal(nodes, manifest.workflowName(), rootContext);
     }
 
@@ -244,6 +254,12 @@ public class WorkflowEngine {
         log.info("[DAG Engine] 工作流 {} 启动, TraceID={}", workflowId, traceId);
 
         log.info("[DAG Engine] 正在启动工作流 '{}'，共 {} 个节点。", workflowId, nodes.size());
+
+        // ── Listwise 角色裁剪（借鉴 DyLAN listwise agent team selection）──
+        // 在 DAG 调度前根据 query 裁剪角色池：未选中 role 的节点标记 SKIPPED。
+        // selectionPolicy 通过 WorkflowContext 传入（null = 未声明，零行为变化）。
+        // try/catch 兜底：裁剪失败不阻断工作流，全选 fallback。
+        applyListwiseSelection(nodes, workflowId, context);
 
         // ── 发出工作流开始事件 ──
         emitEvent(new GraphEngineEvent.GraphRunStartedEvent(workflowId, nodes.size()));
@@ -856,6 +872,78 @@ public class WorkflowEngine {
     }
 
     /**
+     * Listwise 角色裁剪 — 借鉴 DyLAN（arXiv:2310.02170）的 listwise agent team selection。
+     * <p>
+     * 在 DAG 调度前根据 query 裁剪角色池：{@link RoleSelector#select} 调 LLM 选 top-K role，
+     * 未选中 role 的节点标记 {@link WorkflowNode.Status#SKIPPED}（保留 DAG 结构供 importance
+     * 反向传播，SKIPPED 节点得 0 importance 符合预期）。
+     * <p>
+     * <b>触发条件</b>：{@code context.selectionPolicy} 非 null 且类型为 {@code listwise_top_k}。
+     * null / none / 其他类型 → 零行为变化（向后兼容）。
+     * <p>
+     * <b>容错</b>：try/catch 兜底，任何失败（LLM 不可用 / 解析失败 / 加载 role 池失败）→ 全选 fallback，
+     * 不阻断工作流主流程。{@link RoleSelector} 内部已有更细粒度的 fallback，此处是外层安全网。
+     * <p>
+     * <b>与 importance 互补</b>：importance 离线选角色池（跨 session 累积），
+     * listwise 在线裁剪当前激活集（单次 query-adaptive）。
+     *
+     * @param nodes      工作流节点（status 待设置）
+     * @param workflowId 工作流标识（作 query 代理，与 importance taskType 同源）
+     * @param context    工作流上下文（含 selectionPolicy）
+     */
+    private void applyListwiseSelection(List<WorkflowNode> nodes, String workflowId, WorkflowContext context) {
+        SelectionPolicy policy = context.getSelectionPolicy();
+        if (policy == null || policy.isNone() || !policy.isListwiseTopK()) {
+            return;  // 未声明或非 listwise，零行为变化
+        }
+
+        try {
+            // 1. 收集 nodes 中所有 distinct role（去重）
+            List<String> distinctRoles = new ArrayList<>();
+            for (WorkflowNode n : nodes) {
+                String role = n.role();
+                if (role != null && !role.isBlank() && !distinctRoles.contains(role)) {
+                    distinctRoles.add(role);
+                }
+            }
+            if (distinctRoles.isEmpty()) {
+                log.debug("[DAG Engine] listwise: 无 role 节点，跳过裁剪");
+                return;
+            }
+
+            // 2. 加载 RoleBlueprint 池，构造候选列表
+            //    role 无 blueprint 时用 fallback blueprint（description=null），LLM 按 role 名猜
+            java.nio.file.Path rolesDir = java.nio.file.Path.of(com.ouisani.aios.core.config.AiosPaths.rolesDir());
+            Map<String, RoleBlueprint> pool = RoleBlueprintLoader.loadAll(rolesDir);
+            List<RoleBlueprint> candidates = new ArrayList<>();
+            for (String role : distinctRoles) {
+                RoleBlueprint bp = pool.get(role);
+                candidates.add(bp != null ? bp : new RoleBlueprint(role, null, null));
+            }
+
+            // 3. RoleSelector 选 top-K（内部触发检查 + shuffle + LLM + 解析 + fallback）
+            Set<String> selected = RoleSelector.select(workflowId, candidates, policy);
+
+            // 4. 未选中 role 的节点标记 SKIPPED（保留 DAG 结构，importance 仍能传播）
+            int skipped = 0;
+            for (WorkflowNode node : nodes) {
+                if (!selected.contains(node.role())) {
+                    node.setStatus(WorkflowNode.Status.SKIPPED);
+                    skipped++;
+                }
+            }
+
+            log.info("[DAG Engine] listwise 裁剪: 候选 {} 角色 → 选中 {} (skipped {} 节点)",
+                    distinctRoles.size(), selected, skipped);
+            System.out.printf("[DAG Engine] listwise 裁剪: 候选 %d → 选中 %s (跳过 %d 节点)%n",
+                    distinctRoles.size(), selected, skipped);
+        } catch (Exception e) {
+            log.warn("[DAG Engine] listwise 裁剪失败，全选 fallback（不阻断工作流）: {}", e.getMessage());
+            // 不重抛：裁剪是优化，失败时所有节点保留原 status（不 SKIPPED），工作流正常执行
+        }
+    }
+
+    /**
      * 打印 DAG 执行摘要。
      */
     private void printExecutionSummary(List<WorkflowNode> nodes, String workflowId) {
@@ -878,6 +966,19 @@ public class WorkflowEngine {
                 case PENDING -> "PEND";
             };
             System.out.printf("[DAG Engine]   [%s] %s (executor=%s)%n", icon, node.instanceId(), node.executor());
+        }
+
+        // ── 借鉴 DyLAN：反向传播计算 role 贡献度，持久化供离线 team optimization ──
+        // importance 是观测信号：try/catch 兜底，绝不阻断工作流主流程。
+        // taskType 第一版用 workflowId 代理（同 workflowName 多次运行才能累积同 taskType 信号），
+        // follow-up 在 WorkflowManifest 加显式 taskType 字段细化。
+        try {
+            ImportanceRecord rec = ImportanceBackwardPass.compute(
+                    nodes, workflowId, workflowId /* taskType 第一版用 workflowId 代理 */);
+            ImportanceStore.append(rec);
+            log.info("[DAG Engine] importance 已记录: {}", rec.roleImportance());
+        } catch (Exception e) {
+            log.warn("[DAG Engine] importance 计算失败（不影响主流程）: {}", e.getMessage());
         }
     }
 

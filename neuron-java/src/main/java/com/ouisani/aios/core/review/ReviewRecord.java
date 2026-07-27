@@ -67,7 +67,21 @@ public record ReviewRecord(
                 sb.append(",\"message\":").append(escape(f.message()));
                 // Phase 6: claim + evidence — 持久化可追溯断言（additive，旧 reader 缺字段不报错）
                 sb.append(",\"claim\":").append(escape(f.claim()));
-                sb.append(",\"evidence\":").append(escape(f.evidence())).append('}');
+                sb.append(",\"evidence\":").append(escape(f.evidence()));
+                // Phase 7: bypassImmune + suggestedRules — 权限拒绝信息持久化（additive）
+                sb.append(",\"bypassImmune\":").append(f.bypassImmune());
+                sb.append(",\"suggestedRules\":");
+                if (f.suggestedRules().isEmpty()) {
+                    sb.append("[]");
+                } else {
+                    sb.append('[');
+                    for (int j = 0; j < f.suggestedRules().size(); j++) {
+                        if (j > 0) sb.append(',');
+                        sb.append(escape(f.suggestedRules().get(j)));
+                    }
+                    sb.append(']');
+                }
+                sb.append('}');
             }
             sb.append(']');
         }

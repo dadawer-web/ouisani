@@ -37,13 +37,18 @@ class PermissionCheckerWildcardTest {
     }
 
     @Test
-    void wildcardDeny_blocksAllWhenNoAllow() {
+    void wildcardDeny_blocksAllWritesButReadOnlyFastPathSurvives() {
         PermissionChecker pc = new PermissionChecker();
         pc.addRule(PermissionRule.parse("POLICY_SETTINGS", PermissionBehavior.DENY, "*"));
 
-        // 任意工具（只读 + 写）都被拒绝
-        assertTrue(pc.checkPermission(tool("file_read", true), input("{}"), CTX).isDenied());
-        assertTrue(pc.checkPermission(tool("file_write", false), input("{\"path\":\"/tmp/a\"}"), CTX).isDenied());
+        // 只读工具仍 ALLOW — read-only fast path 在 *:deny 兜底之前放行
+        // （与 DONT_ASK 模式 dontAsk_readOnlyFastPathSurvivesWildcardDeny 行为一致，统一不 drift）
+        // 原理：read-only 无副作用，*:deny 的语义是"默认拒绝写操作"，不应阻止无害的读操作
+        assertTrue(pc.checkPermission(tool("file_read", true), input("{}"), CTX).isAllowed(),
+                "*:deny 下只读工具应被 fast path 放行（无副作用）");
+        // 非只读工具被 *:deny 兜底拒绝
+        assertTrue(pc.checkPermission(tool("file_write", false), input("{\"path\":\"/tmp/a\"}"), CTX).isDenied(),
+                "*:deny 下非只读工具应被兜底拒绝");
     }
 
     @Test
@@ -129,7 +134,12 @@ class PermissionCheckerWildcardTest {
         pc.applyProfile(null);
 
         assertEquals(PermissionMode.DEFAULT, pc.getMode());
-        // 无规则 → 默认 ask
-        assertTrue(pc.checkPermission(tool("file_read", true), input("{}"), CTX).needsPrompt());
+        // 无规则 + 只读工具 → read-only fast path 自动 ALLOW（无副作用，无需用户确认）
+        // 借鉴 AgentScope _check_read_only_fast_path：read-only 在所有模式自动放行
+        assertTrue(pc.checkPermission(tool("file_read", true), input("{}"), CTX).isAllowed(),
+                "read-only 工具在 DEFAULT 无规则时应自动 ALLOW（read-only fast path）");
+        // 无规则 + 非只读工具 → 仍走默认 ASK（用户确认）
+        assertTrue(pc.checkPermission(tool("file_write", false), input("{}"), CTX).needsPrompt(),
+                "非只读工具在 DEFAULT 无规则时仍需 ASK");
     }
 }

@@ -148,6 +148,25 @@ public final class UpstreamMetaHook {
     }
 
     /**
+     * 按 sessionId 查询所有调用记录（从内存缓冲）。
+     * <p>
+     * sessionId 是 DAG 联合查询的关键键 —— 一次推理 session 内所有 syscall
+     * 调用串成调用链。{@link UpstreamMetaQuery#listBySession} 会合并此缓冲与磁盘记录。
+     */
+    public static List<UpstreamMeta> listBySession(String sessionId) {
+        if (sessionId == null) return List.of();
+        synchronized (bufferLock) {
+            List<UpstreamMeta> result = new ArrayList<>();
+            for (UpstreamMeta m : recentBuffer) {
+                if (sessionId.equals(m.sessionId())) {
+                    result.add(m);
+                }
+            }
+            return result;
+        }
+    }
+
+    /**
      * 按时间窗口查询调用记录（从内存缓冲）。
      *
      * @param startMs 起始时间戳（epoch millis，包含）

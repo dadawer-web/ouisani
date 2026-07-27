@@ -1,6 +1,13 @@
 ---
 name: integrity-auditor
 description: Use when the user wants a paper audited for integrity issues — image misuse, numerical anomalies, logical gaps — and needs a reviewable evidence report. Works on external papers (PDF / DOI / arXiv) and on outputs from a local paper-writer run. Single-stage skill.
+
+# ── Cap 模型（用户需求：Skill 升级为结构化 Cap 模型）──
+# 双读模式：原文 prompt 侧（body 不变）+ 结构化 Cap 侧（下方 4 字段）
+author: oushani.core.research
+artifact.srcUrl: null
+supported-inputs: text
+provider-id: AIOS_CORE
 ---
 
 # Integrity Auditor

@@ -1,6 +1,5 @@
 package com.ouisani.aios.core.tool;
 
-import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.security.ContainmentZoneManager;
 
 import java.util.List;
@@ -10,8 +9,13 @@ import java.util.Optional;
 /**
  * 文件写入工具 — 对标 Claude Code 的 FileWriteTool。
  * <p>
- * 安全边界：通过 VfsManager 虚拟文件系统写入，永远不接触宿主机真实文件系统。
+ * 安全边界：所有写入走 {@link com.ouisani.aios.core.sandbox.BackendBase#write_file}，
+ * 由 {@link ToolContext#backend()} 决定路由目标。LocalBackend 默认通过 VfsManager
+ * 虚拟文件系统写入，永远不接触宿主机真实文件系统（除非显式注册物理工作目录映射）。
  * Agent 只能写入 VFS 命名空间内的文件，防止越权修改宿主机敏感文件。
+ * <p>
+ * <b>执行后端可插拔</b>：未来切换到 DockerBackend/E2BBackend 时，写入自动路由到容器/云沙箱
+ * 内的文件系统，工具代码零改动。
  * <p>
  * OS 类比：相当于 Linux 的 open(O_WRONLY|O_CREAT|O_TRUNC) + write()，
  * 但经过 VFS 层的命名空间隔离和路径逃逸检查。
@@ -46,9 +50,9 @@ public class FileWriteTool implements Tool<FileWriteTool.Input> {
             ContainmentZoneManager.instance().enforceAccess(input.path(),
                     ContainmentZoneManager.Operation.WRITE);
 
-            VfsManager vfs = VfsManager.instance();
-
-            boolean success = vfs.writeText(input.path(), input.content());
+            // 1. 后端可插拔：所有写入走 context.backend().write_file
+            //    LocalBackend 默认通过 VfsManager 写入，含命名空间隔离与路径逃逸检查
+            boolean success = context.backend().write_file(input.path(), input.content());
             if (!success) {
                 return ToolOutput.fail("Failed to write to VFS path (permission denied or path escape): " + input.path());
             }

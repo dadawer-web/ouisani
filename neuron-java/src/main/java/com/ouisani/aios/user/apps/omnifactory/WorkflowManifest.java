@@ -1,5 +1,7 @@
 package com.ouisani.aios.user.apps.omnifactory;
 
+import com.ouisani.aios.core.selection.SelectionPolicy;
+
 import java.util.List;
 
 /**
@@ -16,12 +18,13 @@ import java.util.List;
  * <b>强类型 I/O 契约</b>：edges 字段携带端口级连线信息，
  * 供 {@link GraphValidator} 在部署前验证类型兼容性。
  *
- * @param workflowName  工作流名称（如 "crypto_price_tracker"）
- * @param nodes         工作流中的节点实例列表
- * @param enabledSkills 按需装载的技能模块
- * @param enabledRoles  按需装载的角色列表
- * @param agentType     Agent 类型（"omni" / "moe" 等）
- * @param edges         端口级连线列表（可为空，向后兼容旧拓扑）
+ * @param workflowName     工作流名称（如 "crypto_price_tracker"）
+ * @param nodes            工作流中的节点实例列表
+ * @param enabledSkills    按需装载的技能模块
+ * @param enabledRoles     按需装载的角色列表
+ * @param agentType        Agent 类型（"omni" / "moe" 等）
+ * @param edges            端口级连线列表（可为空，向后兼容旧拓扑）
+ * @param selectionPolicy  角色选择策略（listwise top-K 裁剪）；null = 未声明，{@link SelectionPolicy#NONE_POLICY} = 显式无策略
  */
 public record WorkflowManifest(
         String workflowName,
@@ -29,30 +32,44 @@ public record WorkflowManifest(
         List<String> enabledSkills,
         List<String> enabledRoles,
         String agentType,
-        List<WorkflowEdge> edges
+        List<WorkflowEdge> edges,
+        SelectionPolicy selectionPolicy
 ) {
-    /** 兼容旧调用：无 skills/roles/agentType/edges */
+    /** 兼容旧调用：无 skills/roles/agentType/edges/selectionPolicy */
     public WorkflowManifest(String workflowName, List<WorkflowNode> nodes) {
-        this(workflowName, nodes, List.of(), List.of(), "omni", List.of());
+        this(workflowName, nodes, List.of(), List.of(), "omni", List.of(), null);
     }
 
     public WorkflowManifest(String workflowName, List<WorkflowNode> nodes,
                             List<String> enabledSkills, List<String> enabledRoles) {
-        this(workflowName, nodes, enabledSkills, enabledRoles, "omni", List.of());
+        this(workflowName, nodes, enabledSkills, enabledRoles, "omni", List.of(), null);
     }
 
-    /** 兼容旧调用：无 edges（edges 默认空列表） */
+    /** 兼容旧调用：无 edges/selectionPolicy（edges 默认空列表） */
     public WorkflowManifest(String workflowName, List<WorkflowNode> nodes,
                             List<String> enabledSkills, List<String> enabledRoles, String agentType) {
-        this(workflowName, nodes, enabledSkills, enabledRoles, agentType, List.of());
+        this(workflowName, nodes, enabledSkills, enabledRoles, agentType, List.of(), null);
     }
 
-    /** 规范化：null 字段转为空列表，避免 NPE */
+    /**
+     * 兼容旧调用：无 selectionPolicy（selectionPolicy = null 表示未声明）。
+     * <p>
+     * 现有 5 个调用点（GatewayJsonParser、InitDaemon、TopologyJsonParser、OmniMotherAgent、
+     * OperatorAgent）全走此构造器，加 selectionPolicy 字段零改动。
+     */
+    public WorkflowManifest(String workflowName, List<WorkflowNode> nodes,
+                            List<String> enabledSkills, List<String> enabledRoles,
+                            String agentType, List<WorkflowEdge> edges) {
+        this(workflowName, nodes, enabledSkills, enabledRoles, agentType, edges, null);
+    }
+
+    /** 规范化：null 字段转为空列表，避免 NPE。selectionPolicy 保持 null（=未声明） */
     public WorkflowManifest {
         if (nodes == null) nodes = List.of();
         if (enabledSkills == null) enabledSkills = List.of();
         if (enabledRoles == null) enabledRoles = List.of();
         if (agentType == null) agentType = "omni";
         if (edges == null) edges = List.of();
+        // selectionPolicy 不规范化：null = 未声明，区别于 NONE_POLICY 哨兵
     }
 }

@@ -1,5 +1,7 @@
 package com.ouisani.aios.core.tool;
 
+import com.ouisani.aios.core.permission.SafetyCheckResult;
+
 import java.util.List;
 import java.util.Optional;
 
@@ -50,9 +52,33 @@ public interface Tool<I extends ToolInput> {
     /**
      * 权限检查 — 默认不限制，子类可覆盖。
      * 返回 null 表示允许，返回错误消息表示拒绝。
+     * <p>
+     * <b>已过时</b>：仅返回 String 无法表达"safety ASK 不可被 allow 覆盖"的语义。
+     * 新代码应覆写 {@link #checkPermissionDetailed}；本方法保留向后兼容，默认委托新方法。
      */
     default String checkPermission(I input, ToolContext context) {
         return null;
+    }
+
+    /**
+     * 工具自身权限检查（详细版）— 借鉴 AgentScope 2.0 的 {@code bypass_immune} 字段。
+     * <p>
+     * 默认实现委托旧 {@link #checkPermission}（向后兼容）：
+     * <ul>
+     *   <li>旧方法返回 null → {@link SafetyCheckResult#allowed()}</li>
+     *   <li>旧方法返回非空 → {@link SafetyCheckResult#deny(String)}（非 bypass_immune）</li>
+     * </ul>
+     * 危险工具（BashTool rm -rf /、写 ~/.bashrc 等）应覆写本方法返回
+     * {@link SafetyCheckResult#safetyAsk(String)}，标记为不可被 allow 规则覆盖。
+     *
+     * @param input   工具输入
+     * @param context 执行上下文
+     * @return 安全检查结果；默认 ALLOW
+     */
+    default SafetyCheckResult checkPermissionDetailed(I input, ToolContext context) {
+        String simple = checkPermission(input, context);
+        if (simple == null) return SafetyCheckResult.allowed();
+        return SafetyCheckResult.deny(simple);
     }
 
     /**

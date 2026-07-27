@@ -1,7 +1,11 @@
 package com.ouisani.aios.core.overnight;
 
+import com.ouisani.aios.core.permission.PermissionChecker;
+import com.ouisani.aios.core.permission.PermissionRule;
+
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Overnight 操作契约 — 长跑 agent 的"宪法"。
@@ -184,6 +188,51 @@ public final class OvernightContract {
             case CANCELLING -> buildCancellationPrompt();
             case COMPLETED, FAILED -> "";
         };
+    }
+
+    /**
+     * 把聚合的 DENY 决策格式化为晨报段落 — 供 coordinator 在 MORNING_REPORT 阶段注入 prompt。
+     * <p>
+     * 借鉴 AgentScope 2.0 的 suggested_rules：每条 DENY 附带"加什么规则能放行"的建议，
+     * 让用户晨起后能快速决定是否放宽权限。bypass_immune 的 DENY（危险操作）标注"不可通过规则放行"。
+     *
+     * @param denials 聚合的 DENY 记录（由 PermissionChecker.globalDenialSink 收集）
+     * @return 格式化的段落；空输入返回空串
+     */
+    public static String formatDenialsForMorningReport(List<PermissionChecker.DenialRecord> denials) {
+        if (denials == null || denials.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Overnight 被拒操作清单（共 ").append(denials.size()).append(" 条）\n\n");
+        int idx = 1;
+        for (PermissionChecker.DenialRecord r : denials) {
+            sb.append(idx++).append(". [").append(r.toolName()).append("] ")
+              .append(truncate(r.inputDigest(), 80))
+              .append(" — 拒绝原因：").append(r.decision().message())
+              .append(" (").append(r.decision().reason()).append(")\n");
+
+            List<PermissionRule> suggestions = r.decision().suggestedRules();
+            if (r.decision().bypassImmune()) {
+                sb.append("   建议规则：无（bypass_immune，无法通过规则放行 — 危险操作）\n");
+            } else if (suggestions.isEmpty()) {
+                sb.append("   建议规则：无\n");
+            } else {
+                sb.append("   建议规则（如需放行可添加）:\n");
+                for (PermissionRule s : suggestions) {
+                    sb.append("     - ").append(s.toRuleString()).append("\n");
+                }
+            }
+            sb.append("\n");
+        }
+        sb.append("请在晨报中总结这些被拒操作，并说明哪些（如有）是误拒、哪些是合理拒绝、")
+          .append("用户可以添加哪些规则以提升下次 overnight 的覆盖度。");
+        return sb.toString();
+    }
+
+    /** 截断字符串到指定长度，超长加省略号。 */
+    private static String truncate(String s, int maxLen) {
+        if (s == null) return "";
+        if (s.length() <= maxLen) return s;
+        return s.substring(0, maxLen) + "...";
     }
 
     // ── VFS 路径辅助 ──

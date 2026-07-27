@@ -445,8 +445,14 @@ public class OperatorAgent extends AbstractAgent {
         }
 
         // ── 2. 工具装配 — 内核工具 + 插件工具 + 策略过滤 ──
+        // overnight 上下文感知：若当前线程在 overnight run 中（InheritableThreadLocal 继承自 coordinator），
+        // 用 DONT_ASK 权限画像构造，把散落在 prompt 的硬约束收编到结构化规则层强制。
         List<Tool<? extends ToolInput>> operatorTools = buildOperatorToolList();
-        this.queryEngine = new QueryEngine(sdk, this.agentId, workingDir, operatorTools);
+        com.ouisani.aios.core.permission.PermissionProfile overnightProfile =
+                com.ouisani.aios.core.overnight.OvernightRunner.getCurrentPermissionProfile();
+        this.queryEngine = overnightProfile != null
+                ? new QueryEngine(sdk, this.agentId, workingDir, operatorTools, overnightProfile)
+                : new QueryEngine(sdk, this.agentId, workingDir, operatorTools);
 
         // ── 2. SessionMemory — 会话记忆 ──
         this.sessionMemory = new SessionMemoryService.SessionMemory();

@@ -1,6 +1,7 @@
 package com.ouisani.aios.core.tool;
 
-import com.ouisani.aios.core.hook.HookManager;
+import com.ouisani.aios.core.middleware.Middleware;
+import com.ouisani.aios.core.middleware.MiddlewareRegistry;
 import com.ouisani.aios.core.network.AiosEventSchema;
 import com.ouisani.aios.core.network.AiosEventSchema.AiosEvent;
 import com.ouisani.aios.core.network.EventBus;
@@ -142,6 +143,24 @@ public class QueryEngine {
     }
 
     /**
+     * 触发 on_reply 洋葱中间件，包裹最终回复。best-effort：异常时返回原回复。
+     * <p>
+     * 用于 doQuery 的三个回复出口（output guardrail / finalize gate / max-rounds gate）。
+     * leaf 不抛异常（仅返回原回复字符串），中间件 PRE/POST 异常由 registry 统一 catch；
+     * 此处 try/catch 仅满足 checked exception 声明 + 终极安全网（D7 best-effort）。
+     */
+    private String fireOnReplyBestEffort(String original) {
+        try {
+            return MiddlewareRegistry.instance().fireOnReply(
+                    new Middleware.ReplyContext(agentId, currentRunId, original),
+                    () -> original);
+        } catch (Exception e) {
+            log.warn("[QueryEngine] on_reply 中间件异常，返回原回复: {}", e.getMessage());
+            return original;
+        }
+    }
+
+    /**
      * 执行一次完整的查询循环。
      *
      * @param userMessage 用户输入
@@ -200,8 +219,9 @@ public class QueryEngine {
                     autoMounted.stream().map(ToolDefinition::name).toList());
         }
 
-        // 构建系统提示词
-        String systemPrompt = buildSystemPrompt(systemContext);
+        // 构建系统提示词 — on_system_prompt 串行管道（transformer）
+        String systemPrompt = MiddlewareRegistry.instance().fireOnSystemPrompt(
+                buildSystemPrompt(systemContext));
 
         // ── 三层历史压缩（借鉴 Agent Zero bulks/topics/current） ──
         // 初始化历史压缩器，将初始用户消息加入历史
@@ -254,11 +274,20 @@ public class QueryEngine {
                 AiosEventSchema.emit(AiosEventSchema.textMessageStart(agentId, currentRunId, stepNum));
 
                 final int currentRound = round + 1;
-                llmResponse = sdk.thinkStream(agentId, fullPrompt, delta -> {
-                    streamingResponse.append(delta);
-                    // 每个 delta 都广播 TEXT_MESSAGE_CONTENT 事件
-                    AiosEventSchema.emit(AiosEventSchema.textMessageContent(agentId, currentRunId, currentRound, delta));
-                });
+                // fullPrompt 在循环内会被重新赋值，lambda 捕获需 effectively-final 快照
+                final String currentPrompt = fullPrompt;
+                // ── on_model_call 洋葱中间件 ── LEAF = sdk.thinkStream（含 delta 流式回调）
+                // on_reasoning 折叠进此 hook（D2）——代码库无独立 reasoning 阶段，
+                // sdk.thinkStream 返回的 token 流混合 reasoning 与 content。
+                Middleware.ModelCallResult mcResult = MiddlewareRegistry.instance().fireOnModelCall(
+                        new Middleware.ModelCallContext(agentId, currentPrompt, currentRunId, currentRound),
+                        () -> Middleware.ModelCallResult.of(sdk.thinkStream(agentId, currentPrompt, delta -> {
+                            streamingResponse.append(delta);
+                            // 每个 delta 都广播 TEXT_MESSAGE_CONTENT 事件
+                            AiosEventSchema.emit(AiosEventSchema.textMessageContent(agentId, currentRunId, currentRound, delta));
+                        }))
+                );
+                llmResponse = mcResult.response();
 
                 AiosEventSchema.emit(AiosEventSchema.textMessageEnd(agentId, currentRunId, stepNum,
                         streamingResponse.toString()));
@@ -331,6 +360,7 @@ public class QueryEngine {
                     log.warn("[QueryEngine] OutputGuardrail 触发: {}",
                             outputGuardrailResult.outputInfo());
                     String blocked = "输出被护栏拦截: " + outputGuardrailResult.outputInfo();
+                    blocked = fireOnReplyBestEffort(blocked);
                     AiosEventSchema.emit(AiosEventSchema.runFinished(agentId, currentRunId, blocked));
                     return blocked;
                 }
@@ -346,8 +376,9 @@ public class QueryEngine {
                 }
                 switch (rgResult.action()) {
                     case SKIP, RETURN -> {
-                        AiosEventSchema.emit(AiosEventSchema.runFinished(agentId, currentRunId, rgResult.finalAnswer()));
-                        return rgResult.finalAnswer();
+                        String finalOut = fireOnReplyBestEffort(rgResult.finalAnswer());
+                        AiosEventSchema.emit(AiosEventSchema.runFinished(agentId, currentRunId, finalOut));
+                        return finalOut;
                     }
                     case REENTER -> {
                         // soft/hard：将 review 报告作为 user 提醒注入历史，继续循环
@@ -479,7 +510,19 @@ public class QueryEngine {
             historyCompressor.addMessage("tool", toolResults.toString());
 
             // 重建 fullPrompt：系统提示 + 压缩后的历史 + 继续指令
-            fullPrompt = systemPrompt + "\n\n" + historyCompressor.buildHistoryText()
+            // ── on_compress_context 洋葱中间件 ── LEAF = buildHistoryText()
+            // 中间件可观察消息快照并变换历史文本（如脱敏、注入上下文）。best-effort：异常降级原历史。
+            List<HistoryCompressor.Message> msgs = historyCompressor.snapshotMessages();
+            String historyText;
+            try {
+                historyText = MiddlewareRegistry.instance().fireOnCompressContext(
+                        new Middleware.CompressContext(agentId, msgs, null),
+                        () -> historyCompressor.buildHistoryText());
+            } catch (Exception e) {
+                log.warn("[QueryEngine] on_compress_context 中间件异常，降级为原历史: {}", e.getMessage());
+                historyText = historyCompressor.buildHistoryText();
+            }
+            fullPrompt = systemPrompt + "\n\n" + historyText
                     + "\n\nPlease continue based on the tool results above.";
 
             // ── 标准化事件协议：STEP_FINISHED ──
@@ -505,6 +548,8 @@ public class QueryEngine {
             rgResult = ReviewGate.ReviewGateResult.returnOriginal(maxAnswer);
         }
         String finalOut = rgResult.finalAnswer() != null ? rgResult.finalAnswer() : maxAnswer;
+        // ── on_reply 洋葱中间件 ── 包裹最终回复（max-rounds 出口）
+        finalOut = fireOnReplyBestEffort(finalOut);
         // ── 标准化事件协议：RUN_FINISHED ──
         AiosEventSchema.emit(AiosEventSchema.runFinished(agentId, currentRunId, finalOut));
         return finalOut;
@@ -684,29 +729,20 @@ public class QueryEngine {
                 log.info("[QueryEngine] 工具 '{}' 需要确认（Agent 模式下自动允许）", tc.toolName);
             }
 
-            // ── PreToolUse Hook ──
-            Map<String, Object> hookData = new HashMap<>();
-            hookData.put("tool_name", tc.toolName);
-            hookData.put("input", input.toJson());
-            HookManager.HookResult preResult = HookManager.instance().trigger(
-                    HookManager.HookEvent.PRE_TOOL_USE, hookData);
-            if (!preResult.proceed()) {
-                return "Blocked by PreToolUse hook: " + preResult.message();
-            }
-
-            // ── 执行工具 ──
+            // ── on_acting 洋葱中间件（核心边界修复）──
+            // LEAF = tool.call（纯 I/O）。PRE/POST_TOOL_USE 经 HookManagerBridgeMiddleware
+            // 移入洋葱内；UpstreamMetaMiddleware 在内层记录 tool.query.<name> 元数据。
+            // 权限检查（上方）+ ToolGuardrail + Handoff + telemetry（下方）全留洋葱外。
+            // 这使得 next_handler 能安全 offload 到后台任务——它永远不会自行 mutate agent context
+            // （修复 AgentTool.runInBackground=true 回退 GLOBAL_DEFAULT_SCOPE 的根因）。
             long startTime = System.currentTimeMillis();
-            ToolOutput output = tool.call(input, context);
+            ToolOutput output = MiddlewareRegistry.instance().fireOnActing(
+                    new Middleware.ActingContext(agentId, tc.toolName, input, context, Map.of()),
+                    () -> tool.call(input, context)   // LEAF — 异常向上传播（D7 LEAF 不 catch）
+            );
             long duration = System.currentTimeMillis() - startTime;
 
-            // ── PostToolUse Hook ──
-            Map<String, Object> postData = new HashMap<>();
-            postData.put("tool_name", tc.toolName);
-            postData.put("success", output.success());
-            postData.put("duration_ms", duration);
-            HookManager.instance().trigger(HookManager.HookEvent.POST_TOOL_USE, postData);
-
-            // ── 遥测记录 ──
+            // ── 遥测记录（洋葱外）── duration 含洋葱全程（PRE/POST hook + leaf），与原语义一致
             TelemetryService.instance().recordToolUsage(tc.toolName, duration);
 
             log.info("[QueryEngine] 工具 '{}' 完成：success={} ({}ms)", tc.toolName, output.success(), duration);

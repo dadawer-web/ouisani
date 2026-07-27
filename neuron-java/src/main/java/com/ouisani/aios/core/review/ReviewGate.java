@@ -3,6 +3,8 @@ package com.ouisani.aios.core.review;
 import com.ouisani.aios.core.overnight.NodeCompletionVerifier;
 import com.ouisani.aios.core.overnight.VerificationResult;
 import com.ouisani.aios.core.overnight.VerificationSpec;
+import com.ouisani.aios.core.permission.PermissionChecker;
+import com.ouisani.aios.core.permission.PermissionDenialLedger;
 import com.ouisani.aios.core.provenance.ProvenanceHook;
 import com.ouisani.aios.core.provenance.ProvenanceRecord;
 import com.ouisani.aios.core.tool.ToolSdk;
@@ -123,11 +125,14 @@ public final class ReviewGate {
             BackstopResult backstop = applyDeterministicBackstop(llmVerdict, artifactPaths);
             ReviewVerdict finalVerdict = backstop.verdict();
 
-            // 5. 持久化（best-effort）
+            // 5. 权限拒绝注入 — 查询被审 agent 的权限拒绝历史，bypass_immune 拒绝升为 high
+            finalVerdict = injectPermissionDenials(finalVerdict, ctx.agentId());
+
+            // 6. 持久化（best-effort）
             ReviewLedger.append(toRecord(ctx, level, finalVerdict, backstop.deterministicForced(),
                     firstPath(artifactPaths)));
 
-            // 6. 按 level 裁决
+            // 7. 按 level 裁决
             return decideByLevel(level, ctx, finalVerdict);
         } catch (Throwable t) {
             log.warn("[ReviewGate] 异常，降级返回原答案: {}", t.getMessage());
@@ -174,6 +179,86 @@ public final class ReviewGate {
                     false);
         }
         return new BackstopResult(llm, false);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  权限拒绝注入 — Phase 7：消费 bypass_immune + suggestedRules
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 查询被审 agent 的权限拒绝历史，把拒绝决策映射为 ReviewFinding 注入 verdict。
+     * <p>
+     * 借鉴 AgentScope 2.0 的 bypass_immune + suggested_rules：
+     * <ul>
+     *   <li><b>bypass_immune 拒绝</b>（如 {@code rm -rf /}）→ high 严重级（阻断性），
+     *       suggestedRules 为空（无法通过规则放行）</li>
+     *   <li><b>普通拒绝</b>（如未在 allow 白名单的写操作）→ medium 严重级，
+     *       suggestedRules 附"加什么规则能放行"的建议</li>
+     * </ul>
+     * 这是一个"数字可追溯"闸门：如果 agent 尝试了危险操作被权限引擎拦截，
+     * reviewer 必须在 findings 中呈现，让用户知道发生了什么。
+     *
+     * @param verdict 原始 verdict（LLM + 确定性兜底后的）
+     * @param agentId 被审 agent 标识
+     * @return 注入了拒绝 findings 的新 verdict；无拒绝记录则原样返回
+     */
+    static ReviewVerdict injectPermissionDenials(ReviewVerdict verdict, String agentId) {
+        if (agentId == null || agentId.isEmpty()) {
+            return verdict;
+        }
+        List<PermissionChecker.DenialRecord> denials = PermissionDenialLedger.listByAgent(agentId);
+        if (denials.isEmpty()) {
+            return verdict;
+        }
+
+        List<ReviewFinding> mergedFindings = new ArrayList<>(verdict.findings());
+        for (PermissionChecker.DenialRecord d : denials) {
+            boolean bypassImmune = d.decision().bypassImmune();
+            String severity = bypassImmune ? "high" : "medium";
+            String message = buildDenialMessage(d);
+            List<String> suggestions = bypassImmune
+                    ? List.of()
+                    : d.decision().suggestedRules().stream()
+                            .map(r -> r.toRuleString())
+                            .toList();
+
+            mergedFindings.add(new ReviewFinding(
+                    severity,
+                    null,   // 不关联特定 artifact 路径
+                    message,
+                    "",     // claim — 权限拒绝不是 final answer 断言
+                    "permission_denial: " + d.decision().reason(),
+                    bypassImmune,
+                    suggestions
+            ));
+        }
+
+        // 如果有 bypass_immune 拒绝，强制升级为 BLOCKING
+        boolean hasBypassImmune = denials.stream().anyMatch(d -> d.decision().bypassImmune());
+        ReviewVerdict.Outcome newOutcome = hasBypassImmune
+                ? ReviewVerdict.Outcome.BLOCKING
+                : verdict.outcome();
+
+        String summary = verdict.summary();
+        if (hasBypassImmune) {
+            summary = "Permission denial(s) detected — " + summary;
+        }
+
+        return new ReviewVerdict(newOutcome, mergedFindings, summary);
+    }
+
+    /** 构建权限拒绝 finding 的描述消息。 */
+    private static String buildDenialMessage(PermissionChecker.DenialRecord d) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Agent was denied [").append(d.toolName()).append("]");
+        if (d.inputDigest() != null && !d.inputDigest().isBlank()) {
+            sb.append(" input: ").append(d.inputDigest());
+        }
+        sb.append(" — ").append(d.decision().message());
+        if (d.decision().bypassImmune()) {
+            sb.append(" (bypass_immune: allow rules cannot override this dangerous operation)");
+        }
+        return sb.toString();
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -293,6 +378,13 @@ public final class ReviewGate {
             }
             if (!f.evidence().isEmpty()) {
                 sb.append(" | evidence: ").append(f.evidence());
+            }
+            // Phase 7: 权限拒绝信息（bypassImmune/suggestedRules 非默认时追加）
+            if (f.bypassImmune()) {
+                sb.append(" | bypass_immune: yes (cannot be overridden by allow rules)");
+            }
+            if (!f.suggestedRules().isEmpty()) {
+                sb.append(" | suggested_rules: ").append(String.join(", ", f.suggestedRules()));
             }
             sb.append("\n");
         }
