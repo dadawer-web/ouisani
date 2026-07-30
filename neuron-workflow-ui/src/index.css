@@ -1,11 +1,75 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+/* ════════════════════════════════════════════════════════════════
+   cc-haha「Technical Atelier」设计令牌 —— 明暗双主题
+   暖纸(#FAF9F5) + 墨石墨(#1B1C1A) + 古铜(#8F482F)；禁纯黑。
+   ════════════════════════════════════════════════════════════════ */
+:root {
+  --background: 250 249 245;          /* #FAF9F5 暖纸 */
+  --surface: 250 249 245;
+  --surface-bright: 250 249 245;
+  --surface-dim: 219 218 214;          /* #DBDAD6 凹陷 */
+  --surface-container-lowest: 255 255 255; /* #FFFFFF 浮起卡片 */
+  --surface-container-low: 244 244 240;    /* #F4F4F0 */
+  --surface-container: 239 239 234;         /* #EFEFEA */
+  --surface-container-high: 233 232 228;   /* #E9E8E4 */
+  --surface-container-highest: 227 226 223;/* #E3E2DF */
+  --on-surface: 27 28 26;              /* #1B1C1A 墨 */
+  --on-background: 27 28 26;
+  --on-surface-variant: 84 67 62;      /* #54433E */
+  --outline: 135 115 109;              /* #87736D */
+  --outline-variant: 218 193 186;      /* #DAC1BA */
+  --primary: 143 72 47;                /* #8F482F 古铜 */
+  --on-primary: 255 255 255;
+  --primary-container: 173 95 69;      /* #AD5F45 */
+  --primary-fixed: 255 219 208;        /* #FFDBD0 */
+  --tertiary: 79 98 55;                /* #4F6237 */
+  --tertiary-container: 103 123 78;    /* #677B4E */
+  --on-tertiary-container: 250 255 234;
+  --secondary: 45 98 143;              /* #2D628F */
+  --error: 186 26 26;                  /* #BA1A1A */
+  --error-container: 255 218 214;      /* #FFDAD6 */
+  --on-error-container: 147 0 10;      /* #93000A */
+
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  --background: 20 20 19;              /* #141413 石墨 */
+  --surface: 20 20 19;
+  --surface-bright: 38 38 36;
+  --surface-dim: 14 14 13;
+  --surface-container-lowest: 27 28 26;    /* #1B1C1A 暗模式最沉的卡片 */
+  --surface-container-low: 36 36 35;       /* #242423 */
+  --surface-container: 42 42 40;
+  --surface-container-high: 51 51 50;
+  --surface-container-highest: 61 61 59;
+  --on-surface: 242 241 237;           /* #F2F1ED */
+  --on-background: 242 241 237;
+  --on-surface-variant: 201 198 191;
+  --outline: 160 160 144;              /* #A0A090 */
+  --outline-variant: 74 69 64;
+  --primary: 255 181 157;              /* #FFB59D 暗模式提亮的古铜 */
+  --on-primary: 57 12 0;               /* #390C00 */
+  --primary-container: 173 95 69;
+  --primary-fixed: 143 72 47;
+  --tertiary: 184 206 153;             /* #B8CE99 */
+  --tertiary-container: 103 123 78;
+  --on-tertiary-container: 16 32 0;
+  --secondary: 154 203 254;
+  --error: 255 180 171;
+  --error-container: 147 0 10;
+  --on-error-container: 255 218 214;
+
+  color-scheme: dark;
+}
 
 :root {
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: 'Inter', system-ui, sans-serif;
   line-height: 1.5;
   font-weight: 400;
   font-synthesis: none;
@@ -16,45 +80,104 @@
 
 body {
   margin: 0;
-  background: #0a0a0f;
-  color: #e4e4e7;
+  background: rgb(var(--background));
+  color: rgb(var(--on-surface));
   overflow: hidden;
 }
 
-/* React Flow 深色模式覆盖 */
+/* React Flow 配色覆盖 —— 由霓虹青改为古铜/暖灰 */
 .react-flow__edge-path {
-  stroke: #00f0ff;
+  stroke: rgb(var(--primary));
   stroke-width: 2;
 }
-
 .react-flow__edge.animated .react-flow__edge-path {
-  stroke: #00f0ff;
+  stroke: rgb(var(--primary));
 }
-
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke-dasharray: 5;
+}
 .react-flow__connection-line {
-  stroke: #8b5cf6;
+  stroke: rgb(var(--primary-container));
   stroke-width: 2;
   stroke-dasharray: 5;
 }
-
 .react-flow__attribution {
   display: none !important;
+}
+.react-flow__controls {
+  box-shadow: 0 4px 20px rgba(27, 28, 26, 0.04), 0 12px 40px rgba(27, 28, 26, 0.08) !important;
+  border-radius: 0.75rem !important;
+  overflow: hidden;
+}
+.react-flow__controls-button {
+  background: rgb(var(--surface-container-lowest)) !important;
+  border-bottom: 1px solid rgb(var(--outline-variant) / 0.2) !important;
+  color: rgb(var(--on-surface)) !important;
+  fill: rgb(var(--on-surface)) !important;
+}
+.react-flow__controls-button:hover {
+  background: rgb(var(--surface-container-high)) !important;
+}
+.react-flow__minimap {
+  border-radius: 0.75rem !important;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(27, 28, 26, 0.04), 0 12px 40px rgba(27, 28, 26, 0.08) !important;
 }
 
 @layer utilities {
   .custom-scrollbar::-webkit-scrollbar {
-    width: 4px;
-    height: 4px;
+    width: 6px;
+    height: 6px;
   }
   .custom-scrollbar::-webkit-scrollbar-track {
-    background: rgba(17, 24, 39, 0.3);
+    background: transparent;
     border-radius: 4px;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(55, 65, 81, 0.8);
+    background: rgb(var(--outline-variant) / 0.6);
     border-radius: 4px;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: rgba(6, 182, 212, 0.8);
+    background: rgb(var(--outline));
+  }
+}
+
+@layer components {
+  /* 幽灵边框 —— 可达性需要的容器边界，"可被感知而非被看见" */
+  .ghost-border {
+    border: 1px solid rgb(var(--outline-variant) / 0.25);
+  }
+  .ghost-border-strong {
+    border: 1px solid rgb(var(--outline-variant) / 0.45);
+  }
+  /* 胶囊状态 */
+  .pill {
+    border-radius: 9999px;
+    padding: 0.125rem 0.625rem;
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    line-height: 1.4;
+  }
+  /* 浮动元素的墨纸氛围阴影 */
+  .ambient-shadow {
+    box-shadow: 0 4px 20px rgba(27, 28, 26, 0.04), 0 12px 40px rgba(27, 28, 26, 0.08);
+  }
+  .ambient-shadow-sm {
+    box-shadow: 0 2px 10px rgba(27, 28, 26, 0.04), 0 6px 20px rgba(27, 28, 26, 0.06);
+  }
+  /* 玻璃面板 —— surface-container-lowest 85% + 模糊 */
+  .glass-panel {
+    background: rgb(var(--surface-container-lowest) / 0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+  /* 主按钮的"压印墨水"质感 —— primary 到 primary-container 的微渐变 */
+  .btn-primary-ink {
+    background-image: linear-gradient(to bottom, rgb(var(--primary)), rgb(var(--primary-container)));
   }
 }

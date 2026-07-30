@@ -71,6 +71,11 @@ final class ToolCallParser {
                 tagName = cleanTagName(tagName);
                 if (tagName.isEmpty()) { searchStart = tagEnd + 1; continue; }
 
+                // 防御性二次校验（借鉴 OpenWorker openai_provider.py:452 的 name-not-in-names 过滤）：
+                // findToolTagStart 已按 registeredToolNames 精确匹配 <name> 字面量，此处显式 contains
+                // 校验确保未来 findToolTagStart 若改为模糊匹配也不会引入 false positive。
+                if (!registeredToolNames.contains(tagName)) { searchStart = tagEnd + 1; continue; }
+
                 // 查找闭合标签
                 String closeTag = "</" + tagName + ">";
                 int closeIdx = response.indexOf(closeTag, tagEnd + 1);

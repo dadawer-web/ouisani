@@ -29,6 +29,14 @@ import java.util.List;
 public class HistoryCompressor {
     private static final Logger log = LoggerFactory.getLogger(HistoryCompressor.class);
 
+    /**
+     * display-only notice 角色标记（error/interrupted/model_switch）。借鉴 OpenWorker
+     * {@code engine.py:228-235} 的 {@code role:"notice"}：持久化存活（reload/快照可见），
+     * 但 {@link #buildHistoryText()}（provider feed）剥离它们，provider 永远看不到。
+     * {@code kind}+{@code text} 编码进 {@code content}，格式 {@code [notice:<kind>] <text>}。
+     */
+    public static final String ROLE_NOTICE = "notice";
+
     /** 一条对话消息 */
     public record Message(String role, String content, long timestamp) {
         /** 估算 token 数（粗略：4 字符 ≈ 1 token） */
@@ -99,6 +107,8 @@ public class HistoryCompressor {
         if (!mid.isEmpty()) {
             sb.append("## Recent Context (Summarized)\n");
             for (Message m : mid) {
+                // notice 是 display-only，从 provider feed 剥离（借鉴 OpenWorker _outbound_messages）
+                if (ROLE_NOTICE.equals(m.role())) continue;
                 sb.append("[").append(m.role()).append("]: ").append(m.content()).append("\n");
             }
             sb.append("\n");
@@ -108,6 +118,8 @@ public class HistoryCompressor {
         if (!recent.isEmpty()) {
             sb.append("## Current Conversation\n");
             for (Message m : recent) {
+                // notice 是 display-only，从 provider feed 剥离（借鉴 OpenWorker _outbound_messages）
+                if (ROLE_NOTICE.equals(m.role())) continue;
                 sb.append("[").append(m.role()).append("]: ").append(m.content()).append("\n");
             }
         }

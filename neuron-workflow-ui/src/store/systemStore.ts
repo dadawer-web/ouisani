@@ -89,11 +89,13 @@ export const useSystemStore = create<SystemState>((set, get) => ({
           } catch {
             data = { payload: raw.message };
           }
-          // 映射通道名到消息类型
+          // 映射通道名到消息类型；未识别频道兜底当作 EVENT_BUS_LOG 显示，
+          // 确保 sys.telemetry.events（自愈/恢复）、sys.semantic.crash（崩溃）、
+          // sys.workflow.* 等关键事件可见，不再被静默丢弃。
           if (raw.channel === "sys.telemetry.metrics") msgType = "SYS_METRICS";
-          else if (raw.channel === "sys.eventbus.logs") msgType = "EVENT_BUS_LOG";
           else if (raw.channel === "sys.app.stdout") msgType = "APP_OUTPUT";
           else if (raw.channel === "sys.dag.events") msgType = "DAG_EVENT";
+          else msgType = "EVENT_BUS_LOG";
         }
 
         // 如果解包后的 data 自带 type，优先使用
@@ -109,16 +111,25 @@ export const useSystemStore = create<SystemState>((set, get) => ({
             processes: data.processes ?? [],
           });
         }
-        // 接收总线日志
+        // 接收总线日志（含 sys.eventbus.logs + 自愈/崩溃/恢复等未识别频道的兜底）
         else if (msgType === "EVENT_BUS_LOG") {
           set((state) => {
+            // payload 提取：优先 data.payload；缺失时用整个 data（message）兜底，
+            // 让 sys.telemetry.events 等无 payload 字段的事件也能显示有意义内容
+            let payloadStr: string;
+            if (typeof data.payload === "string") {
+              payloadStr = data.payload;
+            } else if (data.payload != null) {
+              payloadStr = JSON.stringify(data.payload);
+            } else {
+              // 无 payload 字段：用整个 message（剔除冗余的 type/timestamp 字段）
+              const { type, timestamp, ...rest } = data;
+              payloadStr = Object.keys(rest).length ? JSON.stringify(rest) : JSON.stringify(data);
+            }
             const newLog: EventBusLog = {
               timestamp: data.timestamp ?? Date.now(),
               topic: data.topic || raw.channel || "sys",
-              payload:
-                typeof data.payload === "string"
-                  ? data.payload
-                  : JSON.stringify(data.payload ?? ""),
+              payload: payloadStr,
             };
             return {
               eventBusLogs: [newLog, ...state.eventBusLogs].slice(

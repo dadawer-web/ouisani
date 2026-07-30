@@ -679,6 +679,18 @@ public class AppGateway {
         // P3：记忆查看器 — GET/PATCH/DELETE /api/memory/{agentId}[/{key}]
         // 依赖 VersionedMemoryStore.setPrimaryStore 在启动时注入；未注入时端点返回 503
         MemoryViewerRoutes.attachTo(app);
+
+        // 普通对话 — POST /api/chat（SSE 逐 token，复用 LlmRouter + 记忆注入）
+        ChatRoutes.attachTo(app);
+
+        // 工作流产物 — GET /api/artifacts/{workflowId}[/file]（列出/读取 factory 产物文件）
+        ArtifactRoutes.attachTo(app);
+
+        // 系统告警流 — WS /api/system/alerts（内核崩溃/紧急停止/死信队列/成本告警/工作流挂起/安全/心跳）
+        SystemAlertRoutes.attachTo(app);
+
+        // 工具权限审批流 — WS /api/permission/stream（桥接 PermissionChecker ASK 到前端弹窗，支持 standing scoped approvals）
+        PermissionApprovalRoutes.attachTo(app);
         // ════════════════════════════════════════════════════════════════
         //  Cross-Validation — 多模型对抗与交叉审查（借鉴 OmniGent Debby & Polly）
         // ════════════════════════════════════════════════════════════════

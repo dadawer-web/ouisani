@@ -5,6 +5,10 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
 /**
  * Overnight 运行清单 — 一次长跑会话的完整时间锚点与状态。
  * <p>
@@ -106,6 +110,62 @@ public record OvernightManifest(
     /** 便捷工厂：默认 VFS 目录由 AiosPaths.overnightDir() 推导 */
     public static OvernightManifest create(String runId, String mission, Duration duration) {
         return create(runId, mission, duration, null);
+    }
+
+    /**
+     * 从持久化的 JSON 反序列化 manifest —— {@link OvernightRunner#manifestToJson} 的逆操作。
+     * <p>
+     * 借鉴 OpenWorker automation scheduler 的 run-once-catch-up：JVM 重启后扫描
+     * {@code AiosPaths.overnightDir()/{runId}/manifest.json}，reload 非终态 manifest 并 resume，
+     * 让阶段机自动补跑停机期间错过的义务（如晨报）。
+     * <p>
+     * 持久化 JSON 仅含子集（runId/status/startedAt/targetWakeAt/handoffReadyAt/
+     * postWakeGraceUntil/morningReportPostedAt/coordinatorPid/mission）；omitted 字段
+     * （completedAt/cancelRequestedAt/lastActivityAt）默认 null，maxAgentsGuidance 默认
+     * {@link #DEFAULT_MAX_AGENTS}，vfsRunDir 由调用方传入（重算为 overnightDir/{runId}）。
+     *
+     * @param json      持久化的 manifest JSON
+     * @param vfsRunDir 该 run 的 VFS 目录（重算，非信任持久化值）
+     * @return 反序列化的 manifest
+     */
+    public static OvernightManifest fromJson(String json, String vfsRunDir) {
+        JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
+        String runId = obj.get("runId").getAsString();
+        OvernightRunStatus status = parseStatusLabel(obj.get("status").getAsString());
+        Instant startedAt = parseInstant(obj.get("startedAt"));
+        Instant targetWakeAt = parseInstant(obj.get("targetWakeAt"));
+        Instant handoffReadyAt = parseInstant(obj.get("handoffReadyAt"));
+        Instant postWakeGraceUntil = parseInstant(obj.get("postWakeGraceUntil"));
+        Instant morningReportPostedAt = parseInstant(obj.get("morningReportPostedAt"));
+        int coordinatorPid = obj.has("coordinatorPid") && !obj.get("coordinatorPid").isJsonNull()
+                ? obj.get("coordinatorPid").getAsInt() : -1;
+        String mission = obj.has("mission") && !obj.get("mission").isJsonNull()
+                ? obj.get("mission").getAsString() : null;
+        return new OvernightManifest(runId, mission, status, startedAt, targetWakeAt,
+                handoffReadyAt, postWakeGraceUntil, morningReportPostedAt,
+                null, null, null, vfsRunDir, coordinatorPid, DEFAULT_MAX_AGENTS);
+    }
+
+    /** 反向 {@link #label()}：将持久化的 status 字符串还原为枚举。 */
+    private static OvernightRunStatus parseStatusLabel(String label) {
+        for (OvernightRunStatus s : OvernightRunStatus.values()) {
+            if (s.label().equals(label)) {
+                return s;
+            }
+        }
+        throw new IllegalArgumentException("未知 overnight status label: " + label);
+    }
+
+    /** 解析 Instant 字段：null/JsonNull/"null" 字符串 → null，否则 {@link Instant#parse}。 */
+    private static Instant parseInstant(JsonElement el) {
+        if (el == null || el.isJsonNull()) {
+            return null;
+        }
+        String s = el.getAsString();
+        if (s == null || s.isBlank() || "null".equals(s)) {
+            return null;
+        }
+        return Instant.parse(s);
     }
 
     // ── 不可变更新方法 ──

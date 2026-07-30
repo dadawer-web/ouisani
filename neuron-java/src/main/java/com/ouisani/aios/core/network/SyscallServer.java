@@ -654,10 +654,13 @@ public class SyscallServer {
 
         // ── EventBus 日志桥接：将内核事件统一转发到 sys.eventbus.logs 频道 ──
         // 前端订阅 sys.eventbus.logs 即可收到所有 EVENT_BUS_LOG 格式的事件
+        // 注意：sys.dag.events 不在此列 —— SystemStreamRoutes 已直接订阅该频道并按
+        // DAG_EVENT 类型分流（前端展示为 · NODE_STARTED · 等）。若再桥接到 sys.eventbus.logs，
+        // 同一事件会被前端收两次（一次 dag.NODE_STARTED，一次 [sys.dag.events] 兜底），
+        // 导致 activity 缓冲区被重复行占满，NODE_SUCCEEDED 等完成事件被截断不可见。
         String[] logChannels = {"sig_tick", "emergency_halt", "sys.human_intervention_required",
                 "sys.kernel.panic", "agent_spawn", "agent_log", "device_mount", "device_unmount",
-                "ws_connect", "ws_disconnect", "spontaneous_idea", "ui_render", "ui_action",
-                "sys.dag.events"};
+                "ws_connect", "ws_disconnect", "spontaneous_idea", "ui_render", "ui_action"};
         for (String channel : logChannels) {
             EventBus.instance().subscribe(channel, payload -> {
                 String logJson = "{\"type\":\"EVENT_BUS_LOG\",\"timestamp\":" + System.currentTimeMillis()

@@ -49,6 +49,23 @@ public interface LlmProvider {
      */
     String think(String prompt, String systemPrompt);
 
+    /**
+     * 向 LLM 发送推理请求（含 ephemeral 系统上下文块）。
+     * <p>
+     * ephemeralContext 不会被持久化到对话历史，仅在 send-time 由 Provider 决定如何
+     * 注入（如 OpenAiAdapter 追加为 &lt;system-context&gt; 块到最后一条 user message）。
+     * 借鉴 OpenWorker engine.py 的 context_provider()：send-time only，永不持久化。
+     * 默认降级：忽略 ephemeralContext，委托 {@link #think(String, String)}。
+     *
+     * @param prompt           用户提示词
+     * @param systemPrompt     系统提示词
+     * @param ephemeralContext 每轮易变上下文（send-time only，永不持久化）
+     * @return LLM 生成的文本回复
+     */
+    default String think(String prompt, String systemPrompt, String ephemeralContext) {
+        return think(prompt, systemPrompt);
+    }
+
     /** 向 LLM 发送推理请求（无系统提示词） */
     default String think(String prompt) {
         return think(prompt, "");
@@ -72,6 +89,23 @@ public interface LlmProvider {
             onDelta.accept(result);
         }
         return result;
+    }
+
+    /**
+     * 流式推理（含 ephemeral 系统上下文块）— send-time 追加到最后一条 user message。
+     * <p>
+     * 默认降级：忽略 ephemeralContext，委托 {@link #thinkStream(String, String, Consumer)}。
+     * 支持 ephemeral 注入的 Provider（如 OpenAiAdapter）应重写此方法。
+     *
+     * @param prompt           用户提示词
+     * @param systemPrompt     系统提示词
+     * @param ephemeralContext 每轮易变上下文（send-time only，永不持久化）
+     * @param onDelta          每个 token 片段的回调
+     * @return 完整的文本回复
+     */
+    default String thinkStream(String prompt, String systemPrompt, String ephemeralContext,
+                               java.util.function.Consumer<String> onDelta) {
+        return thinkStream(prompt, systemPrompt, onDelta);
     }
 
     /** 流式推理（无系统提示词） */
@@ -163,6 +197,59 @@ public interface LlmProvider {
      * @return LLM 生成的文本回复
      */
     String thinkWithHistory(List<ChatMessage> messages, String systemPrompt);
+
+    /**
+     * 基于多轮对话历史向 LLM 发送推理请求（含 ephemeral 系统上下文块）。
+     * <p>
+     * 默认降级：忽略 ephemeralContext，委托 {@link #thinkWithHistory(List, String)}。
+     *
+     * @param messages         对话消息列表
+     * @param systemPrompt     系统提示词
+     * @param ephemeralContext 每轮易变上下文（send-time only，永不持久化）
+     * @return LLM 生成的文本回复
+     */
+    default String thinkWithHistory(List<ChatMessage> messages, String systemPrompt, String ephemeralContext) {
+        return thinkWithHistory(messages, systemPrompt);
+    }
+
+    /**
+     * 基于多轮对话历史的流式推理 — 与 {@link #thinkWithHistory} 对应的流式版本。
+     * <p>
+     * 默认实现降级为同步 {@link #thinkWithHistory}，然后一次性回调完整结果。
+     * 支持 streaming 的 Provider（如 OpenAI）应重写此方法实现真正的逐 token 推送。
+     *
+     * @param messages     对话消息列表
+     * @param systemPrompt 系统提示词
+     * @param onDelta      每个 token 片段的回调
+     * @return 完整的文本回复（所有 delta 拼接后的结果）
+     */
+    default String thinkWithHistoryStream(List<ChatMessage> messages, String systemPrompt,
+                                          java.util.function.Consumer<String> onDelta) {
+        // 默认降级：同步调用，一次性回调
+        String result = thinkWithHistory(messages, systemPrompt);
+        if (result != null && !result.isEmpty()) {
+            onDelta.accept(result);
+        }
+        return result;
+    }
+
+    /**
+     * 基于多轮对话历史的流式推理（含 ephemeral 系统上下文块）。
+     * <p>
+     * 默认降级：忽略 ephemeralContext，委托 {@link #thinkWithHistoryStream(List, String, Consumer)}。
+     * 支持 ephemeral 注入的 Provider（如 OpenAiAdapter）应重写此方法，把 ephemeralContext
+     * 作为 &lt;system-context&gt; 块追加到最后一条 user message（send-time only，永不持久化）。
+     *
+     * @param messages         对话消息列表
+     * @param systemPrompt     系统提示词
+     * @param ephemeralContext 每轮易变上下文（send-time only，永不持久化）
+     * @param onDelta          每个 token 片段的回调
+     * @return 完整的文本回复
+     */
+    default String thinkWithHistoryStream(List<ChatMessage> messages, String systemPrompt,
+                                          String ephemeralContext, java.util.function.Consumer<String> onDelta) {
+        return thinkWithHistoryStream(messages, systemPrompt, onDelta);
+    }
 
     /**
      * 将文本转换为嵌入向量。

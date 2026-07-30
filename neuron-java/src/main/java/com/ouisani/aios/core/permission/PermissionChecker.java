@@ -77,6 +77,35 @@ public class PermissionChecker {
     );
 
     /**
+     * 不允许 target-scoped 预授权的工具（exec/destructive）。
+     * <p>
+     * 借鉴 OpenWorker permissions.py:62-80 的 standing_rule_candidate：
+     * 构造性排除 exec/destructive 工具，只有 EXTERNAL 风险 + 工具声明 target 参数
+     * + 调用实际命名 target 才有资格。
+     * <p>
+     * AIOS 对应：bash（exec）、security_scan（destructive）、agent/handoff（spawn）
+     * 不可被 target-scoped 预授权 — 这些工具的副作用不受 target 约束。
+     */
+    private static final Set<String> TARGET_SCOPING_EXCLUDED = Set.of(
+            "bash", "security_scan", "shell", "agent", "handoff"
+    );
+
+    /**
+     * Session 级 target-scoped 预授权 — {tool: {allowed targets}}。
+     * <p>
+     * 借鉴 OpenWorker 的 standing scoped approvals：
+     * 用户批准 "always allow this tool for this target" 后，
+     * 后续相同 tool + target 的调用自动放行，无需再次询问。
+     * <p>
+     * 粒度比 {@link #allowRules} 更细：allowRules 是工具级
+     * （"允许 send_message"），target-scoped 是目标级
+     * （"允许 send_message 到 #general"）。
+     * <p>
+     * 线程安全：ConcurrentHashMap + ConcurrentHashMap.newKeySet。
+     */
+    private final Map<String, Set<String>> sessionAllowTargetRules = new ConcurrentHashMap<>();
+
+    /**
      * 工具行为分级 — 镜像 jcode {@code safety.rs:177-184} 的 {@code classify} 主入口。
      */
     public static ActionTier classify(String toolName) {
@@ -174,6 +203,10 @@ public class PermissionChecker {
         PermissionDecision allow = checkAllowRules(tool, input);
         if (allow != null) return allow;
 
+        // 6.5. target-scoped 预授权 → ALLOW（借鉴 OpenWorker standing scoped approvals）
+        PermissionDecision targetAllow = checkTargetScopedAllow(tool, input);
+        if (targetAllow != null) return targetAllow;
+
         // 7. *:deny 兜底
         if (wildcardDenyActive) {
             return PermissionDecision.deny(
@@ -268,6 +301,10 @@ public class PermissionChecker {
         // 6. allow 规则 → ALLOW
         PermissionDecision allow = checkAllowRules(tool, input);
         if (allow != null) return allow;
+
+        // 6.5. target-scoped 预授权 → ALLOW（借鉴 OpenWorker standing scoped approvals）
+        PermissionDecision targetAllow = checkTargetScopedAllow(tool, input);
+        if (targetAllow != null) return targetAllow;
 
         // 7. *:deny 兜底
         if (wildcardDenyActive) {
@@ -384,6 +421,10 @@ public class PermissionChecker {
         PermissionDecision allow = checkAllowRules(tool, input);
         if (allow != null) return allow;
 
+        // 6.5. target-scoped 预授权 → ALLOW（借鉴 OpenWorker standing scoped approvals）
+        PermissionDecision targetAllow = checkTargetScopedAllow(tool, input);
+        if (targetAllow != null) return targetAllow;
+
         // 7. *:deny 兜底
         if (wildcardDenyActive) {
             return PermissionDecision.deny(
@@ -478,6 +519,13 @@ public class PermissionChecker {
         PermissionDecision allow = checkAllowRules(tool, input);
         if (allow != null) return allow;
 
+        // 6.5. target-scoped 预授权 → ALLOW（借鉴 OpenWorker standing scoped approvals）
+        // DONT_ASK 下用户预授权的 target 应放行 — 这正是 standing scoped approvals 的核心价值：
+        // 用户在 attended 时预批准某 target，overnight 无人值守时该 target 自动放行，无需 ASK。
+        // 构造性排除 exec/destructive 工具由 checkTargetScopedAllow 内部处理。
+        PermissionDecision targetAllow = checkTargetScopedAllow(tool, input);
+        if (targetAllow != null) return targetAllow;
+
         // 7. *:deny 兜底 → DENY
         if (wildcardDenyActive) {
             return PermissionDecision.deny(
@@ -558,6 +606,101 @@ public class PermissionChecker {
             }
         }
         return null;
+    }
+
+    /**
+     * Target-scoped 预授权检查 — 借鉴 OpenWorker standing scoped approvals。
+     * <p>
+     * 如果当前调用的 target 在 session 预授权集合中，ALLOW。
+     * 在 allow 规则之后、*:deny 兜底之前检查，让 target-scoped 预授权能覆盖 *:deny。
+     * <p>
+     * 构造性排除 exec/destructive 工具（bash/security_scan/agent/handoff），
+     * 这些工具的副作用不受 target 约束，不可被 target-scoped 预授权。
+     *
+     * @return ALLOW 决策（target 匹配）；null（无匹配或不适用）
+     */
+    private <I extends ToolInput> PermissionDecision checkTargetScopedAllow(Tool<I> tool, I input) {
+        String toolName = tool.name();
+        // 排除 exec/destructive 工具
+        if (TARGET_SCOPING_EXCLUDED.contains(toolName.toLowerCase())) return null;
+
+        Set<String> allowedTargets = sessionAllowTargetRules.get(toolName);
+        if (allowedTargets == null || allowedTargets.isEmpty()) return null;
+
+        String target = extractTarget(input);
+        if (target == null || target.isBlank()) return null;
+
+        if (allowedTargets.contains(target)) {
+            return PermissionDecision.allow(
+                    "Allowed by target-scoped rule: " + toolName + " → " + target,
+                    "target_scoped_allow");
+        }
+        return null;
+    }
+
+    /**
+     * 从工具输入提取 target（target/path/url/channel/to 字段）。
+     * <p>
+     * 优先级：target > path > url > channel > to。
+     * 与 {@link #extractPath} 类似但更通用，支持非文件类工具（如 send_message 的 target 参数）。
+     * <p>
+     * public 以便 {@link com.ouisani.aios.core.tool.QueryEngine} 在 ASK 分支提取 target
+     * 用于审批 UI 展示与 {@link #grantTargetApproval} 记账。
+     */
+    public static String extractTarget(ToolInput input) {
+        if (input == null) return null;
+        String json = input.toJson();
+        if (json == null) return null;
+        for (String key : new String[]{"\"target\"", "\"path\"", "\"url\"", "\"channel\"", "\"to\""}) {
+            int idx = json.indexOf(key);
+            if (idx < 0) continue;
+            int colon = json.indexOf(':', idx);
+            if (colon < 0) continue;
+            int quoteStart = json.indexOf('"', colon + 1);
+            if (quoteStart < 0) continue;
+            int quoteEnd = json.indexOf('"', quoteStart + 1);
+            if (quoteEnd < 0) continue;
+            return json.substring(quoteStart + 1, quoteEnd);
+        }
+        return null;
+    }
+
+    /**
+     * 授予 target-scoped 预授权 — 用户批准 "always allow this tool for this target"。
+     * <p>
+     * 借鉴 OpenWorker permissions.py:62-80 的 standing_rule_candidate：
+     * <ul>
+     *   <li>只有非 exec/destructive 工具 + 非空 target 才有资格</li>
+     *   <li>批准后，后续相同 tool + target 的调用自动放行</li>
+     *   <li>不同 target 仍需单独批准（send_message 到 #general 不影响 #random）</li>
+     * </ul>
+     * <p>
+     * 由审批 UI/CLI 在用户选择 "Always allow for this target" 时调用。
+     *
+     * @param toolName 工具名
+     * @param target   目标标识（如 "#general"、"slack:C12345"、"https://api.example.com"）
+     */
+    public void grantTargetApproval(String toolName, String target) {
+        if (toolName == null || target == null || target.isBlank()) return;
+        if (TARGET_SCOPING_EXCLUDED.contains(toolName.toLowerCase())) {
+            log.debug("[Permission] Target scoping not eligible for exec/destructive tool: {}", toolName);
+            return;
+        }
+        sessionAllowTargetRules
+                .computeIfAbsent(toolName, k -> ConcurrentHashMap.newKeySet())
+                .add(target);
+        log.info("[Permission] Target-scoped approval granted: {} → {}", toolName, target);
+    }
+
+    /** 清除所有 target-scoped 预授权 — 供 session 重置或测试使用。 */
+    public void clearTargetApprovals() {
+        sessionAllowTargetRules.clear();
+    }
+
+    /** 查询某工具是否有 target-scoped 预授权（供测试断言）。 */
+    public boolean hasTargetApproval(String toolName, String target) {
+        Set<String> targets = sessionAllowTargetRules.get(toolName);
+        return targets != null && targets.contains(target);
     }
 
     /**
@@ -969,6 +1112,7 @@ public class PermissionChecker {
         denyRules.clear();
         askRules.clear();
         allowRules.clear();
+        sessionAllowTargetRules.clear();
     }
 
     public void recordDenial() {

@@ -101,9 +101,9 @@ interface WorkflowStore {
   setControlWs: (ws: WebSocket | null) => void;
   hotPatchParam: (targetNode: string, params: Record<string, number>) => void;
   onDagEvent: (event: { eventType: string; nodeId?: string; error?: string; durationMs?: number; [key: string]: unknown }) => void;
-  autoCompile: (userIdea: string) => Promise<void>;
+  autoCompile: (userIdea: string) => Promise<boolean>;
   compileToWorkflow: () => CompiledWorkflowManifest;
-  deploy: () => Promise<void>;
+  deploy: () => Promise<boolean>;
 }
 
 let idCounter = 1;
@@ -138,6 +138,8 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   availableRoles: [],
   availableSkills: [],
   fetchCatalogs: async () => {
+    // 幂等：已拉取过资产则跳过，避免 overlay 内 WorkflowConfigRail 的 useEffect 二次调用重置 enabledRoles
+    if (get().availableRoles.length > 0) return;
     try {
       const token = "AIOS-SUPER-SECRET-KEY";
       const res = await axios.get(`${AIOS_API_URL}/api/registry/catalogs?token=${token}`);
@@ -208,7 +210,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         {
           ...connection,
           animated: true,
-          style: { stroke: "#00f0ff", strokeWidth: 2 },
+          style: { stroke: "rgb(var(--primary))", strokeWidth: 2 },
         },
         state.edges
       ),
@@ -312,6 +314,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     set({ workflowName: idea.substring(0, 20).replace(/\s+/g, "_") });
 
     try {
+      // 成功返回 true，失败返回 false（供 chat send-flow 检测；旧调用方忽略返回值）
       showToast("正在请示架构师，请稍候...", "info");
 
       // 调用后端拓扑编译 API，设置较长的超时时间
@@ -323,7 +326,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
           enabledSkills: get().enabledSkills,
           enabledRoles: get().enabledRoles,
         },
-        { timeout: 120000 }
+        { timeout: 360000 }
       );
 
       let rawData = res.data;
@@ -395,7 +398,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
             source: dep,
             target: targetId,
             animated: true,
-            style: { stroke: "#00f0ff", strokeWidth: 2 },
+            style: { stroke: "rgb(var(--primary))", strokeWidth: 2 },
           });
         });
       });
@@ -405,9 +408,11 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         `架构师规划完毕！生成 ${flowNodes.length} 个并发节点`,
         "success"
       );
+      return true;
     } catch (err) {
       console.error("[AIOS] Auto-compile failed:", err);
       showToast("后端响应超时或失败，请检查后端服务", "error");
+      return false;
     }
   },
 
@@ -471,7 +476,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     // 物理防呆：节点数 > 1 时，如果没有连线，不允许部署
     if (nodes.length > 1 && edges.length === 0) {
       showToast("拓扑图中存在未连线的孤立节点，请先连接它们", "error");
-      return;
+      return false;
     }
 
     set({ deploying: true });
@@ -490,13 +495,14 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         `${AIOS_API_URL}/api/workflow/deploy`,
         manifest,
         {
-          timeout: 30000,
+          timeout: 60000,
           headers: { Authorization: "Bearer AIOS-SUPER-SECRET-KEY" },
         }
       );
 
       console.log("[AIOS] Deploy response:", response.data);
       showToast("已将工作流拓扑发送至 AIOS 内核！", "success");
+      return true;
     } catch (err) {
       // 即使后端不可达，也打印编译结果供调试
       const manifest = compileToWorkflow();
@@ -510,6 +516,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       } else {
         showToast("部署失败，请检查后端服务", "error");
       }
+      return false;
     } finally {
       set({ deploying: false });
     }

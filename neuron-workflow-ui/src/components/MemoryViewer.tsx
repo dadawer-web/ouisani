@@ -28,6 +28,8 @@ import {
  * - 按 domain 过滤 + timestamp 倒序
  * - 503 兜底：后端未注入 primary store 时显示配置提示
  *
+ * 视觉语言对齐 cc-haha「Technical Atelier」：暖纸卡片 + 古铜/苔绿 domain 胶囊。
+ *
  * OS 类比：相当于 Linux 的 `/proc/<pid>/maps` 浏览器 —— 用户态可查看并修改
  * 内核 VersionedMemoryStore 的运行时状态。
  */
@@ -80,24 +82,24 @@ export default function MemoryViewer() {
   const agentCount = memories.filter((m) => m.domain === "AGENT").length;
 
   return (
-    <div className="flex h-full flex-col gap-2 p-3 font-mono">
+    <div className="flex h-full flex-col gap-2 p-3">
       {/* ═══ 顶栏：agentId 输入 + Load + Refresh + lastUpdated ═══ */}
       <div className="flex flex-shrink-0 items-center gap-2">
-        <div className="flex flex-1 items-center gap-2 rounded-md border border-violet-500/30 bg-black/60 px-3 py-1.5">
-          <Brain className="h-3.5 w-3.5 text-violet-400" />
+        <div className="flex flex-1 items-center gap-2 rounded-lg bg-surface-container-low px-3 py-1.5 ghost-border">
+          <Brain className="h-3.5 w-3.5 text-primary" />
           <input
             type="text"
             value={inputId}
             onChange={(e) => setInputId(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="agentId (e.g. agent_1)"
-            className="flex-1 bg-transparent text-xs text-zinc-100 placeholder-zinc-600 outline-none"
+            className="flex-1 bg-transparent text-xs text-on-surface placeholder:text-outline/50 focus:outline-none"
           />
         </div>
         <button
           onClick={handleLoad}
           disabled={loading || !inputId.trim()}
-          className="flex items-center gap-1.5 rounded-md border border-violet-500/40 bg-violet-900/30 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-violet-300 transition-all hover:border-violet-400/70 hover:bg-violet-900/50 disabled:opacity-40"
+          className="btn-primary-ink flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
         >
           {loading ? (
             <Loader2 className="h-3 w-3 animate-spin" />
@@ -110,12 +112,12 @@ export default function MemoryViewer() {
           onClick={() => fetchMemories()}
           disabled={loading || !agentId.trim()}
           title="刷新当前 agentId 的记忆列表"
-          className="flex items-center gap-1.5 rounded-md border border-zinc-700/50 bg-zinc-900/40 px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-400 transition-all hover:border-zinc-600 hover:text-zinc-200 disabled:opacity-40"
+          className="flex items-center gap-1.5 rounded-lg bg-surface-container-high px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-outline transition-colors hover:bg-surface-container-highest hover:text-primary disabled:opacity-40"
         >
           <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
         </button>
         {lastUpdated && (
-          <span className="text-[9px] text-zinc-600">
+          <span className="font-mono text-[9px] text-outline">
             {formatTs(lastUpdated)}
           </span>
         )}
@@ -123,29 +125,29 @@ export default function MemoryViewer() {
 
       {/* ═══ Filter 切换 + 计数 ═══ */}
       <div className="flex flex-shrink-0 items-center gap-2">
-        <div className="flex items-center gap-0.5 rounded-md border border-zinc-800/50 bg-black/40 p-0.5">
+        <div className="flex items-center gap-0.5 rounded-lg bg-surface-container-low p-0.5 ghost-border">
           {(["ALL", "USER", "AGENT"] as MemoryFilter[]).map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
-              className={`rounded px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-wider transition-all ${
+              className={`rounded-md px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${
                 filter === f
                   ? f === "USER"
-                    ? "bg-violet-900/60 text-violet-300"
+                    ? "bg-primary-fixed/60 text-primary"
                     : f === "AGENT"
-                      ? "bg-cyan-900/60 text-cyan-300"
-                      : "bg-zinc-700/60 text-zinc-200"
-                  : "text-zinc-500 hover:text-zinc-300"
+                      ? "bg-tertiary-container/50 text-on-tertiary-container"
+                      : "bg-surface-container-highest text-on-surface"
+                  : "text-outline hover:text-on-surface"
               }`}
             >
               {f}
             </button>
           ))}
         </div>
-        <span className="text-[9px] text-zinc-600">
+        <span className="font-mono text-[9px] text-outline">
           {filteredMemories.length}/{memories.length} shown
           {memories.length > 0 && (
-            <span className="ml-1 text-zinc-700">
+            <span className="ml-1 text-outline/60">
               (U:{userCount} A:{agentCount})
             </span>
           )}
@@ -153,20 +155,20 @@ export default function MemoryViewer() {
       </div>
 
       {/* ═══ 内容区 ═══ */}
-      <div className="flex-1 overflow-y-auto min-h-0 custom-scrollbar">
-        {/* 503 特殊提示 */}
+      <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
+        {/* 503 特殊提示 —— primary-fixed 配置提示卡 */}
         {error === ERR_PRIMARY_STORE_NOT_CONFIGURED && (
-          <div className="flex flex-col items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-950/20 p-6 text-center">
-            <ServerCrash className="h-8 w-8 text-amber-400" />
-            <div className="text-xs font-bold text-amber-300">
+          <div className="flex flex-col items-center gap-3 rounded-xl bg-primary-fixed/30 p-6 text-center ghost-border">
+            <ServerCrash className="h-8 w-8 text-primary" />
+            <div className="font-headline text-xs font-bold text-primary">
               Primary Memory Store Not Configured
             </div>
-            <div className="text-[10px] leading-relaxed text-amber-200/70">
-              后端 <code className="text-amber-300">VersionedMemoryStore</code> 未注入。
+            <div className="text-[10px] leading-relaxed text-on-surface-variant">
+              后端 <code className="font-mono text-primary">VersionedMemoryStore</code> 未注入。
               <br />
               请确认启动时已调用
               <br />
-              <code className="rounded bg-amber-900/40 px-1.5 py-0.5 text-amber-200">
+              <code className="mt-1 inline-block rounded bg-surface-container-lowest px-1.5 py-0.5 font-mono text-on-surface">
                 AiosAppManager.configure(scheduler)
               </code>
             </div>
@@ -175,15 +177,15 @@ export default function MemoryViewer() {
 
         {/* 通用错误 */}
         {error && error !== ERR_PRIMARY_STORE_NOT_CONFIGURED && (
-          <div className="flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-950/20 p-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-400" />
-            <div className="text-[11px] text-red-300/90">{error}</div>
+          <div className="flex items-start gap-2 rounded-lg bg-error-container/40 p-3 ghost-border">
+            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-error" />
+            <div className="text-[11px] text-on-error-container">{error}</div>
           </div>
         )}
 
         {/* 加载中 */}
         {loading && memories.length === 0 && (
-          <div className="flex items-center justify-center gap-2 py-12 text-zinc-500">
+          <div className="flex items-center justify-center gap-2 py-12 text-outline">
             <Loader2 className="h-4 w-4 animate-spin" />
             <span className="text-[11px]">Loading memories...</span>
           </div>
@@ -191,7 +193,7 @@ export default function MemoryViewer() {
 
         {/* 空状态 */}
         {!loading && !error && memories.length === 0 && (
-          <div className="flex flex-col items-center gap-2 py-12 text-zinc-600">
+          <div className="flex flex-col items-center gap-2 py-12 text-outline">
             <Brain className="h-8 w-8 opacity-30" />
             <span className="text-[11px]">
               {agentId.trim()
@@ -273,48 +275,44 @@ function MemoryCard({
 
   return (
     <div
-      className={`mb-2 rounded-md border bg-black/60 p-2.5 transition-all ${
-        isUser
-          ? "border-violet-500/30 hover:border-violet-500/50"
-          : "border-cyan-500/30 hover:border-cyan-500/50"
-      } ${pending ? "opacity-70" : ""}`}
+      className={`mb-2 rounded-lg bg-surface-container-lowest p-2.5 ghost-border transition-all hover:ring-1 hover:ring-primary/30 ${
+        pending ? "opacity-70" : ""
+      }`}
     >
       {/* ── 头部：key + source + timestamp + version ── */}
       <div className="flex items-start gap-2">
-        <div className="flex-1 min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span
-              className={`truncate font-mono text-[11px] font-bold ${
-                isUser ? "text-violet-300" : "text-cyan-300"
-              }`}
+              className="truncate font-mono text-[11px] font-bold text-on-surface"
               title={record.key}
             >
               {record.key}
             </span>
             {pending && (
-              <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-zinc-500" />
+              <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-outline" />
             )}
           </div>
-          <div className="mt-0.5 flex items-center gap-2 text-[9px] text-zinc-600">
+          <div className="mt-0.5 flex items-center gap-2 text-[9px] text-outline">
             {record.source && (
-              <span className="rounded bg-zinc-800/60 px-1.5 py-0.5">
+              <span className="rounded bg-surface-container-high px-1.5 py-0.5 font-mono">
                 src: {record.source}
               </span>
             )}
-            <span>{formatTs(record.timestamp)}</span>
-            <span className="text-zinc-700">v{record.version}</span>
+            <span className="font-mono">{formatTs(record.timestamp)}</span>
+            <span className="font-mono text-outline/70">v{record.version}</span>
           </div>
         </div>
 
-        {/* Domain 切换 */}
+        {/* Domain 胶囊 —— USER 用 primary-fixed，AGENT 用 tertiary-container */}
         <button
           onClick={onDomainToggle}
           disabled={pending}
           title={`切换 domain (当前 ${record.domain})`}
-          className={`flex-shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider transition-all disabled:opacity-50 ${
+          className={`pill flex-shrink-0 transition-opacity disabled:opacity-50 ${
             isUser
-              ? "bg-violet-900/60 text-violet-300 hover:bg-violet-800/70"
-              : "bg-cyan-900/60 text-cyan-300 hover:bg-cyan-800/70"
+              ? "bg-primary-fixed/60 text-primary"
+              : "bg-tertiary-container/50 text-on-tertiary-container"
           }`}
         >
           {record.domain}
@@ -326,7 +324,7 @@ function MemoryCard({
             onClick={onDeleteClick}
             disabled={pending}
             title="删除此记忆"
-            className="flex-shrink-0 rounded p-1 text-zinc-600 transition-all hover:bg-red-900/40 hover:text-red-400 disabled:opacity-30"
+            className="flex-shrink-0 rounded p-1 text-outline transition-colors hover:bg-error-container/40 hover:text-error disabled:opacity-30"
           >
             <Trash2 className="h-3 w-3" />
           </button>
@@ -334,13 +332,13 @@ function MemoryCard({
           <div className="flex flex-shrink-0 items-center gap-1">
             <button
               onClick={onDeleteConfirm}
-              className="rounded bg-red-900/60 px-1.5 py-0.5 text-[9px] font-bold uppercase text-red-300 hover:bg-red-800/80"
+              className="rounded bg-error-container/60 px-1.5 py-0.5 text-[9px] font-bold uppercase text-error hover:bg-error-container/80"
             >
               Del
             </button>
             <button
               onClick={onDeleteCancel}
-              className="rounded bg-zinc-800/60 px-1.5 py-0.5 text-[9px] font-bold uppercase text-zinc-400 hover:bg-zinc-700/60"
+              className="rounded bg-surface-container-high px-1.5 py-0.5 text-[9px] font-bold uppercase text-outline hover:bg-surface-container-highest"
             >
               No
             </button>
@@ -352,8 +350,8 @@ function MemoryCard({
       {record.content && (
         <div className="mt-1.5">
           <pre
-            className={`whitespace-pre-wrap break-all rounded bg-zinc-900/40 p-1.5 text-[10px] leading-relaxed text-zinc-400 ${
-              expanded ? "max-h-48 overflow-y-auto custom-scrollbar" : ""
+            className={`whitespace-pre-wrap break-all rounded bg-surface-container-low p-1.5 font-mono text-[10px] leading-relaxed text-on-surface-variant ${
+              expanded ? "custom-scrollbar max-h-48 overflow-y-auto" : ""
             }`}
           >
             {truncated}
@@ -361,7 +359,7 @@ function MemoryCard({
           {record.content.length > 200 && (
             <button
               onClick={() => setExpanded((v) => !v)}
-              className="mt-0.5 flex items-center gap-0.5 text-[9px] text-zinc-600 hover:text-zinc-400"
+              className="mt-0.5 flex items-center gap-0.5 text-[9px] text-outline hover:text-primary"
             >
               {expanded ? (
                 <>
@@ -377,9 +375,9 @@ function MemoryCard({
         </div>
       )}
 
-      {/* ── Confidence slider ── */}
+      {/* ── Confidence slider —— 古铜主题色，CSS 变量自适应明暗 ── */}
       <div className="mt-2 flex items-center gap-2">
-        <span className="text-[9px] uppercase tracking-wider text-zinc-600">
+        <span className="text-[9px] font-bold uppercase tracking-wider text-outline">
           conf
         </span>
         <input
@@ -397,22 +395,19 @@ function MemoryCard({
             const val = parseFloat((e.target as HTMLInputElement).value);
             if (val !== record.confidence) onConfidenceChange(val);
           }}
-          className="flex-1 accent-cyan-400"
+          className="h-1 flex-1 cursor-pointer appearance-none rounded-full accent-primary"
           style={{
-            background: `linear-gradient(to right, rgba(34,211,238,0.4) 0%, rgba(34,211,238,0.4) ${draftConfidence * 100}%, rgba(39,39,42,0.6) ${draftConfidence * 100}%, rgba(39,39,42,0.6) 100%)`,
-            height: "3px",
-            borderRadius: "2px",
+            background: `linear-gradient(to right, rgb(var(--primary) / 0.7) 0%, rgb(var(--primary) / 0.7) ${draftConfidence * 100}%, rgb(var(--outline-variant) / 0.4) ${draftConfidence * 100}%, rgb(var(--outline-variant) / 0.4) 100%)`,
           }}
         />
         <span
-          className={`w-8 text-right text-[10px] font-bold ${
+          className={`w-8 text-right font-mono text-[10px] font-bold ${
             draftConfidence >= 0.7
-              ? "text-emerald-400"
+              ? "text-tertiary"
               : draftConfidence >= 0.4
-                ? "text-amber-400"
-                : "text-red-400"
+                ? "text-primary"
+                : "text-error"
           }`}
-          style={{ textShadow: "0 0 6px currentColor" }}
         >
           {draftConfidence.toFixed(2)}
         </span>

@@ -228,6 +228,41 @@ public class LlmRouter implements LlmProvider {
         }
     }
 
+    /**
+     * 流式推理路由（含 ephemeral 系统上下文块）— 把 ephemeralContext 透传给底层 Provider。
+     * <p>
+     * Provider（如 OpenAiAdapter）会把 ephemeralContext 追加为 &lt;system-context&gt; 块到最后一条
+     * user message（send-time only，永不持久化）。降级分支同样透传 ephemeralContext 到
+     * {@code provider.think(prompt, systemPrompt, ephemeralContext)}，保证错误恢复路径不丢上下文。
+     */
+    public String thinkStream(String prompt, String systemPrompt, String ephemeralContext,
+                              java.util.function.Consumer<String> onDelta) {
+        RoutingDecision decision = route(prompt);
+        LlmProvider provider = resolveProvider(decision.backendName());
+
+        if (provider == null) {
+            log.warn("[LlmRouter] 无可用 Provider，降级到 NoopLlmProvider");
+            provider = firstAvailable(ComputeCore.P_CORE);
+            if (provider == null) {
+                String fallback = "Error: No LLM provider available";
+                onDelta.accept(fallback);
+                return fallback;
+            }
+        }
+
+        log.debug("[LlmRouter] thinkStream(ephemeral) 路由到: {} (core={})", provider.name(), provider.computeCore());
+
+        try {
+            return provider.thinkStream(prompt, systemPrompt, ephemeralContext, onDelta);
+        } catch (Exception e) {
+            log.error("[LlmRouter] thinkStream(ephemeral) 异常: {}", e.getMessage());
+            // 降级到同步模式 — 同样透传 ephemeralContext
+            String result = provider.think(prompt, systemPrompt, ephemeralContext);
+            onDelta.accept(result);
+            return result;
+        }
+    }
+
     /** 流式推理（无系统提示词） */
     public String thinkStream(String prompt, java.util.function.Consumer<String> onDelta) {
         return thinkStream(prompt, "", onDelta);
@@ -299,6 +334,48 @@ public class LlmRouter implements LlmProvider {
         }
 
         return result;
+    }
+
+    /**
+     * 多轮对话流式推理 — 与 {@link #thinkWithHistory} 对应的流式版本。
+     * <p>
+     * 路由策略与 thinkWithHistory 一致（按最后一条 user 消息选路），
+     * 流式语义与 thinkStream 一致（仅转发，不改变 delta）。异常时降级为
+     * 同步 thinkWithHistory 并一次性回调，保证调用方总能拿到完整回复。
+     */
+    @Override
+    public String thinkWithHistoryStream(List<ChatMessage> messages, String systemPrompt,
+                                         java.util.function.Consumer<String> onDelta) {
+        String lastUserMsg = messages.stream()
+                .filter(m -> "user".equals(m.role()))
+                .map(ChatMessage::contentAsString)
+                .reduce((first, second) -> second)
+                .orElse("");
+
+        RoutingDecision decision = route(lastUserMsg);
+        LlmProvider provider = resolveProvider(decision.backendName());
+
+        if (provider == null) {
+            log.warn("[LlmRouter] thinkWithHistoryStream 无可用 Provider，降级到 NoopLlmProvider");
+            provider = firstAvailable(ComputeCore.P_CORE);
+            if (provider == null) {
+                String fallback = "Error: No LLM provider available";
+                onDelta.accept(fallback);
+                return fallback;
+            }
+        }
+
+        log.debug("[LlmRouter] thinkWithHistoryStream 路由到: {} (core={})", provider.name(), provider.computeCore());
+
+        try {
+            return provider.thinkWithHistoryStream(messages, systemPrompt, onDelta);
+        } catch (Exception e) {
+            log.error("[LlmRouter] thinkWithHistoryStream 异常: {}", e.getMessage());
+            // 降级到同步模式
+            String result = provider.thinkWithHistory(messages, systemPrompt);
+            onDelta.accept(result);
+            return result;
+        }
     }
 
     @Override

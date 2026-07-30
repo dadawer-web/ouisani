@@ -9,7 +9,11 @@ interface VfsFile {
   name: string;
 }
 
-/** VFS 工作空间桥接器 — 前端与 VFS 双向打通（借鉴 Apboa 工作空间） */
+/**
+ * VFS 工作空间桥接器 — 前端与 VFS 双向打通（借鉴 Apboa 工作空间）。
+ *
+ * 视觉语言对齐 cc-haha「Technical Atelier」：暖纸拖拽区 + 幽灵边框 + 古铜主操作。
+ */
 export default function VfsWorkspaceBridge() {
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -158,10 +162,10 @@ export default function VfsWorkspaceBridge() {
   };
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex h-full flex-col gap-3 overflow-y-auto p-3">
       {/* ── 任务 ID 输入 ── */}
       <div>
-        <label className="mb-1 block text-[10px] font-medium tracking-wider text-cyan-400/80 uppercase">
+        <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-outline">
           Task ID
         </label>
         <input
@@ -169,20 +173,20 @@ export default function VfsWorkspaceBridge() {
           value={taskId}
           onChange={(e) => setTaskId(e.target.value)}
           placeholder="任务 ID（用于隔离文件）"
-          className="w-full rounded border border-zinc-700/50 bg-zinc-900/50 px-2 py-1.5 text-xs text-zinc-200 outline-none transition-colors focus:border-cyan-500/50"
+          className="w-full rounded-lg bg-surface-container-low px-2 py-1.5 text-xs text-on-surface placeholder:text-outline/50 focus:outline-none ghost-border focus:ring-1 focus:ring-primary/40"
         />
       </div>
 
-      {/* ── 拖拽上传区 ── */}
+      {/* ── 拖拽上传区 —— 虚线 outline-variant，拖入时古铜高亮 ── */}
       <div
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onClick={() => fileInputRef.current?.click()}
-        className={`relative flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 transition-all duration-300 ${
+        className={`relative flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 transition-all duration-300 ${
           isDragging
-            ? "border-cyan-400 bg-cyan-500/10 shadow-[0_0_20px_rgba(0,240,255,0.2)]"
-            : "border-zinc-700/50 bg-zinc-900/30 hover:border-cyan-600/50 hover:bg-zinc-900/50"
+            ? "border-primary bg-primary-fixed/20"
+            : "border-outline-variant/50 bg-surface-container-low hover:border-primary/50 hover:bg-surface-container"
         }`}
       >
         <input
@@ -196,36 +200,36 @@ export default function VfsWorkspaceBridge() {
 
         {uploading ? (
           <>
-            <Loader2 className="h-8 w-8 animate-spin text-cyan-400" />
-            <span className="mt-2 text-xs text-cyan-300">正在上传并解压...</span>
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <span className="mt-2 text-xs text-primary">正在上传并解压...</span>
           </>
         ) : (
           <>
             <Upload
               className={`h-8 w-8 transition-colors ${
-                isDragging ? "text-cyan-300" : "text-zinc-500"
+                isDragging ? "text-primary" : "text-outline"
               }`}
             />
-            <span className="mt-2 text-center text-xs text-zinc-400">
+            <span className="mt-2 text-center text-xs text-on-surface-variant">
               {isDragging
                 ? "松开鼠标上传"
                 : "拖拽 ZIP/文件到此处，或点击选择"}
             </span>
-            <span className="mt-1 text-[9px] text-zinc-600">
+            <span className="mt-1 font-mono text-[9px] text-outline">
               ZIP 自动解压到 /vfs/workspace/{taskId}/
             </span>
           </>
         )}
       </div>
 
-      {/* ── 上传结果 ── */}
+      {/* ── 上传结果 —— tertiary 成功语义 ── */}
       {uploadResult && (
-        <div className="flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-900/20 px-3 py-2">
-          <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-emerald-400" />
-          <span className="text-[11px] text-emerald-300">{uploadResult}</span>
+        <div className="flex items-start gap-2 rounded-lg bg-tertiary-container/30 px-3 py-2 ghost-border">
+          <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-tertiary" />
+          <span className="text-[11px] text-on-tertiary-container">{uploadResult}</span>
           <button
             onClick={() => setUploadResult(null)}
-            className="ml-auto text-emerald-500/40 hover:text-emerald-300"
+            className="ml-auto text-outline/50 hover:text-on-surface"
           >
             <X className="h-3 w-3" />
           </button>
@@ -233,12 +237,12 @@ export default function VfsWorkspaceBridge() {
       )}
 
       {uploadError && (
-        <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-900/20 px-3 py-2">
-          <AlertCircle className="h-4 w-4 flex-shrink-0 text-red-400" />
-          <span className="text-[11px] text-red-300">{uploadError}</span>
+        <div className="flex items-start gap-2 rounded-lg bg-error-container/40 px-3 py-2 ghost-border">
+          <AlertCircle className="h-4 w-4 flex-shrink-0 text-error" />
+          <span className="text-[11px] text-on-error-container">{uploadError}</span>
           <button
             onClick={() => setUploadError(null)}
-            className="ml-auto text-red-500/40 hover:text-red-300"
+            className="ml-auto text-error/50 hover:text-error"
           >
             <X className="h-3 w-3" />
           </button>
@@ -246,10 +250,10 @@ export default function VfsWorkspaceBridge() {
       )}
 
       {/* ── VFS 文件浏览器 ── */}
-      <div>
+      <div className="flex min-h-0 flex-1 flex-col">
         <div className="mb-2 flex items-center gap-2">
-          <FolderTree className="h-3.5 w-3.5 text-cyan-400" />
-          <span className="text-[10px] font-medium tracking-wider text-cyan-400/80 uppercase">
+          <FolderTree className="h-3.5 w-3.5 text-primary" />
+          <span className="font-headline text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">
             VFS Browser
           </span>
         </div>
@@ -261,32 +265,32 @@ export default function VfsWorkspaceBridge() {
             onChange={(e) => setBrowsePath(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && browseVfs(browsePath)}
             placeholder="/vfs/workspace/..."
-            className="flex-1 rounded border border-zinc-700/50 bg-zinc-900/50 px-2 py-1 font-mono text-[10px] text-zinc-300 outline-none focus:border-cyan-500/50"
+            className="flex-1 rounded-lg bg-surface-container-low px-2 py-1 font-mono text-[10px] text-on-surface placeholder:text-outline/50 focus:outline-none ghost-border focus:ring-1 focus:ring-primary/40"
           />
           <button
             onClick={() => browseVfs(browsePath)}
             disabled={browsing}
-            className="rounded border border-cyan-700/40 bg-cyan-900/20 px-2 py-1 text-[9px] font-bold uppercase text-cyan-400 transition-all hover:bg-cyan-900/40 disabled:opacity-40"
+            className="btn-primary-ink rounded-lg px-2 py-1 text-[9px] font-bold uppercase text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
           >
             {browsing ? <Loader2 className="h-3 w-3 animate-spin" /> : "Go"}
           </button>
         </div>
 
-        {/* 文件列表 */}
-        <div className="max-h-40 overflow-y-auto rounded-lg border border-zinc-800/50 bg-black/30">
+        {/* 文件列表 —— 无分割线，hover 用色阶分区 */}
+        <div className="custom-scrollbar max-h-72 flex-1 overflow-y-auto rounded-lg bg-surface-container-lowest ghost-border">
           {files.length === 0 ? (
-            <div className="px-3 py-4 text-center text-[10px] text-zinc-600">
+            <div className="px-3 py-4 text-center text-[10px] text-outline">
               暂无文件，上传后自动刷新
             </div>
           ) : (
             files.map((file) => (
               <div
                 key={file.path}
-                className="group flex items-center gap-2 border-b border-zinc-800/30 px-3 py-1.5 transition-colors hover:bg-zinc-800/30"
+                className="group flex items-center gap-2 px-3 py-1.5 transition-colors hover:bg-surface-container-high"
               >
-                <FileText className="h-3 w-3 flex-shrink-0 text-zinc-500" />
+                <FileText className="h-3 w-3 flex-shrink-0 text-outline" />
                 <span
-                  className="flex-1 truncate font-mono text-[10px] text-zinc-300 cursor-pointer hover:text-cyan-400"
+                  className="flex-1 cursor-pointer truncate font-mono text-[10px] text-on-surface-variant hover:text-primary"
                   onClick={() => previewFile(file.path)}
                   title={file.path}
                 >
@@ -297,14 +301,14 @@ export default function VfsWorkspaceBridge() {
                   className="opacity-0 transition-opacity group-hover:opacity-100"
                   title="预览"
                 >
-                  <FileText className="h-3 w-3 text-cyan-500/60 hover:text-cyan-400" />
+                  <FileText className="h-3 w-3 text-outline/60 hover:text-primary" />
                 </button>
                 <button
                   onClick={() => downloadFile(file.path)}
                   className="opacity-0 transition-opacity group-hover:opacity-100"
                   title="下载"
                 >
-                  <Download className="h-3 w-3 text-emerald-500/60 hover:text-emerald-400" />
+                  <Download className="h-3 w-3 text-outline/60 hover:text-tertiary" />
                 </button>
               </div>
             ))
@@ -312,14 +316,14 @@ export default function VfsWorkspaceBridge() {
         </div>
       </div>
 
-      {/* ── 文件预览弹窗 ── */}
+      {/* ── 文件预览弹窗 —— 氛围阴影 + 幽灵边框 ── */}
       {previewPath && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div className="relative flex h-[70vh] w-full max-w-3xl flex-col rounded-xl border border-cyan-500/40 bg-[#0a0a0f] shadow-2xl">
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-on-surface/40 backdrop-blur-sm">
+          <div className="ambient-shadow relative flex h-[70vh] w-full max-w-3xl flex-col rounded-xl bg-surface-container-lowest ghost-border-strong">
             {/* 标题栏 */}
-            <div className="flex items-center gap-2 border-b border-cyan-500/20 px-4 py-3">
-              <FileText className="h-4 w-4 text-cyan-400" />
-              <span className="flex-1 truncate font-mono text-xs text-cyan-300">
+            <div className="flex items-center gap-2 border-b border-outline-variant/20 px-4 py-3">
+              <FileText className="h-4 w-4 text-primary" />
+              <span className="flex-1 truncate font-mono text-xs text-on-surface">
                 {previewPath}
               </span>
               <button
@@ -327,30 +331,30 @@ export default function VfsWorkspaceBridge() {
                   setPreviewPath(null);
                   setPreviewContent(null);
                 }}
-                className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+                className="rounded-lg p-1 text-outline hover:bg-surface-container-high hover:text-on-surface"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
             {/* 内容区 */}
-            <div className="flex-1 overflow-auto p-4">
+            <div className="custom-scrollbar flex-1 overflow-auto p-4">
               {loadingPreview ? (
                 <div className="flex h-full items-center justify-center">
-                  <Loader2 className="h-6 w-6 animate-spin text-cyan-400" />
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 </div>
               ) : (
-                <pre className="font-mono text-xs leading-relaxed text-zinc-300 whitespace-pre-wrap break-all">
+                <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-on-surface-variant">
                   {previewContent}
                 </pre>
               )}
             </div>
 
             {/* 底部操作栏 */}
-            <div className="flex items-center justify-end gap-2 border-t border-zinc-800 px-4 py-3">
+            <div className="flex items-center justify-end gap-2 border-t border-outline-variant/20 px-4 py-3">
               <button
                 onClick={() => downloadFile(previewPath)}
-                className="flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-600/20 px-3 py-1.5 text-xs font-bold text-emerald-300 transition-all hover:bg-emerald-600/30"
+                className="btn-primary-ink flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold text-on-primary transition-opacity hover:opacity-90"
               >
                 <Download className="h-3.5 w-3.5" />
                 Download

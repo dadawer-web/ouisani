@@ -2,10 +2,12 @@
  * TelemetryRadar — AIOS 可观测性雷达大屏组件
  *
  * 实时可视化底层 Agent 协作与自愈状态：
- *   - Agent 节点：蓝色呼吸灯 (RUNNING) / 常亮绿色 (SUCCESS) / 红色震动 (HEALING)
+ *   - Agent 节点：古铜呼吸灯 (RUNNING) / 常亮苔绿 (SUCCESS) / 朱红震动 (HEALING)
  *   - 通讯飞梭：光点从 Sender 飞向 Receiver，贝塞尔曲线轨迹
- *   - 自愈警报：红色震动 + 气泡 Toast 显示重试信息
+ *   - 自愈警报：朱红震动 + 气泡 Toast 显示重试信息
  *   - 操作流瀑布：打字机效果逐条打印 AST/文件操作日志
+ *
+ * 视觉语言对齐 cc-haha「Technical Atelier」：暖纸/古铜/苔绿/朱红，无霓虹发光。
  *
  * 接入方式：在 App.tsx 中引入并放置到合适位置即可。
  *   import TelemetryRadar from "@/components/TelemetryRadar";
@@ -27,35 +29,60 @@ const SHUTTLE_DURATION = 500; // 飞梭动画持续时间 (ms)
 const TYPING_SPEED = 30;      // 打字机效果速度 (ms/字符)
 
 // ════════════════════════════════════════════════════════════════
+//  CSS 变量读取 —— 让 canvas 颜色随明暗主题翻转
+// ════════════════════════════════════════════════════════════════
+
+/** 从 :root 读取形如 "143 72 47" 的 RGB 通道串，供 canvas 拼 rgba() 用。 */
+function readRgbVar(name: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback;
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue(name)
+    .trim();
+  return raw || fallback;
+}
+
+// 缓存主题色，避免每帧 getComputedStyle；每 500ms 刷新一次以捕捉主题切换。
+let primaryRgbCache = "143 72 47";
+let outlineVariantRgbCache = "218 193 186";
+let lastVarRefresh = 0;
+function refreshThemeVars(): void {
+  const now = performance.now();
+  if (now - lastVarRefresh < 500) return;
+  lastVarRefresh = now;
+  primaryRgbCache = readRgbVar("--primary", "143 72 47");
+  outlineVariantRgbCache = readRgbVar("--outline-variant", "218 193 186");
+}
+
+// ════════════════════════════════════════════════════════════════
 //  子组件：Agent 节点
 // ════════════════════════════════════════════════════════════════
 
-/** 节点外圈样式映射 */
-const nodeStyles: Record<string, { ring: string; glow: string; label: string }> = {
+/** 节点外圈样式映射 —— 对齐 cc-haha 语义色，去霓虹发光。 */
+const nodeStyles: Record<string, { ring: string; label: string; dot: string }> = {
   IDLE: {
-    ring: "border-zinc-600",
-    glow: "",
-    label: "text-zinc-500",
+    ring: "ring-outline/40",
+    label: "text-outline",
+    dot: "bg-outline/60",
   },
   RUNNING: {
-    ring: "border-cyan-400/60",
-    glow: "shadow-[0_0_20px_rgba(0,255,255,0.4),0_0_40px_rgba(0,255,255,0.15)]",
-    label: "text-cyan-300",
+    ring: "ring-primary/70",
+    label: "text-primary",
+    dot: "bg-primary",
   },
   SUCCESS: {
-    ring: "border-emerald-400/70",
-    glow: "shadow-[0_0_15px_rgba(52,211,153,0.5)]",
-    label: "text-emerald-300",
+    ring: "ring-tertiary/70",
+    label: "text-tertiary",
+    dot: "bg-tertiary",
   },
   HEALING: {
-    ring: "border-red-500/80",
-    glow: "shadow-[0_0_25px_rgba(239,68,68,0.6),0_0_50px_rgba(239,68,68,0.25)]",
-    label: "text-red-300",
+    ring: "ring-error/80",
+    label: "text-error",
+    dot: "bg-error",
   },
   FAILED: {
-    ring: "border-red-700",
-    glow: "shadow-[0_0_20px_rgba(185,28,28,0.5)]",
-    label: "text-red-400",
+    ring: "ring-error",
+    label: "text-error",
+    dot: "bg-error",
   },
 };
 
@@ -69,30 +96,22 @@ function AgentNode({ agent }: { agent: RadarAgent }) {
       className="absolute -translate-x-1/2 -translate-y-1/2"
       style={{ left: `${agent.x * 100}%`, top: `${agent.y * 100}%` }}
     >
-      {/* 节点主体 */}
+      {/* 节点主体 —— surface-container-lowest 浮起卡片 + 幽灵环 */}
       <div
         className={cn(
-          "relative flex h-14 w-14 items-center justify-center rounded-full border-2 transition-all duration-300",
+          "relative flex h-14 w-14 items-center justify-center rounded-full bg-surface-container-lowest ring-2 transition-all duration-300",
           style.ring,
-          style.glow,
-          // RUNNING 蓝色呼吸灯
-          isRunning && "animate-pulse",
-          // HEALING 红色震动
+          // RUNNING 古铜呼吸灯
+          isRunning && "animate-soft-pulse",
+          // HEALING 朱红震动
           isHealing && "animate-shake"
         )}
-        style={{
-          background: "radial-gradient(circle, rgba(10,10,15,0.95) 0%, rgba(5,5,10,0.98) 100%)",
-        }}
       >
         {/* 内圈指示灯 */}
         <div
           className={cn(
             "h-4 w-4 rounded-full transition-colors duration-300",
-            agent.status === "IDLE" && "bg-zinc-600",
-            agent.status === "RUNNING" && "bg-cyan-400 shadow-[0_0_8px_rgba(0,255,255,0.8)]",
-            agent.status === "SUCCESS" && "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]",
-            agent.status === "HEALING" && "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]",
-            agent.status === "FAILED" && "bg-red-700"
+            style.dot
           )}
         />
       </div>
@@ -107,21 +126,21 @@ function AgentNode({ agent }: { agent: RadarAgent }) {
         {agent.label.length > 12 ? agent.label.slice(0, 12) + "…" : agent.label}
       </div>
 
-      {/* 自愈气泡 */}
+      {/* 自愈气泡 —— error-container 提示，无霓虹发光 */}
       {agent.healingBubble?.visible && (
         <div className="absolute -top-16 left-1/2 -translate-x-1/2 animate-fade-in">
-          <div className="relative rounded-lg border border-red-500/50 bg-red-950/90 px-3 py-2 shadow-[0_0_20px_rgba(239,68,68,0.3)] backdrop-blur-sm">
+          <div className="relative rounded-lg bg-error-container px-3 py-2 ambient-shadow-sm">
             <div className="flex items-center gap-1.5 text-[9px] font-mono">
-              <AlertTriangle className="h-3 w-3 text-red-400 shrink-0" />
-              <span className="text-red-200 font-bold">
+              <AlertTriangle className="h-3 w-3 text-error shrink-0" />
+              <span className="font-bold text-on-error-container">
                 Attempt {agent.healingBubble.attempt}/{agent.healingBubble.maxAttempts}
               </span>
             </div>
-            <div className="mt-0.5 text-[8px] text-red-400/70 max-w-[160px] truncate">
+            <div className="mt-0.5 text-[8px] text-on-error-container/70 max-w-[160px] truncate">
               Injecting context and healing...
             </div>
             {/* 气泡箭头 */}
-            <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 h-2 w-2 rotate-45 border-b border-r border-red-500/50 bg-red-950/90" />
+            <div className="absolute -bottom-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 bg-error-container" />
           </div>
         </div>
       )}
@@ -157,6 +176,9 @@ function ShuttleCanvas({
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, rect.width, rect.height);
 
+    // 每帧刷新一次主题色缓存（内部有 500ms 节流）
+    refreshThemeVars();
+
     const now = Date.now();
 
     for (const shuttle of shuttles) {
@@ -188,7 +210,7 @@ function ShuttleCanvas({
       const px = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * cx + t * t * ex;
       const py = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * cy + t * t * ey;
 
-      // 绘制轨迹线 (渐隐)
+      // 绘制轨迹线 (渐隐) —— 古铜色尾迹
       const trailSteps = 8;
       for (let i = 0; i < trailSteps; i++) {
         const tt = Math.max(0, t - (i / trailSteps) * 0.15);
@@ -198,16 +220,16 @@ function ShuttleCanvas({
 
         ctx.beginPath();
         ctx.arc(tx, ty, 2 - i * 0.15, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(0, 255, 255, ${alpha})`;
+        ctx.fillStyle = `rgba(${primaryRgbCache}, ${alpha})`;
         ctx.fill();
       }
 
-      // 绘制飞梭光点
+      // 绘制飞梭光点 —— 古铜色辉光（无霓虹，仅柔和径向渐变）
       const glowRadius = 6 + Math.sin(now / 100) * 2;
       const gradient = ctx.createRadialGradient(px, py, 0, px, py, glowRadius);
-      gradient.addColorStop(0, "rgba(0, 255, 255, 0.9)");
-      gradient.addColorStop(0.4, "rgba(0, 255, 255, 0.4)");
-      gradient.addColorStop(1, "rgba(0, 255, 255, 0)");
+      gradient.addColorStop(0, `rgba(${primaryRgbCache}, 0.9)`);
+      gradient.addColorStop(0.4, `rgba(${primaryRgbCache}, 0.4)`);
+      gradient.addColorStop(1, `rgba(${primaryRgbCache}, 0)`);
 
       ctx.beginPath();
       ctx.arc(px, py, glowRadius, 0, Math.PI * 2);
@@ -253,14 +275,14 @@ function LogWaterfall() {
   }, [logs.length]);
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-md border border-green-500/10 bg-black/90 backdrop-blur-md">
+    <div className="flex h-full flex-col overflow-hidden rounded-lg bg-surface-dim ghost-border">
       {/* 标题栏 */}
-      <div className="flex items-center gap-2 border-b border-green-500/10 bg-green-950/20 px-3 py-2">
-        <FileCode className="h-3 w-3 text-green-400" />
-        <span className="text-[10px] uppercase tracking-[0.2em] text-green-400/80">
+      <div className="flex items-center gap-2 bg-surface-container px-3 py-2">
+        <FileCode className="h-3 w-3 text-primary" />
+        <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-on-surface-variant">
           Operation Stream
         </span>
-        <span className="ml-auto text-[9px] text-green-700">
+        <span className="ml-auto text-[9px] text-outline">
           {logs.length}/{100}
         </span>
       </div>
@@ -268,11 +290,11 @@ function LogWaterfall() {
       {/* 日志流 */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto p-2 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-green-800/30"
+        className="custom-scrollbar flex-1 overflow-y-auto p-2"
       >
         {logs.length === 0 ? (
           <div className="flex h-full items-center justify-center">
-            <span className="animate-pulse text-[10px] text-green-800/40">
+            <span className="animate-soft-pulse text-[10px] text-outline/50">
               Waiting for operations...
             </span>
           </div>
@@ -316,15 +338,15 @@ function LogLine({ entry }: { entry: { id: string; text: string; typing: boolean
   return (
     <div
       className={cn(
-        "border-b border-green-500/5 py-0.5 text-[9px] leading-relaxed font-mono",
-        isHeal && "text-red-400/80",
-        isAst && "text-cyan-400/80",
-        !isHeal && !isAst && "text-green-400/80"
+        "py-0.5 text-[9px] leading-relaxed font-mono",
+        isHeal && "text-error",
+        isAst && "text-primary",
+        !isHeal && !isAst && "text-on-surface-variant"
       )}
     >
       {displayedText}
       {displayedText.length < entry.text.length && (
-        <span className="animate-pulse text-green-300">▌</span>
+        <span className="animate-soft-pulse text-primary">▌</span>
       )}
     </div>
   );
@@ -361,31 +383,31 @@ export default function TelemetryRadar() {
   const agentList = Array.from(agents.values());
 
   return (
-    <div className="flex h-full w-full flex-col gap-3 p-3 font-mono">
+    <div className="flex h-full w-full flex-col gap-3 p-3">
       {/* ═══ 顶栏：雷达标题 + 连接状态 ═══ */}
       <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2 rounded-md border border-cyan-500/20 bg-cyan-950/20 px-3 py-1.5">
-          <Radio className="h-3.5 w-3.5 text-cyan-400" />
-          <span className="text-[10px] font-bold uppercase tracking-[0.25em] text-cyan-300">
+        <div className="flex items-center gap-2 rounded-lg bg-primary-container/30 px-3 py-1.5">
+          <Radio className="h-3.5 w-3.5 text-primary" />
+          <span className="font-headline text-[10px] font-bold uppercase tracking-[0.25em] text-primary">
             Telemetry Radar
           </span>
         </div>
 
-        <div className="flex items-center gap-2 text-[9px] text-zinc-500">
+        <div className="flex items-center gap-2 text-[9px] text-outline">
           <Activity className="h-3 w-3" />
-          <span>{agentList.length} agents</span>
-          <span className="text-zinc-700">|</span>
-          <span>{shuttles.length} in-flight</span>
+          <span className="font-mono">{agentList.length} agents</span>
+          <span className="text-outline/40">·</span>
+          <span className="font-mono">{shuttles.length} in-flight</span>
         </div>
 
         <div className="ml-auto flex items-center gap-1.5">
           <div
             className={cn(
               "h-1.5 w-1.5 rounded-full",
-              connected ? "bg-emerald-400 animate-pulse" : "bg-red-500"
+              connected ? "bg-tertiary animate-soft-pulse" : "bg-error"
             )}
           />
-          <span className="text-[9px] text-zinc-600">
+          <span className="font-mono text-[9px] uppercase tracking-wider text-outline">
             {connected ? "LIVE" : "OFFLINE"}
           </span>
         </div>
@@ -394,20 +416,14 @@ export default function TelemetryRadar() {
       {/* ═══ 主内容区：雷达画布 + 操作流瀑布 ═══ */}
       <div className="grid min-h-0 flex-1 grid-cols-[1fr_280px] gap-3">
         {/* ── 左侧：雷达画布 ── */}
-        <div
-          className="relative overflow-hidden rounded-md border border-cyan-500/10 bg-[#050510]/95 backdrop-blur-xl"
-          style={{
-            boxShadow:
-              "0 0 30px rgba(0,255,255,0.05), inset 0 0 60px rgba(0,255,255,0.02)",
-          }}
-        >
+        <div className="relative overflow-hidden rounded-lg bg-surface-dim ghost-border">
           {/* 雷达网格背景 */}
-          <div className="absolute inset-0 opacity-20">
+          <div className="absolute inset-0 opacity-30">
             {/* 同心圆 */}
             {[0.15, 0.3, 0.45].map((r, i) => (
               <div
                 key={i}
-                className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-500/20"
+                className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-outline-variant/40"
                 style={{
                   width: `${r * 2 * 100}%`,
                   height: `${r * 2 * 100}%`,
@@ -415,13 +431,13 @@ export default function TelemetryRadar() {
               />
             ))}
             {/* 十字线 */}
-            <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-gradient-to-b from-transparent via-cyan-500/20 to-transparent" />
-            <div className="absolute left-0 top-1/2 h-px w-full -translate-y-1/2 bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent" />
+            <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-gradient-to-b from-transparent via-outline-variant/40 to-transparent" />
+            <div className="absolute left-0 top-1/2 h-px w-full -translate-y-1/2 bg-gradient-to-r from-transparent via-outline-variant/40 to-transparent" />
           </div>
 
           {/* 中心标记 */}
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-            <div className="h-1.5 w-1.5 rounded-full bg-cyan-500/40" />
+            <div className="h-1.5 w-1.5 rounded-full bg-primary/40" />
           </div>
 
           {/* Agent 节点层 */}
@@ -436,11 +452,11 @@ export default function TelemetryRadar() {
           {agentList.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="text-center">
-                <Send className="mx-auto h-8 w-8 text-cyan-800/30" />
-                <p className="mt-2 text-[10px] text-cyan-700/40">
+                <Send className="mx-auto h-8 w-8 text-outline/30" />
+                <p className="mt-2 text-[10px] text-outline/50">
                   Waiting for telemetry events...
                 </p>
-                <p className="mt-1 text-[9px] text-cyan-800/30">
+                <p className="mt-1 text-[9px] text-outline/40">
                   Deploy a workflow to see agent activity
                 </p>
               </div>

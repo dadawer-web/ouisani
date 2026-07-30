@@ -5,10 +5,12 @@ import com.ouisani.aios.core.middleware.MiddlewareRegistry;
 import com.ouisani.aios.core.network.AiosEventSchema;
 import com.ouisani.aios.core.network.AiosEventSchema.AiosEvent;
 import com.ouisani.aios.core.network.EventBus;
+import com.ouisani.aios.core.llm.StreamCancellationHook;
 import com.ouisani.aios.core.permission.PermissionChecker;
 import com.ouisani.aios.core.permission.PermissionDecision;
 import com.ouisani.aios.core.permission.PermissionMode;
 import com.ouisani.aios.core.permission.PermissionProfile;
+import com.ouisani.aios.core.permission.ToolPermissionChannel;
 import com.ouisani.aios.core.plugin.DynamicToolBridge;
 import com.ouisani.aios.core.plugin.ToolDefinition;
 import com.ouisani.aios.core.review.ReviewGate;
@@ -75,6 +77,15 @@ public class QueryEngine {
     // ── 三层历史压缩（借鉴 Agent Zero bulks/topics/current） ──
     private HistoryCompressor historyCompressor;
 
+    // ── 收敛检测器（连续 2 轮同文件同 hash 则终止，避免 v1→v5 无意义重写）──
+    private ConvergenceTracker convergenceTracker = new ConvergenceTracker();
+
+    // ── 流式中断（借鉴 OpenWorker engine.py:120-148 request_interrupt）──
+    /** 用户请求中断 — Stop 按钮设置此 flag */
+    private volatile boolean interruptRequested = false;
+    /** 当前 LLM 流的中断钩子 — requestInterrupt() 调用 hook.cancel() 打断 readLine() */
+    private volatile StreamCancellationHook streamHook;
+
     /**
      * 创建查询引擎（仅使用内核全局工具）。
      *
@@ -105,7 +116,7 @@ public class QueryEngine {
         this.availableTools = new ArrayList<>(ToolRegistry.instance().all());
         this.availableTools.addAll(extraTools);
         this.permissionChecker = new PermissionChecker();
-        this.historyCompressor = new HistoryCompressor(8000, this::generateSummary);
+        this.historyCompressor = new HistoryCompressor(4000, this::generateSummary);
     }
 
     /**
@@ -140,6 +151,64 @@ public class QueryEngine {
     /** package-private 访问器 —— 供同包测试验证画像注入后的权限决策。 */
     PermissionChecker permissionChecker() {
         return permissionChecker;
+    }
+
+    /**
+     * 持久化 partial-turn + notice 标记。借鉴 OpenWorker {@code engine.py:331-352}。
+     * <p>
+     * 非空 partial 先作为 assistant 消息入历史（用户已看到的文本不丢失），
+     * 随后追加 display-only 的 notice 标记。notice 在 {@link HistoryCompressor#buildHistoryText()}
+     * 中被剥离，provider 永远看不到；但 {@link HistoryCompressor#snapshotMessages()} 保留
+     * 供前端 reload 与 {@code on_compress_context} 中间件观察。
+     *
+     * @param partial    已流式输出的部分响应（可为 null/blank，此时跳过 assistant 消息）
+     * @param noticeText 已格式化的 notice 文本，形如 {@code [notice:error] ...} / {@code [notice:interrupted] ...}
+     */
+    void persistPartialTurn(String partial, String noticeText) {
+        if (partial != null && !partial.isBlank()) {
+            historyCompressor.addMessage("assistant", partial);
+        }
+        historyCompressor.addMessage(HistoryCompressor.ROLE_NOTICE, noticeText);
+    }
+
+    /** package-private 历史快照访问器 —— 供同包测试验证 partial-turn 持久化结果。 */
+    List<HistoryCompressor.Message> historySnapshot() {
+        return historyCompressor.snapshotMessages();
+    }
+
+    /** package-private provider-feed 访问器 —— 供同包测试验证 notice 被 buildHistoryText 剥离。 */
+    String historyText() {
+        return historyCompressor.buildHistoryText();
+    }
+
+    /**
+     * 请求中断当前查询 — 由 Stop 按钮调用。
+     * <p>
+     * 借鉴 OpenWorker {@code engine.py:120-148} 的 {@code request_interrupt()}：
+     * <ul>
+     *   <li><b>mid-stream</b>：{@code streamHook.cancel()} 关闭 InputStream，
+     *       打断阻塞中的 {@code BufferedReader.readLine()}，
+     *       OpenAiAdapter 返回已收到的 partial response</li>
+     *   <li><b>loop 检查点</b>：设置 {@code interruptRequested} flag，
+     *       Agent Loop 下一轮检查时提前退出</li>
+     * </ul>
+     * <p>
+     * 线程安全：volatile 字段 + 可从任意线程调用（Stop 按钮在 UI 线程）。
+     */
+    public void requestInterrupt() {
+        interruptRequested = true;
+        StreamCancellationHook hook = streamHook;
+        if (hook != null) {
+            log.info("[QueryEngine] 用户请求中断 — 取消 LLM 流式请求");
+            hook.cancel();
+        } else {
+            log.info("[QueryEngine] 用户请求中断 — 无活跃 LLM 流，将在下个检查点退出");
+        }
+    }
+
+    /** 查询是否被用户中断 */
+    public boolean isInterruptRequested() {
+        return interruptRequested;
     }
 
     /**
@@ -220,12 +289,18 @@ public class QueryEngine {
         }
 
         // 构建系统提示词 — on_system_prompt 串行管道（transformer）
+        // 【P1 ephemeral context】systemContext 不再 bake 进 systemPrompt，改为每轮以
+        // ephemeral <system-context> 块追加到最后一条 user message（send-time only，永不持久化）。
+        // systemPrompt 只保留静态身份（工具/技能/格式），跨轮稳定以利 LLM provider 的 KV cache 前缀匹配。
+        // 借鉴 OpenWorker engine.py:880-985 的 context_provider() + <system-context> 块。
         String systemPrompt = MiddlewareRegistry.instance().fireOnSystemPrompt(
-                buildSystemPrompt(systemContext));
+                buildSystemPrompt(""));
 
         // ── 三层历史压缩（借鉴 Agent Zero bulks/topics/current） ──
         // 初始化历史压缩器，将初始用户消息加入历史
         historyCompressor.clear();
+        convergenceTracker.reset();
+        interruptRequested = false;  // 重置中断 flag（新 query 开始）
         historyCompressor.addMessage("user", userMessage);
 
         // 构建完整 prompt（包含工具描述）— 通过历史压缩器管理
@@ -241,6 +316,11 @@ public class QueryEngine {
         int reviewFixCycles = 0; // ReviewGate soft/hard 修复轮次计数
 
         for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            // ── 中断检查点：每轮开始时检查用户是否按了 Stop ──
+            if (interruptRequested) {
+                log.info("[QueryEngine] 用户中断请求 — 在第 {} 轮开始时退出", round + 1);
+                return fireOnReplyBestEffort("查询已被用户中断。");
+            }
             log.info("[QueryEngine] 第 {}/{} 轮", round + 1, MAX_TOOL_ROUNDS);
 
             // ── Tracing Span：TURN 级，覆盖单轮 LLM+工具循环 ──
@@ -267,30 +347,60 @@ public class QueryEngine {
                 genSpan.setAttribute("prompt_length", fullPrompt.length());
                 genSpan.setAttribute("agent_id", agentId);
             }
+            // 【Partial-turn 持久化】streamingResponse 提升到 try 外，使 catch 块能访问
+            // 已收到的 partial response 并持久化（借鉴 OpenWorker engine.py:331-345）。
+            StringBuilder streamingResponse = new StringBuilder();
             try {
                 // ── 流式渲染 + 标准化事件 ──
                 // 借鉴 CopilotKit：LLM 响应逐 token 推送到前端
-                StringBuilder streamingResponse = new StringBuilder();
                 AiosEventSchema.emit(AiosEventSchema.textMessageStart(agentId, currentRunId, stepNum));
 
                 final int currentRound = round + 1;
                 // fullPrompt 在循环内会被重新赋值，lambda 捕获需 effectively-final 快照
                 final String currentPrompt = fullPrompt;
+                // 【P1 ephemeral context】每轮重算 ephemeral 上下文（send-time only，永不持久化）。
+                // 当前 = systemContext（如 RAG 结果）；预留扩展点：未来可加入当前时间/git/todo/plan-mode 提醒。
+                final String currentEphemeral = buildEphemeralContext(systemContext);
                 // ── on_model_call 洋葱中间件 ── LEAF = sdk.thinkStream（含 delta 流式回调）
                 // on_reasoning 折叠进此 hook（D2）——代码库无独立 reasoning 阶段，
                 // sdk.thinkStream 返回的 token 流混合 reasoning 与 content。
-                Middleware.ModelCallResult mcResult = MiddlewareRegistry.instance().fireOnModelCall(
-                        new Middleware.ModelCallContext(agentId, currentPrompt, currentRunId, currentRound),
-                        () -> Middleware.ModelCallResult.of(sdk.thinkStream(agentId, currentPrompt, delta -> {
-                            streamingResponse.append(delta);
-                            // 每个 delta 都广播 TEXT_MESSAGE_CONTENT 事件
-                            AiosEventSchema.emit(AiosEventSchema.textMessageContent(agentId, currentRunId, currentRound, delta));
-                        }))
-                );
+                // ── 绑定流式中断钩子（Stop 按钮能打断 readLine）──
+                StreamCancellationHook hook = new StreamCancellationHook();
+                streamHook = hook;
+                StreamCancellationHook.bindCurrent(hook);
+                Middleware.ModelCallResult mcResult;
+                try {
+                    mcResult = MiddlewareRegistry.instance().fireOnModelCall(
+                            new Middleware.ModelCallContext(agentId, currentPrompt, currentRunId, currentRound),
+                            () -> Middleware.ModelCallResult.of(sdk.thinkStream(agentId, currentPrompt, currentEphemeral, delta -> {
+                                streamingResponse.append(delta);
+                                // 每个 delta 都广播 TEXT_MESSAGE_CONTENT 事件
+                                AiosEventSchema.emit(AiosEventSchema.textMessageContent(agentId, currentRunId, currentRound, delta));
+                            }))
+                    );
+                } finally {
+                    StreamCancellationHook.unbindCurrent();
+                    streamHook = null;
+                }
                 llmResponse = mcResult.response();
 
                 AiosEventSchema.emit(AiosEventSchema.textMessageEnd(agentId, currentRunId, stepNum,
                         streamingResponse.toString()));
+
+                // ── 中断检查：LLM 流被取消时返回 partial response ──
+                if (interruptRequested) {
+                    log.info("[QueryEngine] LLM 流被用户中断，已收到 {} 字符 partial response",
+                            llmResponse != null ? llmResponse.length() : 0);
+                    // 【Partial-turn 持久化】中断路径也持久化 partial + interrupted notice。
+                    // 借鉴 OpenWorker engine.py:346-352：用户已看到的文本不丢失，notice 标记 reload 存活。
+                    persistPartialTurn(llmResponse,
+                            "[notice:interrupted] 用户中断了本次查询。");
+                    String partialNote = llmResponse != null && !llmResponse.isBlank()
+                            ? "\n\n[注：以上内容为中断前已生成的部分响应]"
+                            : "";
+                    return fireOnReplyBestEffort("查询已被用户中断。" + partialNote);
+                }
+
                 consecutiveErrors = 0;
                 lastLlmResponse = llmResponse;
                 if (genSpan != null) {
@@ -308,14 +418,29 @@ public class QueryEngine {
                 log.error("\u001B[31m[QueryEngine] 捕获异常。将错误反馈到 LLM 上下文。({}/{})\u001B[0m",
                         consecutiveErrors, MAX_CONSECUTIVE_ERRORS, e);
 
+                // 【Partial-turn 持久化】补发 textMessageEnd，让前端文本流闭合（携带已收到的 partial）。
+                // 原实现 catch 内不发射此事件，导致前端文本流永不闭合。
+                AiosEventSchema.emit(AiosEventSchema.textMessageEnd(
+                        agentId, currentRunId, stepNum, streamingResponse.toString()));
+
+                // 【Notice 持久化】partial（assistant）+ error 标记（display-only notice）入历史。
+                // 借鉴 OpenWorker engine.py:331-345：用户已看到的文本不丢失，notice 标记 reload 存活
+                // 但 buildHistoryText() 剥离，provider 永远看不到。
+                String errorNotice = "[notice:error] [System Error] " + errMsg
+                        + "\n\nPlease adjust your approach and try again. If the error persists, inform the user.";
+
                 if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                    // 熔断前也持久化 partial + notice（不丢失已生成内容）
+                    persistPartialTurn(streamingResponse.toString(),
+                            "[notice:error] [System Error] " + errMsg
+                            + "\n\n查询已中止，连续 " + consecutiveErrors + " 次系统错误。");
                     log.error("[QueryEngine] {} 次连续错误 — 中止查询循环", consecutiveErrors);
                     return "查询已中止，连续 " + consecutiveErrors + " 次系统错误。最后错误: " + errMsg;
                 }
 
-                // 将错误注入对话历史，让 LLM 自主判断是否换方式重试
-                fullPrompt = fullPrompt + "\n\n[System Error] " + errMsg
-                        + "\n\nPlease adjust your approach and try again. If the error persists, inform the user.";
+                // 持久化后从历史重建 prompt（notice 被剥离，LLM 仅见 partial assistant 消息）
+                persistPartialTurn(streamingResponse.toString(), errorNotice);
+                fullPrompt = systemPrompt + "\n\n" + historyCompressor.buildHistoryText();
                 continue;
             } finally {
                 if (genSpan != null) {
@@ -444,62 +569,95 @@ public class QueryEngine {
                 // ── 标准化事件协议：TOOL_CALL_COMPLETED ──
                 AiosEventSchema.emit(AiosEventSchema.toolCallCompleted(agentId, currentRunId, round + 1, tc.toolName, result, true));
             } else {
-                // 多工具调用 — 并行执行（CompletableFuture + 虚拟线程）
-                log.info("[QueryEngine] 正在并行执行 {} 个工具（第 {} 轮）", toolCalls.size(), round + 1);
-                System.out.printf("[QueryEngine] ├─ 并行工具调用: %d%n", toolCalls.size());
+                // 多工具调用 — 风险驱动分流（借鉴 OpenWorker engine.py:480-504）
+                // read-only 工具（file_read/grep/glob）→ 并发执行
+                // write/exec 工具（file_write/file_edit/bash）→ 严格串行
+                // 保留原始顺序：只有连续的 read-only 工具才会并发，
+                // 避免将 read→write→read 中的两个 read 并发化（第二个 read 可能依赖 write 结果）
+                log.info("[QueryEngine] 正在执行 {} 个工具（第 {} 轮）— 风险驱动分流", toolCalls.size(), round + 1);
+                System.out.printf("[QueryEngine] ├─ 多工具调用: %d 个（风险分流）%n", toolCalls.size());
 
-                java.util.List<java.util.concurrent.CompletableFuture<ToolResult>> futures = new java.util.ArrayList<>();
-                for (ToolCall tc : toolCalls) {
-                    // 【动刀1】强制挂载虚拟线程池，弃用 ForkJoinPool.commonPool
-                    java.util.concurrent.CompletableFuture<ToolResult> future = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                List<List<ToolCall>> batches = partitionByRisk(toolCalls);
+                for (List<ToolCall> batch : batches) {
+                    if (batch.size() == 1) {
+                        // ── 串行批次：write/exec 工具同步执行 ──
+                        ToolCall tc = batch.get(0);
+                        log.info("[QueryEngine] 串行执行工具: {}（risk=write/exec）", tc.toolName);
                         try {
                             String result = executeTool(tc);
                             DynamicToolBridge.getInstance().markToolUsed(tc.toolName);
-                            return new ToolResult(tc.toolName, result, null);
+                            consecutiveErrors = 0;
+                            toolResults.append("<tool_result name=\"").append(tc.toolName).append("\">\n");
+                            toolResults.append(compactToolOutput(tc.toolName, result)).append("\n");
+                            toolResults.append("</tool_result>\n\n");
                         } catch (Exception e) {
-                            return new ToolResult(tc.toolName, null, e);
-                        }
-                    }, VTHREAD_EXECUTOR);
-                    futures.add(future);
-                }
-
-                // 等待所有工具完成
-                try {
-                    java.util.concurrent.CompletableFuture.allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0]))
-                            .get(120, java.util.concurrent.TimeUnit.SECONDS);
-                } catch (java.util.concurrent.TimeoutException e) {
-                    log.warn("[QueryEngine] 部分并行工具调用超时（120秒）");
-                } catch (Exception e) {
-                    log.warn("[QueryEngine] 并行工具执行被中断: {}", e.getMessage());
-                }
-
-                // 收集结果
-                for (int i = 0; i < futures.size(); i++) {
-                    ToolCall tc = toolCalls.get(i);
-                    ToolResult tr;
-                    try {
-                        tr = futures.get(i).getNow(new ToolResult(tc.toolName, "Timed out", null));
-                    } catch (Exception e) {
-                        tr = new ToolResult(tc.toolName, null, e);
-                    }
-
-                    if (tr.error != null) {
-                        consecutiveErrors++;
-                        String errMsg = "工具 '" + tr.toolName + "' 执行期间系统错误: " + tr.error.getMessage();
-                        toolResults.append("<tool_result name=\"").append(tr.toolName).append("\">\n");
-                        toolResults.append(errMsg).append("\n");
-                        toolResults.append("</tool_result>\n\n");
-
-                        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-                            log.error("[QueryEngine] {} 次连续错误 — 中止查询循环", consecutiveErrors);
-                            return "查询已中止，连续 " + consecutiveErrors + " 次系统错误。";
+                            consecutiveErrors++;
+                            String errMsg = "工具 '" + tc.toolName + "' 执行期间系统错误: " + e.getMessage();
+                            toolResults.append("<tool_result name=\"").append(tc.toolName).append("\">\n");
+                            toolResults.append(errMsg).append("\n");
+                            toolResults.append("</tool_result>\n\n");
+                            log.error("[QueryEngine] 工具 '{}' 抛出异常。({}/{})",
+                                    tc.toolName, consecutiveErrors, MAX_CONSECUTIVE_ERRORS, e);
+                            if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                                return "查询已中止，连续 " + consecutiveErrors + " 次系统错误。最后错误: " + errMsg;
+                            }
                         }
                     } else {
-                        consecutiveErrors = 0;
-                        toolResults.append("<tool_result name=\"").append(tr.toolName).append("\">\n");
-                        String compactedResult = compactToolOutput(tr.toolName, tr.result);
-                        toolResults.append(compactedResult).append("\n");
-                        toolResults.append("</tool_result>\n\n");
+                        // ── 并发批次：多个 read-only 工具并行执行 ──
+                        log.info("[QueryEngine] 并发执行 {} 个只读工具: {}", batch.size(),
+                                batch.stream().map(tc -> tc.toolName).toList());
+                        List<CompletableFuture<ToolResult>> futures = new ArrayList<>();
+                        for (ToolCall tc : batch) {
+                            CompletableFuture<ToolResult> future = CompletableFuture.supplyAsync(() -> {
+                                try {
+                                    String result = executeTool(tc);
+                                    DynamicToolBridge.getInstance().markToolUsed(tc.toolName);
+                                    return new ToolResult(tc.toolName, result, null);
+                                } catch (Exception e) {
+                                    return new ToolResult(tc.toolName, null, e);
+                                }
+                            }, VTHREAD_EXECUTOR);
+                            futures.add(future);
+                        }
+
+                        // 等待本批所有工具完成
+                        try {
+                            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                                    .get(120, TimeUnit.SECONDS);
+                        } catch (java.util.concurrent.TimeoutException e) {
+                            log.warn("[QueryEngine] 并发只读工具批次超时（120秒）");
+                        } catch (Exception e) {
+                            log.warn("[QueryEngine] 并发批次被中断: {}", e.getMessage());
+                        }
+
+                        // 收集结果
+                        for (int j = 0; j < futures.size(); j++) {
+                            ToolCall tc = batch.get(j);
+                            ToolResult tr;
+                            try {
+                                tr = futures.get(j).getNow(new ToolResult(tc.toolName, "Timed out", null));
+                            } catch (Exception e) {
+                                tr = new ToolResult(tc.toolName, null, e);
+                            }
+
+                            if (tr.error != null) {
+                                consecutiveErrors++;
+                                String errMsg = "工具 '" + tr.toolName + "' 执行期间系统错误: " + tr.error.getMessage();
+                                toolResults.append("<tool_result name=\"").append(tr.toolName).append("\">\n");
+                                toolResults.append(errMsg).append("\n");
+                                toolResults.append("</tool_result>\n\n");
+                                if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+                                    log.error("[QueryEngine] {} 次连续错误 — 中止查询循环", consecutiveErrors);
+                                    return "查询已中止，连续 " + consecutiveErrors + " 次系统错误。";
+                                }
+                            } else {
+                                consecutiveErrors = 0;
+                                toolResults.append("<tool_result name=\"").append(tr.toolName).append("\">\n");
+                                String compactedResult = compactToolOutput(tr.toolName, tr.result);
+                                toolResults.append(compactedResult).append("\n");
+                                toolResults.append("</tool_result>\n\n");
+                            }
+                        }
                     }
                 }
             }
@@ -508,6 +666,14 @@ public class QueryEngine {
             // 不再无限追加 fullPrompt，而是通过 HistoryCompressor 管理历史
             historyCompressor.addMessage("assistant", llmResponse);
             historyCompressor.addMessage("tool", toolResults.toString());
+
+            // ── 收敛检测：连续 2 轮同文件同 hash 则终止（避免 v1→v5 无意义重写）──
+            if (convergenceTracker.isConverged()) {
+                String reason = convergenceTracker.convergenceReason();
+                log.warn("[QueryEngine] 收敛检测触发，提前终止 Agent Loop: {}", reason);
+                String convergedAnswer = "任务已收敛终止: " + reason;
+                return fireOnReplyBestEffort(convergedAnswer);
+            }
 
             // 重建 fullPrompt：系统提示 + 压缩后的历史 + 继续指令
             // ── on_compress_context 洋葱中间件 ── LEAF = buildHistoryText()
@@ -667,6 +833,36 @@ public class QueryEngine {
     }
 
     /**
+     * 构建每轮 ephemeral 系统上下文 — send-time only，由 OpenAiAdapter 追加为
+     * {@code <system-context>} 块到最后一条 user message，永不持久化。
+     * <p>
+     * 借鉴 OpenWorker {@code engine.py} 的 {@code context_provider()} + {@code <system-context>} 块
+     * （engine.py:880-985）：动态上下文不 bake 进 system prompt，而是每轮 send-time 追加到最后一条
+     * user message，永不回写持久化历史。
+     * <p>
+     * 与 systemPrompt 的分工：
+     * <ul>
+     *   <li>systemPrompt 是<b>静态身份</b>（工具/技能/格式/工作目录），跨轮稳定以利 KV cache 前缀匹配</li>
+     *   <li>ephemeralContext 是<b>动态环境</b>（RAG 结果/当前时间/git 状态/plan-mode 提醒），每轮可重算</li>
+     * </ul>
+     * 当前实现透传 {@code systemContext}（如 RAG 搜索结果）；下方预留每轮重算的易变上下文扩展点。
+     *
+     * @param systemContext 调用方传入的额外系统上下文（如 RAG 检索结果）
+     * @return ephemeral 上下文字符串；空串表示无 ephemeral 块
+     */
+    private String buildEphemeralContext(String systemContext) {
+        StringBuilder sb = new StringBuilder();
+        if (systemContext != null && !systemContext.isBlank()) {
+            sb.append(systemContext);
+        }
+        // ── 未来扩展点（每轮重算的易变上下文）──
+        // sb.append("\nCurrent time: ").append(LocalDateTime.now().format(...));
+        // sb.append("\nGit: ").append(gitSnapshot());
+        // if (planModeActive) sb.append("\n[PLAN MODE: do not edit files, only propose a plan]");
+        return sb.toString();
+    }
+
+    /**
      * 合法的工具名称集合 — 用于过滤 LLM 响应中的误匹配 XML 标签。
      * <p>
      * LLM 在描述工具格式时可能输出 &lt;tool_name&gt;{...}&lt;/tool_name&gt; 等示例标签，
@@ -726,7 +922,19 @@ public class QueryEngine {
                 return "权限被拒绝: " + decision.message();
             }
             if (decision.needsPrompt()) {
-                log.info("[QueryEngine] 工具 '{}' 需要确认（Agent 模式下自动允许）", tc.toolName);
+                // ASK 决策 → 经 ToolPermissionChannel 询问人类（借鉴 OpenWorker standing scoped approvals）
+                // 无前端订阅时 fallback ALLOW_ONCE（零回归，行为同原「Agent 模式下自动允许」）
+                String target = PermissionChecker.extractTarget(input);
+                ToolPermissionChannel.ApprovalResponse resp = ToolPermissionChannel.requestApproval(
+                        agentId, tc.toolName, target, decision.message());
+                switch (resp) {
+                    case ALWAYS_TARGET -> permissionChecker.grantTargetApproval(tc.toolName, target);
+                    case DENY -> {
+                        log.warn("[QueryEngine] 工具 '{}' 被用户拒绝: {}", tc.toolName, decision.message());
+                        return "权限被拒绝: " + decision.message();
+                    }
+                    case ALLOW_ONCE -> log.info("[QueryEngine] 工具 '{}' 获用户本次放行", tc.toolName);
+                }
             }
 
             // ── on_acting 洋葱中间件（核心边界修复）──
@@ -766,6 +974,10 @@ public class QueryEngine {
             if (HandoffTool.TOOL_NAME.equals(tc.toolName) && input instanceof HandoffInput handoffInput) {
                 handleHandoffExecution(handoffInput, output, toolSpan);
             }
+
+            // ── 收敛检测：记录文件写入（best-effort，异常不阻塞工具执行）──
+            recordWriteForConvergence(tc.toolName, input);
+
             return outputText;
         } catch (Exception e) {
             if (toolSpan != null) {
@@ -781,6 +993,85 @@ public class QueryEngine {
                 toolSpan.setAttribute("duration_ms", System.currentTimeMillis() - toolStartMs);
                 TracingManager.instance().endSpan(toolSpan.spanId());
             }
+        }
+    }
+
+    /**
+     * 判断工具是否可以安全并行执行。
+     * <p>
+     * 只读工具（file_read/grep/glob 等）不修改文件系统状态，可以并发执行；
+     * 写/执行工具（file_write/file_edit/bash）必须串行以避免竞态条件。
+     * <p>
+     * 借鉴 OpenWorker engine.py:480-504 的 risk-based 分流：
+     * {@code risk_level == "low" && requires_approval == false} → parallel-safe。
+     * AIOS 用 {@link Tool#readOnly()} 作为等价判定。
+     * <p>
+     * fail-safe：未知工具（未注册）→ false（串行），避免对陌生工具的副作用做并发假设。
+     */
+    /** package-private — 供同包测试验证风险分流 */
+    boolean isParallelSafe(String toolName) {
+        return ToolRegistry.instance().get(toolName)
+                .map(Tool::readOnly)
+                .orElse(false);
+    }
+
+    /**
+     * 将工具调用列表按风险分区为执行批次。
+     * <p>
+     * 连续的 parallel-safe 工具合并为一个并发批次；
+     * 非 parallel-safe 工具各自独立成批（串行执行）。
+     * <p>
+     * <b>关键设计</b>：保留原始顺序，只有<b>连续的</b> read-only 工具才会并发化。
+     * 避免 {@code read→write→read} 中的两个 read 被并发化
+     * （第二个 read 可能依赖 write 的结果）。
+     * <p>
+     * 示例：
+     * <pre>
+     * [read_A, read_B, write_C, read_D, read_E] →
+     *   batch 1: [read_A, read_B]  ← 并发
+     *   batch 2: [write_C]         ← 串行
+     *   batch 3: [read_D, read_E]  ← 并发
+     * </pre>
+     */
+    /** package-private — 供同包测试验证风险分流 */
+    List<List<ToolCall>> partitionByRisk(List<ToolCall> toolCalls) {
+        List<List<ToolCall>> batches = new ArrayList<>();
+        int i = 0;
+        while (i < toolCalls.size()) {
+            if (isParallelSafe(toolCalls.get(i).toolName)) {
+                // 收集连续的 parallel-safe 工具
+                List<ToolCall> batch = new ArrayList<>();
+                while (i < toolCalls.size() && isParallelSafe(toolCalls.get(i).toolName)) {
+                    batch.add(toolCalls.get(i));
+                    i++;
+                }
+                batches.add(batch);
+            } else {
+                // serial 工具 — 单元素批次
+                batches.add(List.of(toolCalls.get(i)));
+                i++;
+            }
+        }
+        return batches;
+    }
+
+    /**
+     * 收敛检测辅助 — 记录文件写入到 ConvergenceTracker。
+     * <p>
+     * 对 file_write 记录完整内容 hash；对 file_edit 记录 (oldString→newString) hash。
+     * 连续 2 次同路径同 hash → 收敛触发，QueryEngine 终止循环。
+     * <p>
+     * best-effort：异常不阻塞工具执行（收敛检测是优化，不是安全约束）。
+     */
+    private void recordWriteForConvergence(String toolName, ToolInput input) {
+        try {
+            if ("file_write".equals(toolName) && input instanceof FileWriteTool.Input fwi) {
+                convergenceTracker.recordWrite(fwi.path(), fwi.content());
+            } else if ("file_edit".equals(toolName) && input instanceof FileEditTool.Input fei) {
+                convergenceTracker.recordWrite(fei.path(), fei.oldString() + "\n→\n" + fei.newString());
+            }
+        } catch (Exception e) {
+            log.debug("[QueryEngine] 收敛检测记录异常（best-effort，忽略）: {}", e.getMessage());
         }
     }
 

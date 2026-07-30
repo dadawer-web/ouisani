@@ -182,11 +182,16 @@ public class WorkflowEngine {
         buildDependencyGraph(nodes);
 
         // ── 直接调度执行（跳过 executeDag 的目录创建，因为上面已经做了） ──
-        WorkflowContext rootContext = new WorkflowContext(manifest.workflowName());
+        // 用实际 workspace 目录名作为 workflowId，使 DAG 事件中的 workflowId 与 factory 产物目录一致
+        // —— 前端据 WORKFLOW_SUCCEEDED.workflowId 直接拉 /api/artifacts/{workflowId} 即可命中，
+        // 不再因 workflowId=promptText 与目录名 "时间戳_安全名" 不一致而 404。
+        // 这也与 WorkflowHealer 的假设一致（它用 workflowId 拼接 factory 路径）。
+        String workspaceDirName = containerDir.getFileName().toString();
+        WorkflowContext rootContext = new WorkflowContext(workspaceDirName);
         // 借鉴 DyLAN listwise agent team selection：把 manifest 的 selectionPolicy 塞进 context，
         // executeDagInternal 开头据此裁剪未选中 role 的节点。null = 未声明（零行为变化）。
         rootContext.setSelectionPolicy(manifest.selectionPolicy());
-        executeDagInternal(nodes, manifest.workflowName(), rootContext);
+        executeDagInternal(nodes, workspaceDirName, rootContext);
     }
 
     /**
@@ -216,8 +221,12 @@ public class WorkflowEngine {
         // 构建 DAG 依赖图
         buildDependencyGraph(nodes);
 
-        WorkflowContext rootContext = new WorkflowContext(workflowId);
-        executeDagInternal(nodes, workflowId, rootContext);
+        // 用实际 workspace 目录名作为 workflowId（同 executeWorkflow 的修复）：
+        // 入口传入的 workflowId 可能是裸 prompt，与 workspaceForWorkflow 生成的
+        // "时间戳_安全名" 目录不一致，会导致前端拉产物 404、Healer 路径错乱。
+        String workspaceDirName = containerDir.getFileName().toString();
+        WorkflowContext rootContext = new WorkflowContext(workspaceDirName);
+        executeDagInternal(nodes, workspaceDirName, rootContext);
     }
 
     /**

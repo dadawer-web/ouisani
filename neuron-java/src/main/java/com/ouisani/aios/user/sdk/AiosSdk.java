@@ -113,6 +113,32 @@ public final class AiosSdk implements ToolSdk {
         return router.thinkStream(prompt, onDelta);
     }
 
+    /**
+     * 流式推理 + ephemeral 系统上下文 — 把 ephemeralContext 透传给 LlmRouter，
+     * 由底层 OpenAiAdapter 追加为 &lt;system-context&gt; 块到最后一条 user message（send-time only）。
+     * <p>
+     * 借鉴 OpenWorker engine.py 的 context_provider()：每轮可重算的易变上下文（RAG 结果/
+     * 当前时间/git/plan-mode 提醒），永不持久化到对话历史。
+     *
+     * @param agentId         Agent ID
+     * @param prompt          提示词
+     * @param ephemeralContext 每轮易变上下文（send-time only，永不持久化）
+     * @param onDelta         每个 token 片段的回调
+     * @return 完整的文本回复
+     */
+    @Override
+    public String thinkStream(String agentId, String prompt, String ephemeralContext,
+                              java.util.function.Consumer<String> onDelta) {
+        com.ouisani.aios.core.llm.LlmRouter router = SyscallDispatcher.getInstance().getLlmRouter();
+        if (router == null) {
+            String fallback = "[SDK Error] LLM Router not configured";
+            onDelta.accept(fallback);
+            return fallback;
+        }
+        // systemPrompt 恒 ""（与现状一致：真正的 system prompt 已 bake 进 prompt 字符串）
+        return router.thinkStream(prompt, "", ephemeralContext, onDelta);
+    }
+
     // ── VFS ──
 
     /**

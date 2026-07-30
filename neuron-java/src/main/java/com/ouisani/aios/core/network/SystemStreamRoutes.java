@@ -32,6 +32,23 @@ final class SystemStreamRoutes {
     private SystemStreamRoutes() {}
 
     /**
+     * 前端系统流订阅的 EventBus 频道列表。
+     * <p>除 sys.telemetry.metrics（指标）、sys.app.stdout（应用输出）、sys.dag.events（DAG 状态）
+     * 前端有专门处理外，其余频道前端统一当作 EVENT_BUS_LOG 显示，确保自愈/崩溃/恢复等关键事件可见。
+     */
+    private static final String[] STREAM_CHANNELS = {
+            "sys.telemetry.metrics",       // 系统指标
+            "sys.eventbus.logs",           // 内核事件总线日志
+            "sys.dag.events",              // DAG 节点状态变更
+            "sys.telemetry.events",        // 自愈/恢复/Core Dump（RecoveryOrchestrator）
+            "sys.semantic.crash",          // 节点语义崩溃
+            "sys.workflow.node_resumed",   // 节点恢复
+            "sys.workflow.node_failed",    // 节点失败
+            "sys.workflow.suspended",      // 工作流挂起
+            "sys.dlq.entry_added",         // 死信队列
+    };
+
+    /**
      * 挂载系统流 WebSocket 路由到 Javalin 应用。
      *
      * <ul>
@@ -60,47 +77,26 @@ final class SystemStreamRoutes {
                 String sessionId = ctx.sessionId();
                 systemStreamClients.add(ctx);
 
-                // ── 为当前连接注册 EventBus 监听器 ──
+                // ── 为当前连接注册 EventBus 监听器（循环订阅 STREAM_CHANNELS） ──
+                // 每个频道一个 forward handler，payload 原样透传给前端；
+                // 前端按 channel 字段映射类型，未识别频道兜底当作 EVENT_BUS_LOG 显示。
                 List<Consumer<String>> handlers = new ArrayList<>();
-
-                // 订阅 sys.telemetry.metrics → 推送 SYS_METRICS（展平到顶层，前端直接读 data.cpuUsage）
-                Consumer<String> metricsHandler = payload -> {
-                    try {
-                        if (ctx.session.isOpen()) {
-                            ctx.send(payload);
+                for (String channel : STREAM_CHANNELS) {
+                    Consumer<String> handler = payload -> {
+                        try {
+                            if (ctx.session.isOpen()) {
+                                // 包装成 {channel, message} 格式，前端据 channel 分流
+                                ctx.send("{\"channel\":\"" + channel + "\",\"message\":"
+                                        + (payload == null ? "null" : payload.startsWith("{") ? payload : ("\"" + payload.replace("\\", "\\\\").replace("\"", "\\\"") + "\""))
+                                        + "}");
+                            }
+                        } catch (Exception e) {
+                            log.debug("[System Stream] 推送频道 {} 失败: {}", channel, e.getMessage());
                         }
-                    } catch (Exception e) {
-                        log.debug("[System Stream] 推送 SYS_METRICS 失败: {}", e.getMessage());
-                    }
-                };
-                EventBus.instance().subscribe("sys.telemetry.metrics", metricsHandler);
-                handlers.add(metricsHandler);
-
-                // 订阅 sys.eventbus.logs → 推送 EVENT_BUS_LOG
-                Consumer<String> logsHandler = payload -> {
-                    try {
-                        if (ctx.session.isOpen()) {
-                            ctx.send(payload);
-                        }
-                    } catch (Exception e) {
-                        log.debug("[System Stream] 推送 EVENT_BUS_LOG 失败: {}", e.getMessage());
-                    }
-                };
-                EventBus.instance().subscribe("sys.eventbus.logs", logsHandler);
-                handlers.add(logsHandler);
-
-                // 订阅 sys.dag.events → 推送 DAG_EVENT（节点状态变更等）
-                Consumer<String> dagHandler = payload -> {
-                    try {
-                        if (ctx.session.isOpen()) {
-                            ctx.send(payload);
-                        }
-                    } catch (Exception e) {
-                        log.debug("[System Stream] 推送 DAG_EVENT 失败: {}", e.getMessage());
-                    }
-                };
-                EventBus.instance().subscribe("sys.dag.events", dagHandler);
-                handlers.add(dagHandler);
+                    };
+                    EventBus.instance().subscribe(channel, handler);
+                    handlers.add(handler);
+                }
 
                 // 保存此连接的所有 handler，断开时批量注销
                 systemStreamSubscriptions.put(sessionId, handlers);
@@ -118,7 +114,7 @@ final class SystemStreamRoutes {
                 // ── 注销此连接的所有 EventBus 监听器，防止内存泄漏 ──
                 List<Consumer<String>> handlers = systemStreamSubscriptions.remove(sessionId);
                 if (handlers != null) {
-                    String[] channels = {"sys.telemetry.metrics", "sys.eventbus.logs", "sys.dag.events"};
+                    String[] channels = STREAM_CHANNELS;
                     for (int i = 0; i < handlers.size() && i < channels.length; i++) {
                         EventBus.instance().unsubscribe(channels[i], handlers.get(i));
                     }
@@ -138,7 +134,7 @@ final class SystemStreamRoutes {
                 // 连接异常时也要注销监听器
                 List<Consumer<String>> handlers = systemStreamSubscriptions.remove(sessionId);
                 if (handlers != null) {
-                    String[] channels = {"sys.telemetry.metrics", "sys.eventbus.logs", "sys.dag.events"};
+                    String[] channels = STREAM_CHANNELS;
                     for (int i = 0; i < handlers.size() && i < channels.length; i++) {
                         EventBus.instance().unsubscribe(channels[i], handlers.get(i));
                     }
