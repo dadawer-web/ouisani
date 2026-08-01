@@ -4,6 +4,7 @@ import com.ouisani.aios.core.network.EventBus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -73,14 +74,10 @@ public final class ToolPermissionChannel {
     }
 
     /**
-     * 请求人类审批一次工具调用。
+     * 请求人类审批一次工具调用（向后兼容 4 参 — 不带 spawn 树上下文）。
      * <p>
-     * 流程：
-     * <ol>
-     *   <li>EventBus 无订阅者 → 立即返回 {@link ApprovalResponse#ALLOW_ONCE}（零回归 fallback）</li>
-     *   <li>否则广播 {@link #CHANNEL} 携带 {requestId, agentId, toolName, target, description}，</li>
-     *   <li>阻塞 {@code future.get(120s)}；超时/异常 → {@link ApprovalResponse#DENY}</li>
-     * </ol>
+     * 等价于 {@code depth=0, parentChain=[], isSubAgent=false}（顶层 agent 语义）。
+     * 保留以兼容既有调用点；新调用点应使用带 spawn 树上下文的 7 参重载。
      *
      * @param agentId     发起 Agent ID
      * @param toolName    工具名
@@ -90,20 +87,56 @@ public final class ToolPermissionChannel {
      */
     public static ApprovalResponse requestApproval(String agentId, String toolName,
                                                    String target, String description) {
-        return requestApproval(agentId, toolName, target, description, APPROVAL_TIMEOUT_SECONDS);
+        return requestApproval(agentId, toolName, target, description,
+                0, List.of(), false, APPROVAL_TIMEOUT_SECONDS);
     }
 
     /**
-     * 可指定超时的审批请求 — 供测试用短超时验证 timeout → DENY 路径。
+     * 请求人类审批一次工具调用 — <b>携带 spawn 树上下文</b>（LIM 攻击面闭合）。
+     * <p>
+     * 传统 cgroup/capability 模型未考虑动态 spawn 的子 agent 经自然语言/子链请求权限升级。
+     * 本重载把请求者在 spawn 树中的位置（depth + parentChain）暴露给人类审批者，使其能识破
+     * 「这是 depth=3 子 agent 求 shell」的社会工程；并供深度感知策略（{@link EscalationPolicy}）
+     * 在调用前预判（破坏性工具深层 auto-deny，根本不到本方法）。
+     * <p>
+     * 流程：
+     * <ol>
+     *   <li>EventBus 无订阅者 → 立即返回 {@link ApprovalResponse#ALLOW_ONCE}（零回归 fallback）</li>
+     *   <li>否则广播 {@link #CHANNEL} 携带
+     *       {requestId, agentId, toolName, target, description, depth, parentChain, isSubAgent, timestamp}，</li>
+     *   <li>阻塞 {@code future.get(120s)}；超时/异常 → {@link ApprovalResponse#DENY}</li>
+     * </ol>
+     *
+     * @param agentId      发起 Agent ID
+     * @param toolName     工具名
+     * @param target       目标标识（可为 null）
+     * @param description  决策消息
+     * @param depth        请求者在 spawn 树的深度（顶层=0）；由 {@code DelegationGuard.currentDepth()} 提供
+     * @param parentChain  祖先 agentId 列表（不含自身）；由 {@code DelegationGuard.currentChain()} 提供
+     * @param isSubAgent   是否为子 agent（depth&gt;0 或 chain 非空）
+     * @return 审批结果
+     */
+    public static ApprovalResponse requestApproval(String agentId, String toolName,
+                                                   String target, String description,
+                                                   int depth, List<String> parentChain,
+                                                   boolean isSubAgent) {
+        return requestApproval(agentId, toolName, target, description,
+                depth, parentChain, isSubAgent, APPROVAL_TIMEOUT_SECONDS);
+    }
+
+    /**
+     * 可指定超时的审批请求（带完整 spawn 树上下文）— 供测试用短超时验证 timeout → DENY 路径。
      */
     static ApprovalResponse requestApproval(String agentId, String toolName,
                                             String target, String description,
-                                            long timeoutSeconds) {
+                                            int depth, List<String> parentChain,
+                                            boolean isSubAgent, long timeoutSeconds) {
         EventBus bus = EventBus.instance();
 
         // 零回归 fallback：无审批订阅者时自动放行（与 QueryEngine 原行为一致）
         if (bus.subscriberCount(CHANNEL) == 0) {
-            log.debug("[ToolPermission] 无审批订阅者，自动放行: agent={}, tool={}", agentId, toolName);
+            log.debug("[ToolPermission] 无审批订阅者，自动放行: agent={}, tool={}, depth={}",
+                    agentId, toolName, depth);
             return ApprovalResponse.ALLOW_ONCE;
         }
 
@@ -111,24 +144,17 @@ public final class ToolPermissionChannel {
         CompletableFuture<ApprovalResponse> future = new CompletableFuture<>();
         pending.put(requestId, future);
 
-        String payload = String.format(
-                "{\"requestId\":\"%s\",\"agentId\":\"%s\",\"toolName\":\"%s\","
-                        + "\"target\":\"%s\",\"description\":\"%s\",\"timestamp\":%d}",
-                requestId,
-                escapeJson(agentId),
-                escapeJson(toolName),
-                escapeJson(target),
-                escapeJson(description),
-                System.currentTimeMillis());
+        String payload = buildPayload(requestId, agentId, toolName, target, description,
+                depth, parentChain, isSubAgent);
 
         try {
             bus.broadcast(CHANNEL, payload);
-            log.info("[ToolPermission] 已广播审批请求: requestId={}, agent={}, tool={}, target={}",
-                    requestId, agentId, toolName, target);
+            log.info("[ToolPermission] 已广播审批请求: requestId={}, agent={}, tool={}, target={}, depth={}, isSubAgent={}",
+                    requestId, agentId, toolName, target, depth, isSubAgent);
             return future.get(timeoutSeconds, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
-            log.warn("[ToolPermission] 审批超时 ({}s)，默认拒绝: requestId={}, tool={}",
-                    timeoutSeconds, requestId, toolName);
+            log.warn("[ToolPermission] 审批超时 ({}s)，默认拒绝: requestId={}, tool={}, depth={}",
+                    timeoutSeconds, requestId, toolName, depth);
             return ApprovalResponse.DENY;
         } catch (ExecutionException | InterruptedException e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
@@ -138,6 +164,36 @@ public final class ToolPermissionChannel {
         } finally {
             pending.remove(requestId);
         }
+    }
+
+    /**
+     * 构建审批请求 JSON payload — 含 spawn 树上下文（depth/parentChain/isSubAgent）。
+     * <p>
+     * 用 StringBuilder 而非 {@code String.format} 构建，因 parentChain 是字符串数组，
+     * {@code String.format} 无法正确处理数组内元素的 JSON 转义（引号/反斜杠会破坏 payload）。
+     */
+    private static String buildPayload(String requestId, String agentId, String toolName,
+                                       String target, String description,
+                                       int depth, List<String> parentChain, boolean isSubAgent) {
+        StringBuilder sb = new StringBuilder(256);
+        sb.append("{\"requestId\":\"").append(escapeJson(requestId)).append('"');
+        sb.append(",\"agentId\":\"").append(escapeJson(agentId)).append('"');
+        sb.append(",\"toolName\":\"").append(escapeJson(toolName)).append('"');
+        sb.append(",\"target\":\"").append(escapeJson(target)).append('"');
+        sb.append(",\"description\":\"").append(escapeJson(description)).append('"');
+        sb.append(",\"depth\":").append(depth);
+        sb.append(",\"parentChain\":[");
+        if (parentChain != null) {
+            for (int i = 0; i < parentChain.size(); i++) {
+                if (i > 0) sb.append(',');
+                sb.append('"').append(escapeJson(parentChain.get(i))).append('"');
+            }
+        }
+        sb.append("]");
+        sb.append(",\"isSubAgent\":").append(isSubAgent);
+        sb.append(",\"timestamp\":").append(System.currentTimeMillis());
+        sb.append('}');
+        return sb.toString();
     }
 
     /**

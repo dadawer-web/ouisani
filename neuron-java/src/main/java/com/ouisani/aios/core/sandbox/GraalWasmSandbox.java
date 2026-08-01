@@ -4,6 +4,7 @@ import com.ouisani.aios.core.AgentTask;
 import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.VfsNode;
+import com.ouisani.aios.core.audit.UnifiedAuditLog;
 import com.ouisani.aios.core.ipc.SignalInterceptor;
 import com.ouisani.aios.core.ipc.SignalType;
 import com.ouisani.aios.core.llm.LlmProvider;
@@ -355,6 +356,17 @@ public class GraalWasmSandbox implements SandboxProvider {
         SemanticEtw.getInstance().logEvent("SANDBOX", "FAULT",
                 "instanceId=" + instanceId + " faultType=" + faultType
                 + " cause=" + cause.getMessage());
+
+        // ── P0: 接入 UnifiedAuditLog 跨层联合审计链（按 traceId 与 cgroup/permission 关联）──
+        // 沙箱故障是 sandbox 层的核心拦截决策，按 traceId 聚合后可与同次攻击的 token 超限 /
+        // 越权拒绝决策串成一条链——这是"联合治理"区别于"各自为战"的关键证据。
+        String sandboxAgentId = currentTask != null ? "agent_" + currentTask.pid() : null;
+        UnifiedAuditLog.append(
+                UnifiedAuditLog.LAYER_SANDBOX,
+                "FAULT_" + faultType,
+                sandboxAgentId,
+                instanceId,
+                faultType + ": " + cause.getMessage());
 
         log.error("[Ring3] ╔══════════════════════════════════════════════════╗");
         log.error("[Ring3] ║  沙箱故障: {}                       ║", faultType);

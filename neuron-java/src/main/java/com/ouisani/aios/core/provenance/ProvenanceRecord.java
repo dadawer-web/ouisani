@@ -29,6 +29,9 @@ package com.ouisani.aios.core.provenance;
  * @param content   写入的文本内容（可能为 null，如纯二进制写入）
  * @param agentId   写入的 Agent 标识（可能为 null，表示无 agent 上下文）
  * @param sessionId 会话标识（可能为 null）
+ * @param traceId   端到端追踪标识（可能为 null）。由 {@link com.ouisani.aios.core.ipc.TraceContext}
+ *                  在 turn 入口注入，使本条 VFS 写入可与同 traceId 下的 cgroup/permission/sandbox
+ *                  决策在 {@link com.ouisani.aios.core.audit.UnifiedAuditLog} 中关联。
  */
 public record ProvenanceRecord(
         String path,
@@ -37,7 +40,8 @@ public record ProvenanceRecord(
         String tool,
         String content,
         String agentId,
-        String sessionId
+        String sessionId,
+        String traceId
 ) {
     /**
      * 紧凑构造器 — 允许 path 为 null 时仍创建记录（best-effort）。
@@ -45,6 +49,14 @@ public record ProvenanceRecord(
     public ProvenanceRecord {
         if (path == null) path = "";
         if (tool == null) tool = "unknown";
+    }
+
+    /**
+     * 向后兼容构造 — 旧 7 参数调用方（无 traceId）默认 traceId=null，零回归。
+     */
+    public ProvenanceRecord(String path, long version, long ts, String tool,
+                            String content, String agentId, String sessionId) {
+        this(path, version, ts, tool, content, agentId, sessionId, null);
     }
 
     /**
@@ -63,7 +75,8 @@ public record ProvenanceRecord(
         sb.append("\"tool\":").append(escape(tool)).append(',');
         sb.append("\"content\":").append(content == null ? "null" : escape(content)).append(',');
         sb.append("\"agentId\":").append(agentId == null ? "null" : escape(agentId)).append(',');
-        sb.append("\"sessionId\":").append(sessionId == null ? "null" : escape(sessionId));
+        sb.append("\"sessionId\":").append(sessionId == null ? "null" : escape(sessionId)).append(',');
+        sb.append("\"traceId\":").append(traceId == null ? "null" : escape(traceId));
         sb.append('}');
         return sb.toString();
     }
@@ -90,7 +103,8 @@ public record ProvenanceRecord(
                     optString(o, "tool"),
                     o.has("content") && !o.get("content").isJsonNull() ? optString(o, "content") : null,
                     o.has("agentId") && !o.get("agentId").isJsonNull() ? optString(o, "agentId") : null,
-                    o.has("sessionId") && !o.get("sessionId").isJsonNull() ? optString(o, "sessionId") : null
+                    o.has("sessionId") && !o.get("sessionId").isJsonNull() ? optString(o, "sessionId") : null,
+                    o.has("traceId") && !o.get("traceId").isJsonNull() ? optString(o, "traceId") : null
             );
         } catch (Exception e) {
             return null;

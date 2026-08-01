@@ -4,6 +4,7 @@ import com.ouisani.aios.core.AgentTask;
 import com.ouisani.aios.core.ProcessPriority;
 import com.ouisani.aios.core.TaskScheduler;
 import com.ouisani.aios.core.VfsManager;
+import com.ouisani.aios.core.audit.UnifiedAuditLog;
 import com.ouisani.aios.core.memory.SomWindowController;
 import com.ouisani.aios.core.telemetry.SemanticEtw;
 import org.slf4j.Logger;
@@ -166,6 +167,14 @@ public final class CgroupManager {
         SemanticEtw.getInstance().logEvent("CGROUP", "OOM_KILL",
                 "agent=" + agentId + " totalKills=" + oomKillCount.getOrDefault(agentId, 0L));
 
+        // ── P0: 接入 UnifiedAuditLog 跨层联合审计链（按 traceId 与 permission/sandbox 关联）──
+        UnifiedAuditLog.append(
+                UnifiedAuditLog.LAYER_CGROUP,
+                "OOM_KILL",
+                agentId,
+                agentId,
+                "token quota exceeded; totalKills=" + oomKillCount.getOrDefault(agentId, 0L));
+
         log.error("[CgroupManager] ╔══════════════════════════════════════════════════╗");
         log.error("[CgroupManager] ║  OOM KILL: Agent '{}' exceeded Token quota!      ║", agentId);
         log.error("[CgroupManager] ║  This Agent is being terminated to protect       ║");
@@ -253,6 +262,14 @@ public final class CgroupManager {
             SemanticEtw.getInstance().logEvent("CGROUP", "SOFT_OOM",
                     "agent=" + agentId + " node=" + e.cgroupNode()
                     + " consumed=" + e.consumed() + "/" + e.quota());
+
+            // ── P0: 软限决策也接入联合审计链（资源压力事件，可与后续 permission/sandbox 响应关联）──
+            UnifiedAuditLog.append(
+                    UnifiedAuditLog.LAYER_CGROUP,
+                    "SOFT_OOM",
+                    agentId,
+                    e.cgroupNode(),
+                    "consumed=" + e.consumed() + "/" + e.quota() + " — triggered semantic folding");
 
             // 尝试语义折叠回收 Token
             AgentTask currentTask = TaskScheduler.CURRENT_TASK.get();

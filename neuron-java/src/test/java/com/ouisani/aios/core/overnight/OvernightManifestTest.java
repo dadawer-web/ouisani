@@ -156,47 +156,4 @@ class OvernightManifestTest {
         assertTrue(minutes > 0);
         assertTrue(minutes <= 120);
     }
-
-    @Test
-    void fromJson_roundTripsPersistedSubset() {
-        // catch-up reload 契约：manifestToJson 持久化子集 → fromJson 还原核心字段。
-        // omitted 字段（completedAt/cancelRequestedAt/lastActivityAt）默认 null，
-        // maxAgentsGuidance 默认 DEFAULT，vfsRunDir 由调用方重算。
-        OvernightManifest original = OvernightManifest.create(
-                "catchup-1", "晨报补跑测试", Duration.ofHours(4), "/var/run/overnight/catchup-1");
-        OvernightManifest posted = original.withMorningReportPosted(Instant.now())
-                .withCoordinatorPid(4242);
-
-        String json = OvernightRunner.instance().manifestToJson(posted);
-        OvernightManifest reloaded = OvernightManifest.fromJson(json, "/var/run/overnight/catchup-1");
-
-        assertEquals(posted.runId(), reloaded.runId());
-        assertEquals(posted.status(), reloaded.status());
-        assertEquals(posted.startedAt(), reloaded.startedAt());
-        assertEquals(posted.targetWakeAt(), reloaded.targetWakeAt());
-        assertEquals(posted.handoffReadyAt(), reloaded.handoffReadyAt());
-        assertEquals(posted.postWakeGraceUntil(), reloaded.postWakeGraceUntil());
-        assertEquals(posted.morningReportPostedAt(), reloaded.morningReportPostedAt());
-        assertEquals(4242, reloaded.coordinatorPid());
-        assertEquals(posted.effectiveMission(), reloaded.effectiveMission());
-        assertEquals("/var/run/overnight/catchup-1", reloaded.vfsRunDir());
-        // omitted 字段默认
-        assertNull(reloaded.completedAt());
-        assertNull(reloaded.cancelRequestedAt());
-        assertNull(reloaded.lastActivityAt());
-    }
-
-    @Test
-    void fromJson_handlesNullMorningReportAndStatusLabel() {
-        // 新建 run：morningReportPostedAt=null（序列化为 "null" 字符串），status="running"
-        OvernightManifest original = OvernightManifest.create(
-                "catchup-2", null, Duration.ofHours(2), "/var/run/overnight/catchup-2");
-        String json = OvernightRunner.instance().manifestToJson(original);
-
-        OvernightManifest reloaded = OvernightManifest.fromJson(json, "/var/run/overnight/catchup-2");
-
-        assertEquals(OvernightManifest.OvernightRunStatus.RUNNING, reloaded.status());
-        assertNull(reloaded.morningReportPostedAt());
-        assertEquals(original.targetWakeAt(), reloaded.targetWakeAt());
-    }
 }

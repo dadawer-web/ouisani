@@ -5,11 +5,17 @@ import com.ouisani.aios.core.middleware.MiddlewareRegistry;
 import com.ouisani.aios.core.network.AiosEventSchema;
 import com.ouisani.aios.core.network.AiosEventSchema.AiosEvent;
 import com.ouisani.aios.core.network.EventBus;
+import com.ouisani.aios.core.ipc.TraceContext;
+import com.ouisani.aios.core.ipc.CallerContext;
+import com.ouisani.aios.core.audit.UnifiedAuditLog;
 import com.ouisani.aios.core.llm.StreamCancellationHook;
+import com.ouisani.aios.core.permission.EscalationPolicy;
 import com.ouisani.aios.core.permission.PermissionChecker;
 import com.ouisani.aios.core.permission.PermissionDecision;
 import com.ouisani.aios.core.permission.PermissionMode;
 import com.ouisani.aios.core.permission.PermissionProfile;
+import com.ouisani.aios.core.permission.PermissionRule;
+import com.ouisani.aios.core.permission.SpawnPrivilegeContext;
 import com.ouisani.aios.core.permission.ToolPermissionChannel;
 import com.ouisani.aios.core.plugin.DynamicToolBridge;
 import com.ouisani.aios.core.plugin.ToolDefinition;
@@ -71,6 +77,17 @@ public class QueryEngine {
     private final List<Tool<? extends ToolInput>> availableTools;
     private final PermissionChecker permissionChecker;
 
+    /**
+     * 当前 agent 的租户 ID — 构造期从 {@link CallerContext}（InheritableThreadLocal）捕获。
+     * <p>
+     * <b>LIM 攻击面闭合（Gap B）</b>：动态 spawn 的子 agent 经 {@code Thread.startVirtualThread}
+     * 继承父线程的 CallerContext，故子 QueryEngine 构造时能拿到父的 tenantId，写入后续
+     * {@link ToolContext}，使 {@code PermissionChecker.checkTenantOwnership} 对子 agent 也生效，
+     * 堵住「租户 A 的子 agent 访问租户 B 的 VFS 节点」。构造期捕获（而非 loop 内重读）避免
+     * CallerContext 在 tool 执行后被 clear 导致失效。null = legacy/顶层未注入（所有权校验 skip）。
+     */
+    private final String tenantId;
+
     /** 当前运行 ID（每次 query() 调用生成一个新的） */
     private String currentRunId;
 
@@ -117,6 +134,25 @@ public class QueryEngine {
         this.availableTools.addAll(extraTools);
         this.permissionChecker = new PermissionChecker();
         this.historyCompressor = new HistoryCompressor(4000, this::generateSummary);
+        // 构造期捕获继承的 tenantId（InheritableThreadLocal，子虚拟线程继承父值）。
+        // 5 参 profile/mode 构造器委托本构造器，故 profile 应用在捕获之后——profile 与 tenantId 独立。
+        this.tenantId = resolveInheritedTenantId();
+    }
+
+    /**
+     * 从 {@link CallerContext} 读取继承的 tenantId — 供构造器初始化 {@link #tenantId}。
+     * <p>
+     * 顶层 agent（无父线程注入）→ CallerContext.current()=null → 返回 null（legacy，所有权校验 skip）。
+     * spawn 子 agent → 子虚拟线程继承父 CallerContext → 返回父 tenantId（跨 spawn 传播）。
+     */
+    private static String resolveInheritedTenantId() {
+        CallerContext cc = CallerContext.current();
+        return cc != null ? cc.tenantId() : null;
+    }
+
+    /** package-private 访问器 — 供同包测试验证 tenantId 跨 spawn 传播（Gap B）。 */
+    String inheritedTenantId() {
+        return tenantId;
     }
 
     /**
@@ -253,9 +289,24 @@ public class QueryEngine {
             taskSpan.setAttribute("agent_id", agentId);
             taskSpan.setAttribute("user_message_length", userMessage != null ? userMessage.length() : 0);
         }
+
+        // ── P0 联合治理：为本轮 query 注入 trace_id，贯穿 cgroup/permission/sandbox/provenance
+        //    四层审计决策。InheritableThreadLocal 让同线程 + 虚拟线程继承的子线程（sub-agent）
+        //    都能读到，使 UnifiedAuditLog 可按 traceId 把一次攻击的三层响应串成一条链。
+        //    save/restore 模式避免线程池复用时 traceId 跨 query 泄漏。
+        String prevTraceId = TraceContext.getCurrentTraceId();
+        boolean traceIdEstablishedHere = false;
+        if (prevTraceId == null) {
+            TraceContext.setCurrentTraceId(TraceContext.generateTraceId());
+            traceIdEstablishedHere = true;
+        }
         try {
             return doQuery(userMessage, systemContext, taskSpan);
         } finally {
+            if (traceIdEstablishedHere) {
+                // 清理本 query 注入的 traceId，避免污染线程池后续复用
+                TraceContext.setCurrentTraceId(null);
+            }
             if (taskSpan != null) {
                 TracingManager.instance().endSpan(taskSpan.spanId());
             }
@@ -910,8 +961,17 @@ public class QueryEngine {
         }
 
         Tool<ToolInput> tool = opt.get();
-        ToolContext context = new ToolContext(agentId, sdk, workingDir);
+        // 构造 ToolContext 携带继承的 tenantId（Gap B）— 使 PermissionChecker.checkTenantOwnership
+        // 对子 agent 也生效。backend=null 保持懒加载（LocalBackend.instance()）。
+        ToolContext context = new ToolContext(agentId, sdk, workingDir, null, this.tenantId);
 
+        // 设置调用方上下文 — 供 EventBus/VFS 限流器读取 caller agentId/tenantId
+        // 外层 finally 块清理，防线程池泄漏；内核守护进程不经此路径（CallerContext null 豁免）
+        CallerContext.set(agentId, context.tenantId());
+        // 发布当前 agent 的有效权限画像到继承上下文（Gap A）— 供 AgentTool spawn 子 agent 时继承。
+        // InheritableThreadLocal：子虚拟线程自动继承；permissionChecker.currentProfile() 对
+        // DEFAULT/empty 归一化为 null（无限制可继承）。OmniMotherAgent/OperatorAgent 经此自动发布 overnight profile。
+        SpawnPrivilegeContext.set(permissionChecker.currentProfile());
         try {
             ToolInput input = parseInput(tc.paramsJson(), tool);
 
@@ -925,15 +985,51 @@ public class QueryEngine {
                 // ASK 决策 → 经 ToolPermissionChannel 询问人类（借鉴 OpenWorker standing scoped approvals）
                 // 无前端订阅时 fallback ALLOW_ONCE（零回归，行为同原「Agent 模式下自动允许」）
                 String target = PermissionChecker.extractTarget(input);
+
+                // ── LIM 攻击面闭合：spawn 树上下文（Gap C）──
+                // 传统 cgroup/capability 模型未考虑动态 spawn 的子 agent 经子链请求升级。
+                // 这里采集请求者在 spawn 树的位置，供深度感知策略预判 + ASK payload 携带。
+                int depth = DelegationGuard.currentDepth();
+                Set<String> chain = DelegationGuard.currentChain();
+                boolean isSubAgent = depth > 0 || !chain.isEmpty();
+
+                // ── 深度感知升级策略（Gap C-c）：深层子 agent 对破坏性工具直接 auto-deny ──
+                // 不询问人类，避免社会工程骗过审批；走 recordDenial 三写（SemanticEtw+UnifiedAuditLog+Ledger）
+                EscalationPolicy.Verdict escalationVerdict = EscalationPolicy.evaluate(depth, tc.toolName);
+                if (escalationVerdict == EscalationPolicy.Verdict.DENY_DEPTH) {
+                    PermissionDecision denyDepth = PermissionDecision.deny(
+                            "Escalation denied: destructive tool '" + tc.toolName
+                                    + "' at spawn depth " + depth
+                                    + " (>= AIOS_MAX_ESCALATION_DEPTH="
+                                    + EscalationPolicy.maxEscalationDepth() + ")",
+                            "escalation_depth",
+                            List.of());
+                    permissionChecker.recordDenial(tc.toolName, input, denyDepth, context);   // 三写审计
+                    UnifiedAuditLog.append(UnifiedAuditLog.LAYER_PERMISSION,
+                            "ESCALATION_DENIED_DEPTH", agentId,
+                            tc.toolName + ":" + target,
+                            "depth=" + depth + " chain=" + chain + " tool=" + tc.toolName);
+                    log.warn("[QueryEngine] 深度升级被拒: tool={}, depth={}, chain={}",
+                            tc.toolName, depth, chain);
+                    return "权限被拒绝: " + denyDepth.message();
+                }
+
+                // ── ASK 审计（Gap C-d）：记录升级请求 + spawn 树上下文到统一审计链 ──
+                UnifiedAuditLog.append(UnifiedAuditLog.LAYER_PERMISSION, "ASK", agentId,
+                        tc.toolName + ":" + target,
+                        decision.message() + " depth=" + depth + " chain=" + chain);
+
                 ToolPermissionChannel.ApprovalResponse resp = ToolPermissionChannel.requestApproval(
-                        agentId, tc.toolName, target, decision.message());
+                        agentId, tc.toolName, target, decision.message(),
+                        depth, List.copyOf(chain), isSubAgent);
                 switch (resp) {
                     case ALWAYS_TARGET -> permissionChecker.grantTargetApproval(tc.toolName, target);
                     case DENY -> {
                         log.warn("[QueryEngine] 工具 '{}' 被用户拒绝: {}", tc.toolName, decision.message());
                         return "权限被拒绝: " + decision.message();
                     }
-                    case ALLOW_ONCE -> log.info("[QueryEngine] 工具 '{}' 获用户本次放行", tc.toolName);
+                    case ALLOW_ONCE -> log.info("[QueryEngine] 工具 '{}' 获用户本次放行 (depth={})",
+                            tc.toolName, depth);
                 }
             }
 
@@ -989,6 +1085,8 @@ public class QueryEngine {
             return "工具执行错误: " + e.getMessage();
         }
         } finally {
+            CallerContext.clear(); // 清理调用方上下文，防线程池泄漏
+            SpawnPrivilegeContext.clear(); // 清理权限继承上下文，防线程池复用泄漏（Gap A）
             if (toolSpan != null) {
                 toolSpan.setAttribute("duration_ms", System.currentTimeMillis() - toolStartMs);
                 TracingManager.instance().endSpan(toolSpan.spanId());

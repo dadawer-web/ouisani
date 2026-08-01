@@ -378,14 +378,7 @@ public class AiosShell extends AbstractAgent {
         com.ouisani.aios.core.lifecycle.HeartbeatScheduler.instance().start();
         System.out.println("  ✓ HeartbeatScheduler 已启动（由 SystemTick 驱动）");
 
-        // 9. OvernightRunner (长跑守护进程 — run-once-catch-up：JVM 重启后 reload 持久化 manifest，
-        //    resume 被中断的非终态 run，让阶段机自动补跑停机期间错过的义务如晨报)
-        //    借鉴 OpenWorker automation/scheduler.py:64-68 首轮 catchup tick。
-        //    必须在 VfsManager.init() + llmRouter 注册之后调用（catch-up 依赖 VFS listFilesUnder/readText）。
-        com.ouisani.aios.core.overnight.OvernightRunner.instance().configure(llmRouter, scheduler);
-        System.out.println("  ✓ OvernightRunner 已配置（run-once-catch-up 已触发）");
-
-        // 10. ScienceMcpBootstrap (科研 MCP 网关 — paper-search: arXiv/PubMed/Crossref/Semantic Scholar 等 20+ 学术数据源)
+        // 9. ScienceMcpBootstrap (科研 MCP 网关 — paper-search: arXiv/PubMed/Crossref/Semantic Scholar 等 20+ 学术数据源)
         com.ouisani.aios.user.init.ScienceMcpBootstrap.registerDefaults();
 
         System.out.println();

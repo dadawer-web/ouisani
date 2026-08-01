@@ -1,5 +1,6 @@
 package com.ouisani.aios.core.permission;
 
+import com.ouisani.aios.core.ipc.TraceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -53,12 +54,22 @@ public final class PermissionDenialLedger {
 
     /**
      * 追加一条权限拒绝记录。Best-effort：永不抛出。
+     * <p>
+     * 若调用方未带 traceId（如直接构造的测试 record），从 {@link TraceContext} 补全——
+     * 保证审计链里每条 denial 都有 traceId 锚点，可被 {@link com.ouisani.aios.core.audit.UnifiedAuditLog}
+     * 按 traceId 与 cgroup/sandbox 决策关联（P0 联合治理）。
      */
     public static void append(PermissionChecker.DenialRecord record) {
         if (!enabled || record == null) {
             return;
         }
         try {
+            if (record.traceId() == null) {
+                String tid = TraceContext.getCurrentTraceId();
+                if (tid != null) {
+                    record = record.withTraceId(tid);
+                }
+            }
             appendRecord(record);
         } catch (Throwable t) {
             log.debug("[PermissionDenialLedger] 记录失败 (agent={}): {}",

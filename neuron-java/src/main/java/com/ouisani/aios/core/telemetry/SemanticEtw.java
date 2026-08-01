@@ -1,5 +1,7 @@
 package com.ouisani.aios.core.telemetry;
 
+import com.ouisani.aios.core.ipc.TraceContext;
+
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -87,6 +89,10 @@ public final class SemanticEtw {
     /**
      * 零开销事件写入。无锁、无 I/O、无控制台输出。
      * 使用位运算 AND 实现快速取模（BUFFER_SIZE 为 2 的幂）。
+     * <p>
+     * traceId 自动从 {@link TraceContext#getCurrentTraceId()} 取（由 QueryEngine 在 turn
+     * 入口注入 InheritableThreadLocal），使本事件可被 {@link com.ouisani.aios.core.audit.UnifiedAuditLog}
+     * 按 traceId 与 permission/sandbox 层决策关联。无 turn 上下文时 traceId=null，仍记录。
      *
      * @param component 事件来源（如 "LLM", "CGROUP", "SECURITY"）
      * @param type      事件类型（如 "CALL", "CONSUME", "BPF_INTERCEPT"）
@@ -94,8 +100,9 @@ public final class SemanticEtw {
      */
     public void logEvent(String component, String type, String payload) {
         if (!enabled) return;
+        String traceId = TraceContext.getCurrentTraceId();
         int idx = cursor.getAndIncrement() & INDEX_MASK;
-        ringBuffer[idx] = new EventRecord(System.nanoTime(), component, type, payload);
+        ringBuffer[idx] = new EventRecord(System.nanoTime(), component, type, payload, traceId);
         totalEvents.incrementAndGet();
 
         // 安全事件统计
@@ -131,16 +138,23 @@ public final class SemanticEtw {
                               String threatLevel, String ruleId, String action, String reason) {
         if (!enabled) return;
 
-        // 同时写入通用环形缓冲区
+        // traceId 自动注入（与 logEvent 一致），使 permission 拒绝事件可被 UnifiedAuditLog 关联
+        String traceId = TraceContext.getCurrentTraceId();
+
+        // 同时写入通用环形缓冲区（traceId 经 EventRecord 字段透传，无需进 payload）
         String payload = String.format(
-                "agent=%s token=%s threat=%s rule=%s action=%s reason=%s thinking=%s",
+                "traceId=%s agent=%s token=%s threat=%s rule=%s action=%s reason=%s thinking=%s",
+                traceId != null ? traceId : "null",
                 agentId, securityToken, threatLevel, ruleId, action, reason,
                 thinkingContext != null ? truncate(thinkingContext, 200) : "null");
-        logEvent("AUDIT", "SECURITY_AUDIT", payload);
+        // 直接走 5 参构造，避免 logEvent 再次查 TraceContext（已取过）
+        int ringIdx = cursor.getAndIncrement() & INDEX_MASK;
+        ringBuffer[ringIdx] = new EventRecord(System.nanoTime(), "AUDIT", "SECURITY_AUDIT", payload, traceId);
+        totalEvents.incrementAndGet();
 
         // 写入语义审计专用缓冲区
-        int idx = auditCursor.getAndIncrement() & (AUDIT_BUFFER_SIZE - 1);
-        auditBuffer[idx] = new SemanticAuditRecord(
+        int auditIdx = auditCursor.getAndIncrement() & (AUDIT_BUFFER_SIZE - 1);
+        auditBuffer[auditIdx] = new SemanticAuditRecord(
                 System.nanoTime(), agentId, securityToken, thinkingContext,
                 threatLevel, ruleId, action, reason);
         totalAuditEvents.incrementAndGet();

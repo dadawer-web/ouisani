@@ -25,6 +25,7 @@ import com.ouisani.aios.vfs.OverlayNode;
 import com.ouisani.aios.core.vfs.VfsJournal;
 import com.ouisani.aios.core.vfs.VfsLockManager;
 import com.ouisani.aios.core.vfs.FileAccessRecorder;
+import com.ouisani.aios.core.security.VfsRateLimiter;
 import io.javalin.Javalin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -409,6 +410,7 @@ public final class VfsManager {
      * @return true 挂载成功，false 路径已存在
      */
     public boolean mount(String dirPath, String name, VfsNode node, int callerUid) {
+        VfsRateLimiter.instance().checkWrite(dirPath + "/" + name); // 资源层限流：超限抛 SecurityException + 双写审计
         rwLock.writeLock().lock();
         try {
             if (!initialized) {
@@ -757,6 +759,7 @@ public final class VfsManager {
      * @return 文件文本内容，不存在则返回 null
      */
     public String readText(String path) {
+        VfsRateLimiter.instance().checkRead(path); // 资源层限流：超限抛 SecurityException + 双写审计
         Optional<VfsNode> nodeOpt = resolve(path);
         if (nodeOpt.isEmpty()) {
             return null;
@@ -790,7 +793,23 @@ public final class VfsManager {
      * @return true 写入成功
      */
     public boolean writeText(String path, String content) {
-        boolean success = writeTextInternal(path, content);
+        return writeText(path, content, null);
+    }
+
+    /**
+     * 带 {@code ownerTenantId} 的写入 — 新建节点时盖上租户戳。
+     * <p>
+     * 已存在的节点不改其 ownerTenantId（所有权一旦确定不随写入漂移）。
+     * {@code ownerTenantId=null} 表示 legacy 写入（不戳，所有权校验对 null skip）。
+     *
+     * @param path           VFS 路径
+     * @param content        要写入的文本内容
+     * @param ownerTenantId  新建节点的归属租户 ID；null 表示不声明（legacy）
+     * @return true 写入成功
+     */
+    public boolean writeText(String path, String content, String ownerTenantId) {
+        VfsRateLimiter.instance().checkWrite(path); // 资源层限流：超限抛 SecurityException + 双写审计
+        boolean success = writeTextInternal(path, content, ownerTenantId);
         // R1: Provenance 追溯 — best-effort，不影响主流程
         com.ouisani.aios.core.provenance.ProvenanceHook.onWrite(path, content, success);
         return success;
@@ -802,7 +821,7 @@ public final class VfsManager {
      * 由 {@link #writeText} 包装调用。也可直接调用以跳过 Provenance 记录
      * （如系统内部写入 .aios/provenance.jsonl 自身时避免递归）。
      */
-    private boolean writeTextInternal(String path, String content) {
+    private boolean writeTextInternal(String path, String content, String ownerTenantId) {
         rwLock.writeLock().lock();
         try {
             if (!initialized) {
@@ -818,7 +837,7 @@ public final class VfsManager {
 
             VfsNode existing = pathTree.get(resolved);
             if (existing != null) {
-                // 节点已存在，直接写入
+                // 节点已存在，直接写入（不改其 ownerTenantId — 所有权不漂移）
                 if (!existing.checkWrite(0)) {
                     log.warn("[VFS] writeText 被拒绝: 无写入权限 '{}'", resolved);
                     return false;
@@ -849,6 +868,7 @@ public final class VfsManager {
                 String physicalFilePath = physicalDir + relativePath;
 
                 HostSourceNode hostNode = new HostSourceNode(resolved, physicalFilePath);
+                hostNode.setOwnerTenantId(ownerTenantId);
                 boolean ok = hostNode.write(content);
                 if (!ok) {
                     // 磁盘写入失败，降级为纯内存模式
@@ -856,6 +876,7 @@ public final class VfsManager {
                     log.warn("[VFS] 磁盘写入失败，已降级为纯内存模式。后续写入仅在内存中生效。");
                     // 回退到 MutableFileNode（内存）
                     MutableFileNode memNode = new MutableFileNode(resolved);
+                    memNode.setOwnerTenantId(ownerTenantId);
                     memNode.write(content);
                     pathTree.put(resolved, memNode);
                     log.info("[VFS] writeText: 磁盘写入失败，已回退至 MutableFileNode '{}'，字符数 {}", resolved, content.length());
@@ -878,6 +899,7 @@ public final class VfsManager {
             ensureDirectoryExists(parentPath);
 
             MutableFileNode newNode = new MutableFileNode(resolved);
+            newNode.setOwnerTenantId(ownerTenantId);
             newNode.write(content);
             pathTree.put(resolved, newNode);
             log.info("[VFS] writeText: 已创建新 MutableFileNode '{}'，字符数 {}", resolved, content.length());
@@ -898,6 +920,102 @@ public final class VfsManager {
      */
     public boolean exists(String path) {
         return resolve(path).isPresent();
+    }
+
+    /**
+     * VFS 是否已初始化 — 供 PermissionChecker 等外部组件探测，
+     * 避免对未初始化的 VFS 做所有权查询（{@link #resolve} 未初始化时返回 empty）。
+     */
+    public boolean isInitialized() {
+        return initialized;
+    }
+
+    /**
+     * 给已存在的 VFS 节点盖租户戳 — 用于租户根目录注册或批量标记归属。
+     * <p>
+     * <b>不漂移原则</b>：仅当节点存在且当前 {@code ownerTenantId} 为 null（legacy 未声明）
+     * 时才盖戳；已确定归属的节点不被覆盖。{@code tenantId=null/blank} 为 no-op。
+     * 仅 {@link VfsNode.DirectoryNode} / {@link MutableFileNode} / {@link HostSourceNode}
+     * 支持盖戳；不可变 {@link VfsNode.FileNode}（record）返回 false。
+     *
+     * @param path     VFS 路径
+     * @param tenantId 租户 ID；null/blank 表示不盖戳（no-op）
+     * @return true 节点存在、类型可变、且原 ownerTenantId 为 null 已成功盖戳；
+     *         false 节点不存在 / tenantId 为空 / 节点类型不可变 / 已有归属不漂移
+     */
+    public boolean stampOwnerTenantId(String path, String tenantId) {
+        if (tenantId == null || tenantId.isBlank()) return false;
+        rwLock.writeLock().lock();
+        try {
+            String resolved = translatePath(path, AGENT_ROOT.get());
+            if (resolved.isEmpty()) return false;
+            VfsNode node = pathTree.get(resolved);
+            if (node == null) return false;
+            return stampNodeIfLegacy(node, tenantId);
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * 注册租户根目录 — 将一个 VFS 子树标记为某租户所有。
+     * <p>
+     * 类比 Linux per-tenant namespace：每个租户拥有独立 VFS 子树，根目录盖戳后，
+     * {@code PermissionChecker.checkTenantOwnership} 即可基于 {@code ownerTenantId}
+     * 拦截跨租户访问，取代脆弱的路径子串匹配。
+     * <p>
+     * 行为：确保根目录存在（不存在则创建），盖戳根目录及其下所有 legacy（ownerTenantId=null）节点。
+     * 幂等：重复注册同 tenantId+root 不报错，已盖戳节点不重新盖戳（不漂移）。
+     *
+     * @param tenantId 租户 ID
+     * @param vfsRoot  租户根 VFS 路径（如 "/tenants/tenantA"）
+     */
+    public void registerTenantRoot(String tenantId, String vfsRoot) {
+        if (tenantId == null || tenantId.isBlank() || vfsRoot == null || vfsRoot.isBlank()) return;
+        rwLock.writeLock().lock();
+        try {
+            if (!initialized) {
+                log.warn("[VFS] registerTenantRoot 跳过：VFS 未初始化");
+                return;
+            }
+            String resolved = translatePath(vfsRoot, AGENT_ROOT.get());
+            if (resolved.isEmpty()) {
+                log.warn("[VFS] registerTenantRoot 路径逃逸被拒: '{}'", vfsRoot);
+                return;
+            }
+            ensureDirectoryExists(resolved);
+            String prefix = resolved.endsWith("/") ? resolved : resolved + "/";
+            int stamped = 0;
+            for (Map.Entry<String, VfsNode> e : pathTree.entrySet()) {
+                String p = e.getKey();
+                if (!p.equals(resolved) && !p.startsWith(prefix)) continue;
+                if (stampNodeIfLegacy(e.getValue(), tenantId)) stamped++;
+            }
+            log.info("[VFS] 租户根已注册: {} → tenant={} (新盖戳 {} 个 legacy 节点)", resolved, tenantId, stamped);
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * 内部：仅当节点 {@code ownerTenantId} 为 null 时盖戳（不漂移）。
+     * <p>
+     * <b>必须在写锁内调用</b>（修改节点可变状态）。返回是否实际盖戳。
+     */
+    private boolean stampNodeIfLegacy(VfsNode node, String tenantId) {
+        if (node instanceof VfsNode.DirectoryNode dir && dir.ownerTenantId() == null) {
+            dir.setOwnerTenantId(tenantId);
+            return true;
+        }
+        if (node instanceof MutableFileNode mf && mf.ownerTenantId() == null) {
+            mf.setOwnerTenantId(tenantId);
+            return true;
+        }
+        if (node instanceof HostSourceNode hs && hs.ownerTenantId() == null) {
+            hs.setOwnerTenantId(tenantId);
+            return true;
+        }
+        return false;
     }
 
     /** 递归确保目录路径存在 */

@@ -1,5 +1,6 @@
 package com.ouisani.aios.core.provenance;
 
+import com.ouisani.aios.core.ipc.TraceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -127,7 +128,8 @@ public final class ProvenanceHook {
                     "write",
                     content,
                     CURRENT_AGENT_ID.get(),
-                    CURRENT_SESSION_ID.get()
+                    CURRENT_SESSION_ID.get(),
+                    TraceContext.getCurrentTraceId()
             );
             appendRecord(record);
         } catch (Throwable t) {
@@ -159,7 +161,8 @@ public final class ProvenanceHook {
                     tool,
                     content,
                     CURRENT_AGENT_ID.get(),
-                    CURRENT_SESSION_ID.get()
+                    CURRENT_SESSION_ID.get(),
+                    TraceContext.getCurrentTraceId()
             );
             appendRecord(record);
         } catch (Throwable t) {

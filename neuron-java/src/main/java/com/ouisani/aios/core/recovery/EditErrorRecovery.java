@@ -23,7 +23,9 @@ public class EditErrorRecovery implements RecoveryStrategy {
     @Override
     public RecoveryResult apply(RecoveryContext context) {
         log.info("[EditErrorRecovery] 正在为 Agent 注入重新读取指令 {}", context.agentId());
-        String errorMsg = context.exception().getMessage() != null ? context.exception().getMessage() : "Edit failed";
+        // 不可信错误文本 — 净化后再注入，防止载荷借恢复通道绕过权限（同 ReflectionInjectionRecovery）
+        String errorMsg = RecoveryPromptSanitizer.sanitize(
+                context.exception().getMessage() != null ? context.exception().getMessage() : "Edit failed");
         String modifier = "\n\n[SYSTEM CRITICAL - EDIT FAILED]:\n"
                 + "Your previous file edit failed:\n"
                 + "```text\n" + errorMsg + "\n```\n"

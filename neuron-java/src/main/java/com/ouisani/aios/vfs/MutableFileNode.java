@@ -25,6 +25,7 @@ public non-sealed class MutableFileNode implements VfsNode {
     private final AtomicReference<String> content = new AtomicReference<>("");
     private int ownerUid;
     private int permissions;
+    private String ownerTenantId;
 
     public MutableFileNode(String path) {
         this(path, 0, 0644);
@@ -64,6 +65,15 @@ public non-sealed class MutableFileNode implements VfsNode {
     @Override
     public void setPermissions(int perm) {
         this.permissions = perm;
+    }
+
+    @Override
+    public String ownerTenantId() {
+        return ownerTenantId;
+    }
+
+    public void setOwnerTenantId(String tenantId) {
+        this.ownerTenantId = tenantId;
     }
 
     @Override

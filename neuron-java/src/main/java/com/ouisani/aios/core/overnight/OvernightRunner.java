@@ -43,19 +43,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>
  * 阶段不存储，由 {@link OvernightPhase#compute} 实时计算。coordinator 每轮自算。
  * manifest + 任务卡片 VFS 持久化到 {@code /var/run/overnight/{runId}/}。
- * <p>
- * <b>调度三策略</b>（借鉴 OpenWorker {@code automation/scheduler.py}）：
- * <ul>
- *   <li><b>run-once-catch-up</b>：{@link #configure} 末尾调 {@link #reloadAndCatchUp}，
- *       扫描 overnightDir reload 非终态 manifest 并 resume —— 让阶段机自动补跑停机期间
- *       错过的义务（如晨报：{@link OvernightPhase#compute} 在 morningReportPostedAt==null 时
- *       优先 yield MORNING_REPORT）。resume 保留原时间锚点（不重算 targetWakeAt）。</li>
- *   <li><b>skip-on-overlap</b>：run 级守卫（{@link #startOvernightRun} 拒绝已有 active run）
- *       + {@link #selectCatchUpCandidate} 在 activeManifest 已设时返回 null（不 double-resume）。</li>
- *   <li><b>spawn-not-await</b>：coordinator 经 {@link TaskScheduler#spawn} 虚拟线程 fire-and-forget，
- *       supervisor 在独立 {@code ScheduledExecutorService} —— coordinator park 在 LLM/审批
- *       不阻塞 supervisor tick（已满足，无需改动）。</li>
- * </ul>
  *
  * @see OvernightContract
  * @see OvernightPhase
@@ -126,13 +113,6 @@ public final class OvernightRunner {
         log.info("[OvernightRunner] 已配置: llm={}, taskScheduler={}",
                 llmProvider != null ? llmProvider.name() : "null",
                 taskScheduler != null ? "ready" : "null");
-        // run-once-catch-up：init 序列注入依赖后，首轮扫描持久化 manifest，
-        // reload+resume 被中断的非终态 run（借鉴 OpenWorker scheduler.py:64-68 首轮 catchup tick）。
-        try {
-            reloadAndCatchUp();
-        } catch (Exception e) {
-            log.warn("[OvernightRunner] reloadAndCatchUp 启动 catch-up 失败（best-effort）: {}", e.getMessage());
-        }
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -199,138 +179,6 @@ public final class OvernightRunner {
         log.info("[OvernightRunner] overnight run 已启动: runId={}, pid={}, targetWake={}",
                 runId, pid, m.targetWakeLabel());
         return runId;
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    //  Catch-up（借鉴 OpenWorker automation/scheduler.py:64-68 run-once-catch-up）
-    // ════════════════════════════════════════════════════════════════
-
-    /**
-     * 重启 catch-up：扫描 {@code AiosPaths.overnightDir()} 下持久化的 manifest，reload
-     * 非终态 run 并 resume。等价 OpenWorker scheduler {@code _loop} 首轮 {@code _tick(trigger="catchup")}。
-     * <p>
-     * <b>核心洞察</b>：{@link OvernightPhase#compute} 在 {@code morningReportPostedAt==null}
-     * 时优先 yield MORNING_REPORT（即使已过 grace 窗口），所以只要 coordinator 存活，晨报
-     * 永不跳过。真正缺口是 JVM 重启后 manifest 不被 reload（activeManifest 为 in-memory volatile）→
-     * 被中断的 run 被遗弃。本方法 reload+resume 持久化的非终态 manifest，让阶段机自动补跑
-     * 停机期间错过的义务（晨报等），实现 run-once-catch-up。
-     * <p>
-     * <b>skip-on-overlap</b>：若已有 active run，跳过（不 double-resume）。多个非终态 manifest
-     * 取最新 {@code startedAt} 的一个（OvernightRunner 单 coordinator 单 active run 语义）。
-     * <p>
-     * 由 {@link #configure} 末尾调用（init 序列入口）。未配置依赖时安全跳过。
-     */
-    public synchronized void reloadAndCatchUp() {
-        if (llmProvider == null || taskScheduler == null) {
-            log.debug("[OvernightRunner] reloadAndCatchUp 跳过 — 未配置 llm/taskScheduler");
-            return;
-        }
-        OvernightManifest candidate = selectCatchUpCandidate();
-        if (candidate == null) {
-            log.info("[OvernightRunner] reloadAndCatchUp — 无非终态 manifest 需 resume");
-            return;
-        }
-        log.info("[OvernightRunner] reloadAndCatchUp — 恢复被中断的 run: {}", candidate.runId());
-        resumeRun(candidate);
-    }
-
-    /**
-     * 扫描 overnightDir，选出应 catch-up resume 的 manifest（最新 RUNNING 的一个）。
-     * <p>
-     * 处理规则：
-     * <ul>
-     *   <li>{@code activeManifest != null}（已有 active run）→ 返回 null（skip-on-overlap）</li>
-     *   <li>COMPLETED/FAILED → 跳过（终态）</li>
-     *   <li>CANCEL_REQUESTED → 标记 COMPLETED 并 persist（终结），不 resume</li>
-     *   <li>RUNNING → 候选，取最新 {@code startedAt}</li>
-     * </ul>
-     * 单个 manifest 解析失败 best-effort 跳过（不阻断其余）。
-     *
-     * @return 应 resume 的 manifest；无则 null
-     */
-    synchronized OvernightManifest selectCatchUpCandidate() {
-        if (activeManifest != null) {
-            log.info("[OvernightRunner] catch-up 跳过 — 已有 active run: {}", activeManifest.runId());
-            return null;
-        }
-        String dir = AiosPaths.overnightDir();
-        List<String> files = com.ouisani.aios.core.VfsManager.instance().listFilesUnder(dir + "/");
-        OvernightManifest latest = null;
-        for (String path : files) {
-            if (!path.endsWith("/manifest.json")) {
-                continue;
-            }
-            try {
-                String json = com.ouisani.aios.core.VfsManager.instance().readText(path);
-                if (json == null) {
-                    continue;
-                }
-                String vfsRunDir = path.substring(0, path.length() - "/manifest.json".length());
-                OvernightManifest m = OvernightManifest.fromJson(json, vfsRunDir);
-                if (m.isTerminal()) {
-                    continue;  // COMPLETED/FAILED
-                }
-                if (m.isCancelled()) {
-                    // CANCEL_REQUESTED → 终结为 COMPLETED，不 resume
-                    persistManifest(m.withStatus(OvernightManifest.OvernightRunStatus.COMPLETED));
-                    log.info("[OvernightRunner] catch-up — 被取消的 run 标记 COMPLETED: {}", m.runId());
-                    continue;
-                }
-                // RUNNING 候选 — 取最新 startedAt
-                if (latest == null || m.startedAt().isAfter(latest.startedAt())) {
-                    latest = m;
-                }
-            } catch (Exception e) {
-                log.warn("[OvernightRunner] catch-up 解析 manifest 失败 {}: {}", path, e.getMessage());
-            }
-        }
-        return latest;
-    }
-
-    /**
-     * Resume 一个被中断的 run —— {@link #startOvernightRun} 的"跳过 manifest 创建"版本。
-     * <p>
-     * <b>保留原时间锚点</b>（不重算 targetWakeAt 等）—— 这是 catch-up 语义核心：原 8am wake
-     * 的 run 重启后仍按 8am 锚点算阶段，阶段机自动补跑错过的晨报。coordinator 经
-     * {@code taskScheduler.spawn} 虚拟线程 fire-and-forget（spawn-not-await），不阻塞调用方。
-     */
-    private void resumeRun(OvernightManifest persisted) {
-        activeManifest = persisted;
-        persistManifest(activeManifest);
-
-        // 设置 overnight 上下文 — 同 startOvernightRun
-        PermissionProfile profile = OvernightPermissionProfile.build();
-        overnightProfile.set(profile);
-        aggregatedDenials.clear();
-        PermissionChecker.setGlobalDenialSink(this::collectDenial);
-        log.info("[OvernightRunner] catch-up resume 已注入 DONT_ASK 权限画像: deny={} rules, allow={} rules",
-                profile.denyRules().size(), profile.allowRules().size());
-
-        // spawn coordinator（spawn-not-await：虚拟线程 fire-and-forget，不阻塞本方法）
-        AgentTask coordTask = new AgentTask(
-                taskScheduler.nextPid(),
-                AgentTask.TaskStatus.READY,
-                "overnight/" + persisted.runId(),
-                null, null,
-                List.of()
-        );
-        coordTask.setProcessPriority(ProcessPriority.NORMAL);
-        coordTask.setDeadlineMs(persisted.postWakeGraceUntil().plus(Duration.ofHours(1)).toEpochMilli());
-        coordTask.setBudget(500);
-        coordTask.setGasLimit(1_000_000);
-
-        int pid = taskScheduler.spawn(coordTask,
-                () -> runCoordinatorLoop(coordTask),
-                persisted.vfsRunDir());
-        activeManifest = persisted.withCoordinatorPid(pid);
-        persistManifest(activeManifest);
-
-        startSupervisor();
-
-        SemanticEtw.getInstance().logEvent("OVERNIGHT", "CATCHUP_RESUME",
-                "runId=" + persisted.runId() + " pid=" + pid);
-        log.info("[OvernightRunner] catch-up resume 完成: runId={}, pid={}, targetWake={}",
-                persisted.runId(), pid, persisted.targetWakeLabel());
     }
 
     /**
@@ -655,8 +503,8 @@ public final class OvernightRunner {
         }
     }
 
-    /** manifest 序列化为 JSON（简化版） — package-private 供同包测试 round-trip */
-    String manifestToJson(OvernightManifest m) {
+    /** manifest 序列化为 JSON（简化版） */
+    private String manifestToJson(OvernightManifest m) {
         return """
                 {"runId":"%s","status":"%s","startedAt":"%s","targetWakeAt":"%s","handoffReadyAt":"%s","postWakeGraceUntil":"%s","morningReportPostedAt":"%s","coordinatorPid":%d,"mission":"%s"}
                 """.formatted(

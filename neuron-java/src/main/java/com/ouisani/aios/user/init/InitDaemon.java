@@ -298,25 +298,7 @@ public class InitDaemon extends AbstractAgent {
         }
         bootResults.put("CognitiveDreamDaemon", dreamOk);
 
-        // 3c-bis. OvernightRunner — run-once-catch-up（借鉴 OpenWorker scheduler.py:64-68）
-        // JVM 重启后 reload 持久化 manifest 并 resume 被中断的非终态 run，让阶段机自动补跑
-        // 错过的义务（如晨报）。llmRouter 为 null（2-arg 构造器）时跳过 — 与 CognitiveDreamDaemon.configure 同条件。
-        boolean overnightOk = false;
-        try {
-            if (llmRouter != null) {
-                com.ouisani.aios.core.overnight.OvernightRunner.instance().configure(llmRouter, scheduler);
-                overnightOk = true;
-                System.out.println("  │  [SVC] OvernightRunner：run-once-catch-up 已触发 ✓          │");
-            } else {
-                System.out.println("  │  [SVC] OvernightRunner：未配置 LLM，跳过 catch-up ⚠        │");
-            }
-        } catch (Exception e) {
-            log.warn("[PID 1] OvernightRunner catch-up 失败：{}", e.getMessage());
-            System.out.println("  │  [SVC] OvernightRunner：catch-up 失败 ✗                    │");
-        }
-        bootResults.put("OvernightRunner", overnightOk);
-
-        // 3d. EnvironmentSnapshot fork 工厂 + Hibernation 任务队列 provider 注册
+        // 3c-bis. EnvironmentSnapshot fork 工厂 + Hibernation 任务队列 provider 注册
         boolean snapshotRegOk = false;
         try {
             EnvironmentSnapshotManager.instance().registerFactory(new OmnifactoryCapturerFactory());
@@ -330,7 +312,7 @@ public class InitDaemon extends AbstractAgent {
         }
         bootResults.put("SnapshotRegistration", snapshotRegOk);
 
-        // 3e. PluginManager — WASM 插件扫描
+        // 3d. PluginManager — WASM 插件扫描
         int pluginCount = 0;
         boolean pluginOk = false;
         try {
@@ -344,7 +326,7 @@ public class InitDaemon extends AbstractAgent {
         }
         bootResults.put("PluginManager", pluginOk);
 
-        // 3f. VFS Manifest 驱动启动 — 从 /etc/init/startup_manifest.json 读取业务进程清单
+        // 3e. VFS Manifest 驱动启动 — 从 /etc/init/startup_manifest.json 读取业务进程清单
         boolean manifestOk = false;
         try {
             System.out.println("  │  [SVC] 正在读取 /etc/init/startup_manifest.json...              │");

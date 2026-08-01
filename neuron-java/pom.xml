@@ -148,7 +148,7 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.2</version>
                 <configuration>
-                    <argLine>--add-modules java.net.http --add-opens com.ouisani.aios/com.ouisani.aios.core.cache=ALL-UNNAMED</argLine>
+                    <argLine>--add-modules java.net.http --add-opens com.ouisani.aios/com.ouisani.aios.core.cache=ALL-UNNAMED -XX:+EnableDynamicAgentLoading</argLine>
                 </configuration>
             </plugin>
             <plugin>

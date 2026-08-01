@@ -123,7 +123,8 @@ class ToolPermissionChannelTest {
         try {
             // 1 秒超时，不 respond → 必须 DENY
             ToolPermissionChannel.ApprovalResponse resp = ToolPermissionChannel.requestApproval(
-                    "agent1", "send_message", "#general", "test", 1);
+                    "agent1", "send_message", "#general", "test",
+                    0, java.util.List.of(), false, 1);
             assertEquals(ToolPermissionChannel.ApprovalResponse.DENY, resp,
                     "超时未 respond 必须返回 DENY");
         } finally {

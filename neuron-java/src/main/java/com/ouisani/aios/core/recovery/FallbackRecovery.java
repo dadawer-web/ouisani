@@ -23,7 +23,9 @@ public class FallbackRecovery implements RecoveryStrategy {
     @Override
     public RecoveryResult apply(RecoveryContext context) {
         log.info("[FallbackRecovery] 正在为 Agent 应用通用回退 {}", context.agentId());
-        String errorMsg = context.exception().getMessage() != null ? context.exception().getMessage() : "Unknown error";
+        // 不可信错误文本 — 净化后再注入，防止载荷借恢复通道绕过权限（同 ReflectionInjectionRecovery）
+        String errorMsg = RecoveryPromptSanitizer.sanitize(
+                context.exception().getMessage() != null ? context.exception().getMessage() : "Unknown error");
 
         String modifier = "\n\n[SYSTEM - RECOVERY FALLBACK]:\n"
                 + "An unexpected error occurred:\n"

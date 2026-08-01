@@ -59,6 +59,17 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
     boolean write(String data);
 
     /**
+     * 节点归属租户 ID — 用于显式跨租户隔离（取代路径子串匹配）。
+     * <p>
+     * 默认 {@code null} 表示"未声明租户"（legacy 节点），所有权校验对 null 一律 skip
+     * 以保持向后兼容。仅 {@link FileNode} / {@link DirectoryNode} / MutableFileNode /
+     * HostSourceNode 覆写此方法以携带真实租户归属。
+     *
+     * @return 租户 ID；null 表示未声明（legacy，不参与所有权校验）
+     */
+    default String ownerTenantId() { return null; }
+
+    /**
      * Create a frozen, read-only shadow copy (VSS snapshot) of this node.
      * The returned node captures the state at this instant and rejects all writes.
      * Default implementation returns a read-only wrapper; nodes with internal
@@ -147,10 +158,15 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
     }
 
     /** 普通文件节点 — 类比 Linux 的常规文件（S_IFREG），默认权限 0644 */
-    record FileNode(String path, int ownerUid, int permissions) implements VfsNode {
+    record FileNode(String path, int ownerUid, int permissions, String ownerTenantId) implements VfsNode {
 
         public FileNode(String path) {
-            this(path, 0, 0644);
+            this(path, 0, 0644, null);
+        }
+
+        /** 向后兼容 3 参构造器 — ownerTenantId 默认 null（legacy）。 */
+        public FileNode(String path, int ownerUid, int permissions) {
+            this(path, ownerUid, permissions, null);
         }
 
         @Override
@@ -169,11 +185,16 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
         }
 
         public FileNode withOwnerUid(int uid) {
-            return new FileNode(path, uid, permissions);
+            return new FileNode(path, uid, permissions, ownerTenantId);
         }
 
         public FileNode withPermissions(int perm) {
-            return new FileNode(path, ownerUid, perm);
+            return new FileNode(path, ownerUid, perm, ownerTenantId);
+        }
+
+        /** 返回带新租户归属的副本（record 不可变，故返回新实例）。 */
+        public FileNode withOwnerTenantId(String tenantId) {
+            return new FileNode(path, ownerUid, permissions, tenantId);
         }
 
         @Override
@@ -195,6 +216,7 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
         private final String path;
         private int ownerUid;
         private int permissions;
+        private String ownerTenantId;
 
         public DirectoryNode(String path) {
             this(path, 0, 0755);
@@ -234,6 +256,15 @@ public sealed interface VfsNode permits VfsNode.FileNode, VfsNode.DirectoryNode,
         @Override
         public void setPermissions(int perm) {
             this.permissions = perm;
+        }
+
+        @Override
+        public String ownerTenantId() {
+            return ownerTenantId;
+        }
+
+        public void setOwnerTenantId(String tenantId) {
+            this.ownerTenantId = tenantId;
         }
 
         @Override

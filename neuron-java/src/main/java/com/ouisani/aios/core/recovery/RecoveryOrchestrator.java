@@ -3,7 +3,9 @@ package com.ouisani.aios.core.recovery;
 import com.ouisani.aios.core.compact.CompactService;
 import com.ouisani.aios.core.hook.HookManager;
 import com.ouisani.aios.core.network.EventBus;
+import com.ouisani.aios.core.permission.PermissionChecker;
 import com.ouisani.aios.core.telemetry.TelemetryService;
+import com.ouisani.aios.core.tool.ToolExecutionPipeline;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -58,6 +60,14 @@ public class RecoveryOrchestrator {
     private final ConcurrentHashMap<String, HumanInterventionRequest> pendingHumanInterventions =
             new ConcurrentHashMap<>();
 
+    /**
+     * 权限校验器覆盖（测试/显式注入用）；null 时从 {@link ToolExecutionPipeline} 懒加载。
+     * <p>
+     * 必须复用 pipeline 的同一个 {@link PermissionChecker} 实例，才能尊重用户已配置的
+     * 规则/profile/mode —— 否则重校验会用空规则集误放行。
+     */
+    private volatile PermissionChecker permissionCheckerOverride;
+
     private RecoveryOrchestrator() {
         registerBuiltinStrategies();
 
@@ -68,6 +78,34 @@ public class RecoveryOrchestrator {
 
     public static RecoveryOrchestrator instance() {
         return INSTANCE;
+    }
+
+    /**
+     * 注入权限校验器（主要用于测试隔离）。
+     * <p>
+     * 生产路径下无需调用 —— {@link #resolvePermissionChecker()} 会自动从
+     * {@link ToolExecutionPipeline} 懒加载用户已配置规则的同款实例。
+     * 设为 null 清除覆盖，恢复懒加载行为。
+     */
+    public void setPermissionChecker(PermissionChecker checker) {
+        this.permissionCheckerOverride = checker;
+    }
+
+    /**
+     * 解析当前可用的权限校验器。
+     * <p>
+     * 优先用显式注入的覆盖实例；否则懒加载 {@link ToolExecutionPipeline} 的单例实例；
+     * pipeline 尚未初始化时返回 null（恢复守卫见 null 即放行，维持 legacy 行为）。
+     */
+    private PermissionChecker resolvePermissionChecker() {
+        if (permissionCheckerOverride != null) return permissionCheckerOverride;
+        try {
+            return ToolExecutionPipeline.instance().getPermissionChecker();
+        } catch (Throwable t) {
+            // pipeline 未就绪或初始化中 —— 恢复路径不阻塞，legacy 放行
+            log.debug("[RecoveryOrchestrator] ToolExecutionPipeline 尚未就绪，跳过权限重校验: {}", t.getMessage());
+            return null;
+        }
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -211,6 +249,31 @@ public class RecoveryOrchestrator {
             if (!strategy.shouldApply(context)) {
                 log.debug("[RecoveryOrchestrator] 策略 {} 已跳过（条件不满足）", strategy.name());
                 continue;
+            }
+
+            // ── 恢复重试权限守卫 ──
+            // 防御"借恢复通道绕过权限"攻击：恶意 app 故意制造看似正常的失败，借
+            // ReflectionInjection/UnstableAgentBabysitter 等策略在重试时注入载荷，
+            // 绕过原始权限检查。每次重试前用 PermissionChecker 对原始失败的工具调用
+            // 重新背书 —— "恢复=安全"不再假设，而是被权限子系统重新校验。
+            // 仅当上下文携带原始工具调用（originalToolInput != null）时触发；
+            // 非工具调用失败（如节点崩溃）originalToolInput 为 null，守卫自动放行。
+            if (context.originalToolInput() != null) {
+                RecoveryPermissionGuard.GuardResult guard = RecoveryPermissionGuard.instance()
+                        .recheck(resolvePermissionChecker(),
+                                context.originalTool(), context.originalToolInput(),
+                                context.originalToolContext());
+                if (!guard.allowed()) {
+                    log.warn("[RecoveryOrchestrator] 恢复重试被权限守卫拒绝: Agent={}, 策略={}, 原因={}",
+                            context.agentId(), strategy.name(), guard.reason());
+                    broadcastRecoveryEvent(context.agentId(), strategy.name(), false,
+                            "Permission guard denied recovery retry: " + guard.reason());
+                    // 权限重校验失败 = 恢复通道被用作攻击面，直接升级人类介入
+                    return RecoveryResult.failed("Recovery retry denied by permission guard: "
+                            + guard.reason());
+                }
+                log.debug("[RecoveryOrchestrator] 恢复重试权限守卫放行: Agent={}, 策略={}, 原因={}",
+                        context.agentId(), strategy.name(), guard.reason());
             }
 
             try {
@@ -456,6 +519,26 @@ public class RecoveryOrchestrator {
 
         // 3. 尝试使用策略链恢复
         RecoveryResult result = orchestrate(context);
+
+        // ── Phase 4 defense #4：恢复动作重新授权关卡（opt-in，默认关保论文1 字节稳定）──
+        // 对声明 requiresReauthorization 的结果（如 TopologyMutationStrategy 的角色变更），
+        // 在让其副作用真正生效（resumeNode）前过 RecoveryReauthorizationGate 重跑权限校验。
+        // 关卡默认关闭（aios.recovery.reauthGate=false）；关闭时本块零行为，编排器与论文1 一致。
+        // 用 isEnabled() 动态读取（非 ENABLED 常量快照）—— 供测试隔离切换 + 运行时配置变更。
+        if (result.success() && RecoveryReauthorizationGate.isEnabled()
+                && result.requiresReauthorization()) {
+            RecoveryReauthorizationGate.ReauthResult reauth =
+                    RecoveryReauthorizationGate.check(result, context, resolvePermissionChecker());
+            if (!reauth.allowed()) {
+                log.warn("[RecoveryOrchestrator] 恢复副作用被重新授权关卡拒绝: nodeId={}, reason={}",
+                        nodeId, reauth.reason());
+                broadcastRecoveryEvent(nodeId, "reauth_gate", false,
+                        "Recovery side-effect denied by reauthorization gate: " + reauth.reason());
+                // 关卡拒绝 = 恢复通道被用作提权攻击面，升级人类介入，不让 resumeNode 生效
+                result = RecoveryResult.failed(
+                        "Recovery side-effect denied by reauthorization gate: " + reauth.reason());
+            }
+        }
 
         if (result.success()) {
             log.info("[RecoveryOrchestrator] 崩溃恢复成功: nodeId={}, message={}", nodeId, result.message());

@@ -3,9 +3,13 @@ package com.ouisani.aios.core.tool;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.cgroup.CgroupManager;
 import com.ouisani.aios.core.cgroup.CgroupNode;
+import com.ouisani.aios.core.permission.PermissionProfile;
+import com.ouisani.aios.core.permission.SpawnPrivilegeContext;
 import com.ouisani.aios.core.task.TaskScheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.List;
 
 /**
  * Agent 工具 — 对标 Claude Code 的 AgentTool。
@@ -164,7 +168,15 @@ public class AgentTool implements Tool<AgentTool.Input> {
                         log.debug("[AgentTool] 子 Agent {} 绑定到父 cgroup (预算计入父 Agent)", agentId);
                     }
 
-                    QueryEngine engine = new QueryEngine(context.sdk(), agentId, context.workingDir());
+                    // ── LIM 攻击面闭合（Gap A）：spawn 强制权限非递增 ──
+                    // 子 agent 继承父的有效 PermissionProfile，杜绝「父被降权时子拿全新 DEFAULT = spawn 即升级」。
+                    // SpawnPrivilegeContext 是 InheritableThreadLocal，Thread.startVirtualThread 创建子线程时
+                    // 快照父线程值，故此处 current() 拿到的是父 agent 的有效 profile（由父 QueryEngine.executeTool 发布）。
+                    // null/empty（父为 DEFAULT 或 headless 直测）→ 传 empty() → applyProfile no-op → 子保持 DEFAULT（零回归）。
+                    PermissionProfile parentProfile = SpawnPrivilegeContext.current();
+                    QueryEngine engine = new QueryEngine(context.sdk(), agentId, context.workingDir(),
+                            List.of(),
+                            parentProfile == null ? PermissionProfile.empty() : parentProfile);
                     String result = engine.query(effectivePrompt);
                     AgentWaitRegistry.instance().completeChild(agentId, result);
                 } catch (Exception e) {

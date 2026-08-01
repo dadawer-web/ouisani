@@ -26,6 +26,7 @@ public non-sealed class HostSourceNode implements VfsNode {
     private final String realPhysicalPath;
     private int ownerUid;
     private int permissions;
+    private String ownerTenantId;
 
     public HostSourceNode(String vfsPath, String realPhysicalPath) {
         this(vfsPath, realPhysicalPath, 0, 0666);
@@ -70,6 +71,15 @@ public non-sealed class HostSourceNode implements VfsNode {
     @Override
     public void setPermissions(int perm) {
         this.permissions = perm;
+    }
+
+    @Override
+    public String ownerTenantId() {
+        return ownerTenantId;
+    }
+
+    public void setOwnerTenantId(String tenantId) {
+        this.ownerTenantId = tenantId;
     }
 
     @Override

@@ -93,6 +93,11 @@ public class EventBus {
     }
 
     public void broadcast(String eventType, String payload) {
+        // 资源层限流：per-agent + per-tenant 令牌桶（sys.* 通道 / 内核守护进程 / 特权 agent 豁免）
+        // 超限丢弃不抛异常 — broadcast 是 fire-and-forget，抛异常会阻塞调用方；已双写审计
+        if (!EventBusRateLimiter.instance().tryConsume(eventType)) {
+            return;
+        }
         // Notify SSE clients
         if (!clients.isEmpty()) {
             log.debug("[EventBus] 正在广播事件: type={}, payloadLen={}, clients={}",

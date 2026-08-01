@@ -1,5 +1,10 @@
 package com.ouisani.aios.core.permission;
 
+import com.ouisani.aios.core.VfsManager;
+import com.ouisani.aios.core.VfsNode;
+import com.ouisani.aios.core.audit.UnifiedAuditLog;
+import com.ouisani.aios.core.ipc.TraceContext;
+import com.ouisani.aios.core.telemetry.SemanticEtw;
 import com.ouisani.aios.core.tool.Tool;
 import com.ouisani.aios.core.tool.ToolContext;
 import com.ouisani.aios.core.tool.ToolInput;
@@ -47,6 +52,18 @@ public class PermissionChecker {
     private int consecutiveDenials = 0;
     private int totalDenials = 0;
 
+    /**
+     * 最近一次经 {@link #applyProfile} 注入的权限画像原对象 — 供 spawn 子 agent 继承。
+     * <p>
+     * {@code applyProfile} 把画像<b>展平</b>进 denyRules/askRules/allowRules + mode，但展平后
+     * 无法还原原画像对象。为支持 LIM 动态 spawn 的「权限非递增」约束（子 agent 必须继承父的有效
+     * profile），这里额外保留原 {@link PermissionProfile} 引用，经
+     * {@link SpawnPrivilegeContext} 传播到子线程。
+     * <p>
+     * null 表示从未 applyProfile（DEFAULT 路径）——等价于「无限制可继承」。
+     */
+    private PermissionProfile appliedProfile;
+
     /** 最近 DENY 决策日志（FIFO，容量 64）— 供 overnight 晨报聚合。 */
     private final Deque<DenialRecord> recentDenials = new ConcurrentLinkedDeque<>();
     private static final int MAX_RECENT_DENIALS = 64;
@@ -70,6 +87,16 @@ public class PermissionChecker {
     private static final Set<String> PROTECTED_PATHS = Set.of(
             ".git", ".claude", ".ssh", ".gnupg", ".env", ".aws"
     );
+
+    /**
+     * 角色替换校验器（角色级权限闸门）— 供 {@link #checkRoleMutation} 统一管道复用。
+     * <p>
+     * Phase 4 defense #2/#3：把"恢复动作"（拓扑突变的角色替换）和"正常动作"（工具调用）走同一套
+     * 权限管道 —— 都经 PermissionChecker。角色替换不调 {@link #checkPermission}（那是工具级），
+     * 而调 {@link #checkRoleMutation}（角色级），底层共享 {@link PermissionProfileComparator}。
+     */
+    private static final com.ouisani.aios.core.recovery.RoleReplacementValidator ROLE_REPLACEMENT_VALIDATOR =
+            new com.ouisani.aios.core.recovery.RoleReplacementValidator();
 
     /** Auto 模式安全白名单工具 */
     private static final Set<String> SAFE_AUTO_TOOLS = Set.of(
@@ -124,21 +151,53 @@ public class PermissionChecker {
      * DONT_ASK 不变式：本方法对 DONT_ASK 模式永不返回 ASK；万一上游实现 drift，
      * 此处的防御性兜底会把任何 ASK 转 DENY 并打 WARN。
      */
-    public <I extends ToolInput> PermissionDecision checkPermission(Tool<I> tool, I input, ToolContext context) {
-        PermissionDecision decision = switch (mode) {
-            case DEFAULT      -> checkDefault(tool, input, context);
-            case PLAN         -> checkPlan(tool, input, context);
-            case AUTO         -> checkAuto(tool, input, context);
-            case ACCEPT_EDITS -> checkAcceptEdits(tool, input, context);
-            case BYPASS       -> checkBypass(tool, input, context);
-            case DONT_ASK     -> checkDontAsk(tool, input, context);
-        };
+    /**
+     * 校验角色替换（拓扑突变）是否允许 — 角色级权限闸门，把"恢复动作"统一进 PermissionChecker 管道。
+     * <p>
+     * <b>Phase 4 defense #2/#3（洞2 修复）</b>：{@link com.ouisani.aios.core.recovery.TopologyMutationStrategy}
+     * 把 LLM 诊断吐出的 {@code suggested_role} 直接喂 {@code resumeNode()} 全程零校验（洞2）。本方法把
+     * "恢复动作"和"正常动作"（工具调用走 {@link #checkPermission}）用同一套权限管道处理 —— 角色替换
+     * 走本方法（角色级），底层共享 {@link PermissionProfileComparator} 的权限分数模型。
+     * <p>
+     * <b>两道校验</b>：
+     * <ol>
+     *   <li><b>存在性白名单</b>（defense #3）：{@code suggestedRole} 必须是 {@code aios_roles} 注册角色，
+     *       不是 LLM 随口编的任意字符串（如 {@code admin}）。</li>
+     *   <li><b>非越权</b>（defense #2）：目标角色权限分数 ≤ 当前角色（{@link PermissionProfileComparator}）。</li>
+     * </ol>
+     * <b>BYPASS 不豁免</b>：即便本 PermissionChecker 处于 {@link PermissionMode#BYPASS}，角色替换仍须过白名单 +
+     * 非越权 —— 恢复通道的提权攻击不能用 BYPASS 绕过（与 checkPermission 的"硬前置跨租户校验"同精神）。
+     *
+     * @param currentRole  当前角色名；null/未知 → 仅做存在性白名单
+     * @param suggestedRole LLM 建议的目标角色名
+     * @return 校验结果（valid=true 可替换；valid=false 附拒绝类别）
+     */
+    public com.ouisani.aios.core.recovery.RoleReplacementValidator.Result checkRoleMutation(
+            String currentRole, String suggestedRole) {
+        // BYPASS 不豁免角色替换校验 —— 即便 mode=BYPASS，越权角色替换仍被拦
+        return ROLE_REPLACEMENT_VALIDATOR.validate(currentRole, suggestedRole);
+    }
 
-        // DONT_ASK 不变式防御性兜底
-        if (mode == PermissionMode.DONT_ASK && decision.needsPrompt()) {
-            log.warn("[Permission] DONT_ASK invariant violated (got ASK), converting → DENY: {}",
-                    decision.message());
-            decision = convertAskToDeny(decision, tool, input);
+    public <I extends ToolInput> PermissionDecision checkPermission(Tool<I> tool, I input, ToolContext context) {
+        // 硬前置：跨租户所有权校验（mode-independent，BYPASS/DONT_ASK 不可逃逸）
+        // 返回 null 表示不适用或放行；返回 DENY 则跳过模式分发直接定罪（仍走 recordDenial）
+        PermissionDecision decision = checkTenantOwnership(tool, input, context);
+        if (decision == null) {
+            decision = switch (mode) {
+                case DEFAULT      -> checkDefault(tool, input, context);
+                case PLAN         -> checkPlan(tool, input, context);
+                case AUTO         -> checkAuto(tool, input, context);
+                case ACCEPT_EDITS -> checkAcceptEdits(tool, input, context);
+                case BYPASS       -> checkBypass(tool, input, context);
+                case DONT_ASK     -> checkDontAsk(tool, input, context);
+            };
+
+            // DONT_ASK 不变式防御性兜底
+            if (mode == PermissionMode.DONT_ASK && decision.needsPrompt()) {
+                log.warn("[Permission] DONT_ASK invariant violated (got ASK), converting → DENY: {}",
+                        decision.message());
+                decision = convertAskToDeny(decision, tool, input);
+            }
         }
 
         // 记录 DENY 决策（供 overnight 晨报 + ReviewGate 查询）
@@ -147,6 +206,52 @@ public class PermissionChecker {
         }
 
         return decision;
+    }
+
+    /**
+     * 跨租户所有权硬前置 — 校验 {@code caller.tenantId == target.ownerTenantId}。
+     * <p>
+     * 借鉴 OpenWorker 的显式资源归属模型：每个 VFS 节点携带 {@code ownerTenantId}，
+     * 权限校验时直接比对调用者租户与节点归属租户，取代脆弱的路径子串匹配
+     * （子串匹配会被 {@code /tenants/tenantA_evil/} 之类前缀碰撞绕过）。
+     * <p>
+     * <b>硬前置语义</b>：本检查在所有 {@link PermissionMode} 分发之前执行，
+     * BYPASS / DONT_ASK 亦不可逃逸 — 跨租户隔离是安全不变式，非可配置策略。
+     * 返回的 DENY 标记 {@code bypassImmune=true}，overnight 晨报据此识别
+     * "无法通过规则放行的硬拒绝"。
+     * <p>
+     * <b>向后兼容</b>：任一侧为 null（legacy 节点 / legacy 调用者）一律 skip，
+     * 不影响现有无租户语义的调用。仅当两侧均为非 null 且不等时才 DENY。
+     *
+     * @return DENY 决策（跨租户越权，bypassImmune=true）；null（不适用 / legacy / 放行）
+     */
+    private <I extends ToolInput> PermissionDecision checkTenantOwnership(Tool<I> tool, I input, ToolContext context) {
+        String callerTenantId = context == null ? null : context.tenantId();
+        // legacy 调用者无租户声明 → skip（向后兼容）
+        if (callerTenantId == null || callerTenantId.isBlank()) return null;
+
+        String path = extractPath(input);
+        if (path == null || path.isBlank()) return null;
+
+        // 查 VFS 节点；未初始化或不存在（新建文件）→ skip。
+        // 新建文件的所有权由 VfsManager.writeText(path, content, tenantId) 创建时盖戳。
+        Optional<VfsNode> nodeOpt = VfsManager.instance().resolve(path);
+        if (nodeOpt.isEmpty()) return null;
+
+        String ownerTenantId = nodeOpt.get().ownerTenantId();
+        // legacy 节点无租户声明 → skip（向后兼容）
+        if (ownerTenantId == null || ownerTenantId.isBlank()) return null;
+
+        if (!callerTenantId.equals(ownerTenantId)) {
+            return PermissionDecision.deny(
+                    "Cross-tenant access denied: caller tenant '" + callerTenantId
+                            + "' != resource owner tenant '" + ownerTenantId
+                            + "' for path '" + path + "'",
+                    "tenant_ownership",
+                    generateSuggestions(tool, input))
+                    .withBypassImmune(true);
+        }
+        return null;
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -888,19 +993,56 @@ public class PermissionChecker {
     /**
      * 记录一次 DENY 决策到 recent 队列，转发到全局 sink（如已设置），并持久化到
      * {@link PermissionDenialLedger}（供 ReviewGate 按 agent 查询）。
+     * <p>
+     * 同时接入两个跨层审计 sink（P0 联合治理）：
+     * <ul>
+     *   <li>{@link SemanticEtw#logAuditEvent} — 把 permission 拒绝写入语义审计环形缓冲
+     *       （此前 permission 层只写 DenialLedger 不写 ETW，三层审计缺一条腿）</li>
+     *   <li>{@link UnifiedAuditLog#append} — 按 traceId 把本条拒绝与 cgroup/sandbox 决策
+     *       聚合到统一审计链，供 {@code listByTraceId} 端到端回溯</li>
+     * </ul>
+     * 两者均 best-effort，永不抛出，不影响权限决策本身。
      */
-    private void recordDenial(String toolName, ToolInput input, PermissionDecision decision,
-                              ToolContext context) {
+    public void recordDenial(String toolName, ToolInput input, PermissionDecision decision,
+                             ToolContext context) {
         String inputDigest = summarizeInput(input);
         String agentId = context != null ? context.agentId() : "";
+        String traceId = TraceContext.getCurrentTraceId();
         DenialRecord record = new DenialRecord(
-                System.currentTimeMillis(), agentId, toolName, inputDigest, decision);
+                System.currentTimeMillis(), agentId, toolName, inputDigest, decision, traceId);
         recentDenials.addLast(record);
         while (recentDenials.size() > MAX_RECENT_DENIALS) {
             recentDenials.pollFirst();
         }
         // 持久化到磁盘（供 ReviewGate 跨 session 查询）— best-effort
         PermissionDenialLedger.append(record);
+
+        // ── P0: 接入 SemanticEtw 语义审计（补齐三层审计的 permission 这条腿）──
+        try {
+            SemanticEtw.getInstance().logAuditEvent(
+                    agentId,
+                    "permission_check",
+                    null,                          // thinkingContext — permission 层无 LLM 思考上下文
+                    decision.bypassImmune() ? "high" : "medium",
+                    "permission_rule",
+                    toolName + ":" + (inputDigest == null ? "" : inputDigest),
+                    decision.reason());
+        } catch (Throwable t) {
+            log.debug("[Permission] SemanticEtw logAuditEvent failed: {}", t.getMessage());
+        }
+
+        // ── P0: 接入 UnifiedAuditLog 跨层联合审计链 ──
+        try {
+            UnifiedAuditLog.append(
+                    UnifiedAuditLog.LAYER_PERMISSION,
+                    decision.behavior().name(),     // DENY / ASK 等
+                    agentId,
+                    toolName,
+                    decision.reason());
+        } catch (Throwable t) {
+            log.debug("[Permission] UnifiedAuditLog append failed: {}", t.getMessage());
+        }
+
         // 转发到全局 sink（如 overnight runner 已注册）
         Consumer<DenialRecord> sink = globalDenialSink;
         if (sink != null) {
@@ -956,21 +1098,43 @@ public class PermissionChecker {
      * @param toolName    工具名
      * @param inputDigest 输入摘要
      * @param decision    决策（含 suggestedRules / bypassImmune）
+     * @param traceId     端到端追踪标识（可能为 null）。由 {@link com.ouisani.aios.core.ipc.TraceContext}
+     *                    在 turn 入口注入，使本条 permission 拒绝可与同 traceId 下的 cgroup/sandbox
+     *                    决策在 {@link com.ouisani.aios.core.audit.UnifiedAuditLog} 中关联——
+     *                    这是"联合治理 vs 各自为战"的跨层审计证据。
      */
     public record DenialRecord(
             long timestamp,
             String agentId,
             String toolName,
             String inputDigest,
-            PermissionDecision decision
+            PermissionDecision decision,
+            String traceId
     ) {
 
         /**
-         * 向后兼容构造 — 旧 4 参数（无 agentId），等价于 agentId=""。
+         * 向后兼容构造 — 5 参数（无 traceId），等价于 traceId=null。
+         * 供旧调用方 / 测试使用（零回归）。
+         */
+        public DenialRecord(long timestamp, String agentId, String toolName,
+                            String inputDigest, PermissionDecision decision) {
+            this(timestamp, agentId, toolName, inputDigest, decision, null);
+        }
+
+        /**
+         * 向后兼容构造 — 旧 4 参数（无 agentId、无 traceId），等价于 agentId="" + traceId=null。
          * 供旧调用方 / 测试使用（零回归）。
          */
         public DenialRecord(long timestamp, String toolName, String inputDigest, PermissionDecision decision) {
-            this(timestamp, "", toolName, inputDigest, decision);
+            this(timestamp, "", toolName, inputDigest, decision, null);
+        }
+
+        /**
+         * 返回带指定 traceId 的副本 — 供 {@link PermissionDenialLedger} 在调用方未带 traceId 时
+         * 从 {@link TraceContext} 补全（保证审计链每条 denial 都有 traceId 锚点）。
+         */
+        public DenialRecord withTraceId(String traceId) {
+            return new DenialRecord(timestamp, agentId, toolName, inputDigest, decision, traceId);
         }
 
         /**
@@ -981,6 +1145,7 @@ public class PermissionChecker {
             StringBuilder sb = new StringBuilder(256);
             sb.append('{');
             sb.append("\"ts\":").append(timestamp).append(',');
+            sb.append("\"traceId\":").append(traceId == null ? "null" : escape(traceId)).append(',');
             sb.append("\"agentId\":").append(escape(agentId)).append(',');
             sb.append("\"toolName\":").append(escape(toolName)).append(',');
             sb.append("\"inputDigest\":").append(escape(inputDigest)).append(',');
@@ -1017,6 +1182,8 @@ public class PermissionChecker {
                 String agentId = optStr(o, "agentId", "");
                 String toolName = optStr(o, "toolName", "");
                 String inputDigest = optStr(o, "inputDigest", "");
+                String traceId = o.has("traceId") && !o.get("traceId").isJsonNull()
+                        && o.get("traceId").isJsonPrimitive() ? o.get("traceId").getAsString() : null;
 
                 com.google.gson.JsonObject d = o.has("decision") && o.get("decision").isJsonObject()
                         ? o.getAsJsonObject("decision") : new com.google.gson.JsonObject();
@@ -1042,7 +1209,7 @@ public class PermissionChecker {
 
                 PermissionDecision decision = new PermissionDecision(behavior, message, reason,
                         suggestions, bypassImmune);
-                return new DenialRecord(ts, agentId, toolName, inputDigest, decision);
+                return new DenialRecord(ts, agentId, toolName, inputDigest, decision, traceId);
             } catch (Exception e) {
                 return null;
             }
@@ -1102,10 +1269,34 @@ public class PermissionChecker {
      */
     public void applyProfile(PermissionProfile profile) {
         if (profile == null) return;
+        this.appliedProfile = profile;
         if (profile.mode() != null) setMode(profile.mode());
         profile.denyRules().forEach(this::addRule);
         profile.askRules().forEach(this::addRule);
         profile.allowRules().forEach(this::addRule);
+    }
+
+    /**
+     * 返回最近一次经 {@link #applyProfile} 注入的有效权限画像 — 供 spawn 子 agent 继承。
+     * <p>
+     * <b>归一化</b>：{@code null}（从未 applyProfile）或 {@link PermissionProfile#empty()}
+     * （mode=null 且三规则列表皆空）一律返回 null，表示「无限制可继承」——下游
+     * {@code AgentTool} 据此传 {@link PermissionProfile#empty()} 给子 QueryEngine（no-op，
+     * 子保持 DEFAULT，与父 DEFAULT 一致，零回归）。
+     * <p>
+     * <b>LIM 攻击面闭合</b>：非 null 返回值携带父的 {@code *:deny} + allowlist 等限制，
+     * 子 agent 经 {@code QueryEngine(sdk, agentId, workingDir, List.of(), currentProfile())}
+     * 重应用同一 profile，强制「子权限 ⊆ 父权限」，堵住「spawn 即升级」漏洞。
+     */
+    public PermissionProfile currentProfile() {
+        if (appliedProfile == null) return null;
+        if (appliedProfile.mode() == null
+                && appliedProfile.denyRules().isEmpty()
+                && appliedProfile.askRules().isEmpty()
+                && appliedProfile.allowRules().isEmpty()) {
+            return null;
+        }
+        return appliedProfile;
     }
 
     public void clearRules() {
