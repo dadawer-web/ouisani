@@ -61,6 +61,16 @@ public class RecoveryOrchestrator {
             new ConcurrentHashMap<>();
 
     /**
+     * metadata 键：策略把待执行的副作用回调存入供编排器 reauth 通过后执行。
+     * <p>
+     * 值类型为 {@code Function<RecoveryContext, RecoveryResult>}。策略在 apply() 中声明
+     * {@code requiresReauthorization=true} 并把真正的副作用（如 resumeNode 角色替换）封装为
+     * 回调存入此键 —— 编排器在 {@link RecoveryReauthorizationGate} 通过后才取出执行，
+     * 确保越权在副作用发生前被拦截（PREVENT）。
+     */
+    static final String META_PENDING_SIDE_EFFECT = "__pendingSideEffect";
+
+    /**
      * 权限校验器覆盖（测试/显式注入用）；null 时从 {@link ToolExecutionPipeline} 懒加载。
      * <p>
      * 必须复用 pipeline 的同一个 {@link PermissionChecker} 实例，才能尊重用户已配置的
@@ -281,6 +291,42 @@ public class RecoveryOrchestrator {
                 RecoveryResult result = strategy.apply(context);
 
                 if (result.success()) {
+                    // ── Phase 4 defense #4 强化：副作用结果强制重授权（不受 opt-in 开关控制）──
+                    // requiresReauthorization=true 的结果（如拓扑突变角色替换）必须在副作用执行前
+                    // 过 RecoveryReauthorizationGate。编排器层统一拦截，新增策略只要声明
+                    // requiresReauthorization=true 即自动被保护。reauth 通过后才执行策略声明
+                    // 的 pendingSideEffect（PREVENT 越权，而非事后检测）。
+                    if (result.requiresReauthorization()) {
+                        RecoveryReauthorizationGate.ReauthResult reauth =
+                                RecoveryReauthorizationGate.check(result, context, resolvePermissionChecker());
+                        if (!reauth.allowed()) {
+                            log.warn("[RecoveryOrchestrator] 恢复副作用被重授权关卡拒绝: Agent={}, 策略={}, 原因={}",
+                                    context.agentId(), strategy.name(), reauth.reason());
+                            broadcastRecoveryEvent(context.agentId(), strategy.name(), false,
+                                    "Recovery side-effect denied by reauthorization gate: " + reauth.reason());
+                            return RecoveryResult.failed("Recovery side-effect denied by reauthorization gate: "
+                                    + reauth.reason());
+                        }
+                        log.info("[RecoveryOrchestrator] 恢复副作用重授权通过: Agent={}, 策略={}, category={}",
+                                context.agentId(), strategy.name(), reauth.category());
+
+                        // reauth 通过 → 执行策略声明的待处理副作用（延后至此，确保越权在副作用前被拦）
+                        Object sideEffect = context.metadata().get(META_PENDING_SIDE_EFFECT);
+                        if (sideEffect instanceof java.util.function.Function<?, ?> f) {
+                            @SuppressWarnings("unchecked")
+                            java.util.function.Function<RecoveryContext, RecoveryResult> se =
+                                    (java.util.function.Function<RecoveryContext, RecoveryResult>) f;
+                            RecoveryResult seResult = se.apply(context);
+                            if (!seResult.success()) {
+                                log.warn("[RecoveryOrchestrator] 恢复副作用执行失败: Agent={}, 原因={}",
+                                        context.agentId(), seResult.message());
+                                return seResult;
+                            }
+                            log.info("[RecoveryOrchestrator] 恢复副作用执行成功: Agent={}", context.agentId());
+                            result = seResult;
+                        }
+                    }
+
                     // 恢复成功 — 重置失败计数器
                     failureCounters.remove(context.agentId());
                     log.info("[RecoveryOrchestrator] 通过 {} 恢复成功，Agent {}",
@@ -520,13 +566,14 @@ public class RecoveryOrchestrator {
         // 3. 尝试使用策略链恢复
         RecoveryResult result = orchestrate(context);
 
-        // ── Phase 4 defense #4：恢复动作重新授权关卡（opt-in，默认关保论文1 字节稳定）──
-        // 对声明 requiresReauthorization 的结果（如 TopologyMutationStrategy 的角色变更），
-        // 在让其副作用真正生效（resumeNode）前过 RecoveryReauthorizationGate 重跑权限校验。
-        // 关卡默认关闭（aios.recovery.reauthGate=false）；关闭时本块零行为，编排器与论文1 一致。
-        // 用 isEnabled() 动态读取（非 ENABLED 常量快照）—— 供测试隔离切换 + 运行时配置变更。
-        if (result.success() && RecoveryReauthorizationGate.isEnabled()
-                && result.requiresReauthorization()) {
+        // ── Phase 4 defense #4：恢复动作重新授权关卡 ──
+        // 注意：副作用结果的强制 reauth + 副作用执行已在 orchestrate() 主路径内统一处理
+        // （见 orchestrate() 的 requiresReauthorization 分支）。此处保留的检查是 belt-and-suspenders：
+        // 对 orchestrate() 未覆盖的路径（如未来绕过 orchestrate 直接调 performCrashRecovery 的场景）
+        // 兜底。requiresReauthorization=true 的结果在 orchestrate() 内副作用已执行并替换为普通结果，
+        // 故此处通常 skip；若 orchestrate() 返回的仍是 requiresReauthorization=true（副作用未执行），
+        // 此处拒绝并升级人类介入。
+        if (result.success() && result.requiresReauthorization()) {
             RecoveryReauthorizationGate.ReauthResult reauth =
                     RecoveryReauthorizationGate.check(result, context, resolvePermissionChecker());
             if (!reauth.allowed()) {

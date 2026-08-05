@@ -1,0 +1,24 @@
+%% related_work.tex
+
+\section{Related Work}
+\label{sec:related-work}
+
+We position this work along three axes: empirical software engineering methods for codebase analysis, architectural analyses of LLM agent frameworks, and trust assumption research in self-healing systems.
+
+\subsection{Empirical Software Engineering and Codebase Analysis}
+
+Empirical software engineering has a long tradition of source-level code analysis to identify systematic patterns and deficiencies across codebases. Runeson and H{\"o}st~\cite{runeson2009} established the methodological foundations for case study research in software engineering, including the multi-case design and validity threat classification adopted in this paper. Kitchenham et al.~\cite{kitchenham2002} provided guidelines for empirical research that combine qualitative and quantitative evidence. Wohlin et al.~\cite{wohlin2012} systematized the classification of validity threats (internal, external, construct, conclusion) that we apply in \S\ref{sec:method-threats}.
+
+Mining software repositories (MSR) is a complementary methodology that uses automated tools to extract patterns from version control histories and issue trackers~\cite{bird2015}. Our approach differs from typical MSR studies in that we perform \emph{manual} source-level analysis with grounded theory coding~\cite{glaser1967,strauss1998}, prioritizing depth of understanding over breadth of coverage. This is appropriate for our research question, which concerns a structural pattern (the trust-escalation trampoline) that requires semantic understanding of the recovery path's trust assumptions, not just pattern matching on code tokens. Storey~\cite{storey2008} reviews similar qualitative approaches to software documentation and code analysis.
+
+\subsection{Architectural Analysis of LLM Agent Frameworks}
+
+The LLM agent framework landscape has been surveyed from multiple perspectives. Reflexion~\cite{reflexion} introduced verbal reinforcement learning as a self-healing pattern; AutoGen~\cite{autogen} proposed multi-agent conversation as an architectural paradigm; SWE-agent~\cite{swe-agent} demonstrated agent-computer interfaces for automated software engineering. MetaGPT~\cite{meta-agent} formalized multi-agent collaboration through role assignments; LangGraph~\cite{langgraph} provided a graph-based orchestration framework; Aider~\cite{aider-code} and OpenHands~\cite{openhands-code} focused on coding agent workflows. These works describe the \emph{functional} architecture of their frameworks but do not systematically analyze the \emph{trust assumptions} embedded in their recovery paths. Our work complements these architectural descriptions by providing an empirical analysis of a cross-cutting concern (provenance handling) that spans all six frameworks.
+
+\subsection{Trust Assumptions in Self-Healing Systems}
+
+The security literature has studied prompt injection on the forward execution path~\cite{greshake2023indirect,liu2024formalizing,willison2023prompt}, and recent work has proposed defenses including instruction hierarchy enforcement~\cite{instruction-hierarchy}, spotlighting~\cite{spotlighting}, and capability-based control flow separation~\cite{debenedetti2025camel}. Zhan et al.~\cite{zhan2025adaptive} demonstrated that adaptive attacks can bypass forward-path defenses. However, these works uniformly target the forward path; the \emph{recovery path} as a trust boundary has not been empirically examined in the software engineering literature.
+
+Classical operating systems enforce trust boundaries via privilege levels and provenance tags~\cite{saltzer1975protection,levine2003system,bovet2005understanding}. Our work shows that a classical trust-boundary vulnerability pattern reappears systematically in self-healing LLM agent frameworks: the recovery pipeline is a privileged component (it re-injects content into the LLM context under a high-trust frame) that acts on failure content of unknown provenance. The OWASP Top 10 for LLM Applications~\cite{owasp-llm-top10} enumerates forward-path injection risks but does not classify the recovery channel as a distinct trust boundary. Our empirical analysis suggests it should be.
+
+This paper provides the empirical evidence that the trust boundary gap is systemic across the production agent ecosystem, together with a controlled evaluation of a content-level provenance-tagging defense on the recovery path.

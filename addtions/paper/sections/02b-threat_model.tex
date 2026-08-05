@@ -1,0 +1,250 @@
+% =============================================================================
+%  Section 2b — Threat Model
+% =============================================================================
+\section{Threat Model}
+\label{sec:threat}
+
+This section makes explicit the adversary's capabilities and the boundary
+between what Neuron's coupled governance guarantees and what lies outside
+its scope. The boundary is restated in Section~\ref{sec:eval-setup} as
+\emph{methodological boundaries} of the evaluation; here we establish the
+structural assumptions on which the security claim rests. We follow the
+convention of separating \emph{attacker profile} (who the adversary is and
+what they control), \emph{attacker capabilities} (what they can do at
+runtime), and \emph{out-of-scope} (what the runtime does not defend
+against), as is standard in OS-security papers
+~\cite{klein2009sel4,mercer2012capsicum}.
+
+% -----------------------------------------------------------------------------
+\subsection{Attacker Profile}
+\label{sec:threat-profile}
+
+We assume a \emph{rational, possibly colluding} adversary who controls at
+least one tenant in the multi-tenant Neuron runtime. Concretely, the
+adversary is the operator of one or more \emph{malicious tenant accounts}
+that share the same runtime instance as benign tenants; the agents
+instantiated under these accounts execute arbitrary, attacker-supplied
+prompts and tool calls. We do not assume the adversary has kernel
+privileges, root inside a sandbox, or any out-of-band control over the
+host OS: the attack surface is confined to the abstractions the runtime
+exposes to tenant agents (the VFS, the EventBus, the syscall interface,
+the spawn path, and the approval channel).
+
+We model three concrete attacker profiles, in increasing capability:
+
+\begin{description}
+    \item[P1. Noisy co-tenant.] The adversary runs one or more agents
+    under a tenant account and floods the shared substrates with
+    high-frequency \IO{} and broadcasts. The goal is to starve the
+    governance layer and degrade co-resident tenants. The adversary
+cannot bypass the runtime API; every operation traverses
+\texttt{VfsManager} and \texttt{EventBus}.
+
+    \item[P2. Privilege-seeking sub-agent.] The adversary's agent has
+    been deliberately downgraded (for example, a reviewer restricted to
+    a \texttt{*:deny} profile) and attempts to recover privileges
+    \emph{through the spawn path}---by spawning a sub-agent that
+    inherits a fresh default profile---or by phrasing a destructive-tool
+    request in natural language to slip past depth-oblivious approval.
+
+    \item[P3. Cross-tenant infiltrator.] The adversary combines P1 and
+    P2: under cover of resource contention, the spawned sub-agent
+    attempts a cross-tenant VFS access while the permission layer is
+impaired. This is the strongest profile the runtime must defend
+against and is the configuration exercised by Scenario~6
+    (Section~\ref{sec:eval-cross}).
+\end{description}
+
+% -----------------------------------------------------------------------------
+\subsection{Attacker Capabilities}
+\label{sec:threat-cap}
+
+Within the boundary above, we grant the adversary the following
+runtime capabilities, each of which corresponds to an attack surface
+characterized in Section~\ref{sec:bg-attack} and closed by a mechanism
+of Section~\ref{sec:arch}:
+
+\begin{itemize}
+    \item \textbf{Issue arbitrary prompts and tool calls.} The
+    adversary's agent may submit any prompt, request any tool exposed
+    by the runtime, and phrase a privilege-escalation request in any
+    natural language. The runtime's defense is structural
+    (\texttt{EscalationPolicy} adjudicates depth and tool class, not
+    language) rather than prompt-level.
+
+    \item \textbf{Spawn sub-agents at runtime.} The adversary's agent
+    may invoke \texttt{AgentTool} to create sub-agents, producing a
+    spawn tree of unbounded breadth up to the configured depth cap.
+    Sub-agents inherit the attacker's tenant identity.
+
+    \item \textbf{Consume the shared substrates.} The adversary's agents
+    may issue arbitrarily many VFS reads/writes and EventBus
+    broadcasts, subject only to the runtime's rate limiters. The
+    attacker is assumed to know the per-tenant limits (these are
+    documented) and may attempt to operate just below them
+    (\emph{low-and-slow} attacks; see Section~\ref{sec:eval-adaptive}).
+
+    \item \textbf{Observe their own audit trail.} The adversary can
+    read the \texttt{UnifiedAuditLog} entries their own actions
+    produce; they cannot read, tamper with, or selectively delete
+    other tenants' entries. The audit chain is append-only at the file
+    system level and is not exposed for in-place mutation through any
+    runtime API.
+
+    \item \textbf{Time their operations.} The adversary can observe
+    wall-clock latency of their own calls and use this as a side
+    channel to infer the state of the shared lock or the rate limiter.
+    This is the standard timing side channel of any shared-resource
+    system; Section~\ref{sec:lim-failure} discusses its limits.
+\end{itemize}
+
+% -----------------------------------------------------------------------------
+\subsection{Out-of-Scope}
+\label{sec:threat-out}
+
+The following are explicitly \emph{not} defended against, and the
+evaluation does not claim otherwise:
+
+\begin{itemize}
+    \item \textbf{Prompt injection at the model layer.} The runtime
+    does not inspect prompt content for jailbreaks or indirect prompt
+    injection; that is the responsibility of upstream guardrails
+    (Section~\ref{sec:rw-sec}). What the runtime guarantees is that
+    \emph{once a malicious escalation request reaches the policy gate},
+    it is denied regardless of phrasing---a prevention/enforcement
+    separation restated in Section~\ref{sec:eval-setup}.
+
+    \item \textbf{Kernel or host compromise.} If the adversary has
+    kernel privileges, host root, or the ability to mutate the JVM or
+    the on-disk audit log, the security claim is void. This is the
+    standard trust-the-TCB assumption; seL4~\cite{klein2009sel4} and
+    Capsicum~\cite{mercer2012capsicum} make the same boundary
+    explicit.
+
+    \item \textbf{Tool-execution-to-JVM reverse attack.} A natural
+    concern is that an agent that legitimately obtains
+    \texttt{bash}---which Section~\ref{sec:bg-attack} acknowledges is
+    nearly a defining capability of an LLM agent---could use that shell
+    to tamper with the JVM process hosting the runtime (via
+    \texttt{/proc}, \texttt{ptrace}, signals, or filesystem writes to
+    the JVM's own state). We close this boundary \emph{structurally
+    rather than by policy}: every tool invocation in Neuron traverses
+    the \texttt{SandboxProvider} abstraction
+    (Section~\ref{sec:arch-sandbox}), which offers two isolation
+    regimes. \emph{In-process WASM isolation} executes compiled
+    WebAssembly within the GraalVM polyglot engine with a hard memory
+    ceiling, and sandboxed code cannot reach host resources
+    directly---it issues semantic syscalls bound to runtime-mediated
+    host functions, so there is no \texttt{bash} process at all and no
+    path to JVM internals. \emph{Out-of-process container isolation}
+    executes untrusted code in a disposable Docker container with
+    \texttt{--cap-drop ALL} (no Linux capabilities),
+    \texttt{--security-opt no-new-privileges} (no \texttt{setuid}
+    escalation), \texttt{--security-opt seccomp=<profile>} that
+    explicitly blocks container-escape syscalls (\texttt{unshare},
+    \texttt{pivot\_root}, \texttt{mount}, \texttt{ptrace}),
+    \texttt{--read-only} root filesystem, \texttt{--network none}
+    (air-gapped), and \texttt{--pids-limit 64}. The JVM process runs
+    on the host, outside the container's mount namespace and PID
+    namespace; the agent's \texttt{bash} process cannot see the JVM
+    process, cannot \texttt{ptrace} it (seccomp blocks
+    \texttt{ptrace} and the container lacks \texttt{CAP\_SYS\_PTRACE}),
+    cannot write to the JVM's filesystem (read-only rootfs, no shared
+    mounts), and cannot signal it (different PID namespace). The
+    agent's bash is therefore confined to the container boundary, and
+    the JVM is structurally outside its reach. We note that the
+    in-process WASM path is the default for whitelisted tools, while
+    the container path is mandatory for any tool not on the whitelist
+    (including any newly registered shell-like tool); this makes
+    ``trust boundary = container boundary'' the default for
+    non-whitelisted execution, rather than a user opt-in.
+
+    \item \textbf{Side channels outside the runtime's view.} Cache-line
+    timing, power analysis, and similar physical side channels are out
+    of scope. The timing side channel on the shared VFS lock is in
+    scope but is bounded by the rate limiter
+    (Section~\ref{sec:eval-adaptive}).
+
+    \item \textbf{Adversarial model weights or training-time
+    poisoning.} We assume the underlying LLM weights are not
+    adversary-controlled. A model whose weights have been poisoned to
+    emit specific escalation requests is upstream of the runtime's
+    enforcement boundary; the runtime still blocks the resulting
+    request, but the prevention layer must be addressed elsewhere.
+
+    \item \textbf{Inter-tenant collusion via out-of-band channels.}
+    Two adversaries on different tenants may coordinate out-of-band
+    (e.g.\ via a shared clock), but each operates under the
+    per-tenant limits; the runtime's per-tenant accounting is
+    unaffected by whether the tenants are coordinating.
+\end{itemize}
+
+% -----------------------------------------------------------------------------
+\subsection{Boundary against the Evaluation}
+\label{sec:threat-eval}
+
+The boundary above has two direct consequences for the evaluation
+that warrant explicit statement, because they bound the claims a
+reviewer should accept.
+
+\paragraph{Prevention vs.\ enforcement.}
+Scenario~6 (Section~\ref{sec:eval-cross}) measures
+\emph{runtime-level enforcement}: given that a malicious escalation
+request has reached the policy gate, does the runtime deny it? It does
+not measure the upstream probability that a compromised agent would
+emit such a request; that probability is the domain of prompt-injection
+research. The supplementary real-LLM experiment
+(Section~\ref{sec:eval-supplement}) closes part of this gap by showing
+that real LLMs do spontaneously emit such requests under adversarial
+goals, but it is not a prevention-layer evaluation.
+
+\paragraph{Simulated vs.\ real resource rates.}
+The resource-layer benchmark (Scenario~4,
+Section~\ref{sec:eval-resource}) drives the cgroup at simulated
+generation rates ($U[15,55)$\,ms inter-increment jitter) rather than
+by real LLM inference. This is because the measurement target is the
+\texttt{preCheckAndReserve} gateway and the OOM-trigger latency, both
+of which are functions of the cgroup accounting path and are
+independent of whether the tokens are produced by a real model or by
+a deterministic emitter. The supplementary end-to-end experiment
+(Section~\ref{sec:eval-e2e}) closes the realism gap by replaying the
+same attack with a real LLM in the loop, quantifying the absolute
+latency cost in the regime where LLM inference dominates.
+
+\paragraph{Marginal security value when upstream guardrails fail.}
+A reviewer may ask: if the dominant real-world attack vector is prompt
+injection, and Neuron explicitly does not defend against it, what is the
+marginal value of a runtime-level enforcement layer? We argue the value
+is structural and is not refuted by the prevalence of prompt injection.
+\emph{First}, prompt-injection defenses are best-effort and known to be
+defeated by paraphrase, encoding, and indirect injection through
+retrieved content~\cite{debenedetti2024agentdojo}; treating them as a
+single layer of defense places the entire security posture on a
+probabilistic mechanism. A runtime enforcement layer that is
+\emph{deterministic} (the Scenario~6 policy is a pure function of depth
+and tool class) provides defense-in-depth: the worst case for upstream
+guardrails becomes ``the malicious request reaches the policy gate,''
+not ``the malicious request executes.'' \emph{Second}, the coupled
+governance property is independent of how the request arrived: the
+starvation and joint-decision experiments
+(Sections~\ref{sec:eval-starvation}, \ref{sec:eval-joint}) demonstrate
+that even under active resource contention---a regime in which upstream
+guardrails themselves degrade---the runtime still denies the request.
+\emph{Third}, the spawn-path closure (privilege non-increase) catches
+the case where a prompt-injected parent agent attempts to spawn a
+sub-agent to recover privileges it has already lost; no upstream
+guardrail that operates only on prompt content can detect this, because
+the spawn operation is structurally invisible at the prompt layer. The
+supplementary real-LLM experiment (Section~\ref{sec:eval-supplement})
+provides direct evidence: real commercial LLMs, given adversarial goals
+but \emph{no} specific instruction to attack the spawn path,
+spontaneously emit escalation requests that the runtime intercepts. We
+therefore frame the contribution as a \emph{last-line enforcement
+guarantee}, not a replacement for upstream prevention; the two layers
+are complementary, and the absence of prevention does not void the
+enforcement guarantee.
+
+These two boundaries are the structural expression of the
+prevention/enforcement and simulation/realism distinctions that
+Section~\ref{sec:eval-setup} restates as methodological boundaries of
+the experimental design.

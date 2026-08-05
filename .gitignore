@@ -67,5 +67,38 @@ var/
 # ── IDE 内部文档（规划/计划文件，非源码）──
 .trae/
 
-# ── LaTeX / 论文目录（全部忽略）──
-paper/
+# ── LaTeX 编译中间产物 ──
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.synctex(busy)
+*.nav
+*.snm
+*.vrb
+*.bcf
+*.run.xml
+*.xdv
+*.dvi
+*.ps
+
+# ── Tectonic 环境（论文编译工具链，非源码）──
+tectonic_deps/
+tectonic_extracted/
+tectonic_install/
+.tectonic_cache/
+tectonic.conda
+fetch_tectonic_deps.py
+download_tectonic.py
+
+# ── 编译生成的 PDF（中间产物，不上传）──
+addtions/paper_draft/main.pdf
+addtions/paper/main.pdf
+

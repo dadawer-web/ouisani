@@ -1,0 +1,195 @@
+% =============================================================================
+%  Section 2 — Background and Motivation
+% =============================================================================
+\section{Background and Motivation}
+\label{sec:bg}
+
+This section establishes the conceptual baseline of multi-tenant LLM agent
+runtimes (Section~\ref{sec:bg-kernel}), exposes the limitations of conventional,
+layer-separated isolation (Section~\ref{sec:bg-lim}), characterizes the novel attack
+surfaces introduced by LIM agents (Section~\ref{sec:bg-attack}), and derives the
+design goals that motivate Neuron (Section~\ref{sec:bg-goals}).
+
+% -----------------------------------------------------------------------------
+\subsection{Multi-Tenant LLM Agent Operating Systems}
+\label{sec:bg-kernel}
+
+An \emph{LLM agent operating system} extends the classical process abstraction
+to agent workloads. Where a conventional process binds a program counter and a
+file-descriptor table to a scheduling entity, an agent process binds a
+\emph{turn}---an atomic interaction comprising a prompt, a sequence of tool
+calls, and an LLM-mediated control flow---to a runtime-managed execution
+context. The runtime is responsible for scheduling turns, mediating tool
+execution, accounting for resource consumption (principally LLM tokens, which
+play the role of CPU cycles), and enforcing isolation among co-resident
+agents.
+
+Three properties of modern agent workloads distinguish them from conventional
+processes and elevate them to first-class OS concerns:
+
+\begin{itemize}
+    \item \textbf{Long-running and stateful.} Agents persist memory, plans, and
+    intermediate artifacts across turns and sessions, creating durable state
+    that must be isolated and accounted for over long horizons.
+    \item \textbf{Dynamic and self-spawning.} An agent may, in the course of a
+    single turn, spawn sub-agents to delegate sub-tasks. The resulting spawn
+    tree is constructed at runtime from natural-language decisions, not from a
+    static process graph.
+    \item \textbf{Multi-tenant.} A single runtime instance concurrently serves
+    multiple tenants that share low-level substrates---an event bus for
+    inter-agent communication, a virtual file system (VFS) for artifact
+    storage, and a pool of virtual threads for execution---while requiring
+    strict isolation and per-tenant fairness.
+\end{itemize}
+
+Existing frameworks address these properties at the application layer.
+AutoGen~\cite{wu2023autogen} and LangGraph~\cite{langgraph2024} provide
+orchestration primitives but delegate resource accounting to user-space token
+counters and access control to static policy files. The Model Context
+Protocol~\cite{anthropic2024mcp} standardizes tool exposure yet is silent on
+resource governance. In all cases, the governance machinery lives above the
+runtime boundary, observing the workload from the outside.
+
+% -----------------------------------------------------------------------------
+\subsection{Limitations of Layer-Separated Isolation}
+\label{sec:bg-lim}
+
+Classical operating systems isolate concerns across three largely independent
+layers, each with its own mechanism and its own audit trail:
+
+\begin{itemize}
+    \item \textbf{Resource control} (cgroups~\cite{linux2024cgroupv2}) accounts
+    for and caps resource consumption---CPU, memory, and, in our setting, LLM
+    tokens. Resource decisions are recorded in cgroup-local logs.
+    \item \textbf{Execution isolation} (sandboxes, seccomp, containers such as
+    gVisor~\cite{young2023gvisor} and Firecracker~\cite{agache2020firecracker})
+    confines what an execution context can do at the system-call level.
+    Isolation decisions are recorded in sandbox-local logs.
+    \item \textbf{Access control} (capabilities~\cite{mercer2012capsicum,
+    klein2009sel4}, declarative policies) determines whether an operation is
+    permitted. Permission decisions are recorded in permission-local logs.
+\end{itemize}
+
+This separation is benign when the three layers are genuinely independent. It
+becomes \emph{unsafe} under multi-tenant agent workloads because the layers
+share a common resource pool and a common execution substrate. Two coupled
+pathways, invisible to any single layer, undermine the entire design:
+
+\paragraph{Security starvation under resource contention.}
+The permission layer is not a free abstraction; it consumes CPU to evaluate
+rules, memory to retain audit state, and locks to coordinate concurrent
+decisions. When a malicious tenant mounts a resource-contention attack---for
+example, flooding the event bus with broadcasts or hammering the VFS with
+writes---the security module is itself a victim of the contention it is
+supposed to police. Under sufficient pressure, policy evaluation is delayed,
+audit buffers overflow, and permission checks degrade to permissive fallbacks.
+The security layer thus fails \emph{because of} a resource condition that it
+has no mechanism to observe, let alone act upon.
+
+\paragraph{Privilege escalation in contention windows.}
+The converse pathway is equally dangerous. Between the moment resource
+pressure begins to build and the moment the resource layer trips a hard
+out-of-memory signal, there exists a transient \emph{contention window} in
+which the runtime is impaired but not yet in failure. During this window, an
+attacker can issue a privileged operation---a cross-tenant VFS access, a
+destructive tool call---that the permission layer, still nominally functional,
+admits because it has no visibility into the resource state and no causal link
+to the ongoing attack. By the time either layer logs the event, the two
+records sit in disjoint trails with no shared identifier to correlate them.
+
+The root cause is the absence of a \emph{shared causal identifier}.
+Without a single trace that threads through cgroup, sandbox, and permission
+decisions, cross-layer correlation is impossible: the runtime cannot reconstruct
+that ``the permission grant at time $t$ occurred inside the contention window
+opened by the broadcast flood at time $t-\delta$.'' Each layer operates---and fails---in isolation.
+
+% -----------------------------------------------------------------------------
+\subsection{Novel Attack Surfaces in LIM Agents}
+\label{sec:bg-attack}
+
+Beyond the coupled-failure mode, LIM agents introduce attack surfaces that
+classical isolation models were not designed to handle, because they violate
+two foundational assumptions: that privileges bind at start-up, and that
+escalation proceeds through explicit system calls.
+
+\paragraph{Spawn-time privilege escalation.}
+In a classical system, a child process inherits a subset of its parent's
+privileges; a downgraded parent cannot produce an upgraded child. In an agent
+runtime, a sub-agent is constructed by instantiating a fresh execution context
+through a tool call. If the spawn path does not explicitly propagate the
+parent's effective privilege profile, the child defaults to a permissive
+baseline---\emph{spawn itself becomes an escalation}. A parent agent that has
+been deliberately downgraded (for example, a reviewer restricted to read-only
+tools via a \texttt{*:deny} profile) can thereby produce a child with full
+default privileges, defeating the downgrade in a single tool call.
+
+\paragraph{Tenant-identity loss across spawn boundaries.}
+Multi-tenant isolation depends on every execution context carrying a tenant
+identifier that the access-control layer can check. If the spawn path neglects
+to propagate the tenant identity to the child, the child's tenant field is
+null, and tenant-ownership checks---which conservatively skip when the
+caller's tenant is unknown---silently permit cross-tenant access. A sub-agent
+spawned by a tenant-$A$ parent can then read or mutate tenant-$B$ artifacts.
+
+\paragraph{Natural-language privilege escalation without spawn-tree context.}
+An agent requests permission to invoke a sensitive tool through a structured
+approval channel. If the request payload carries only the agent identifier,
+the tool name, and the target---but not the position of the requesting agent
+within the spawn tree---then a human approver (or an automated policy) cannot
+distinguish a top-level request from one originating at depth three. A deeply
+nested sub-agent, precisely the context in which an attacker is most likely to
+attempt social-engineering escalation, is indistinguishable from a benign
+top-level call. The approval channel, designed for flat process models, becomes
+the weak link.
+
+\paragraph{Resource-contention flooding.}
+Finally, the shared substrates themselves offer an unthrottled attack surface.
+Without per-tenant rate limits at the resource layer, a malicious agent can
+sustain high-frequency event-bus broadcasts and VFS writes, consuming SSE
+fan-out capacity and lock contention budget \emph{before} the permission layer
+has any opportunity to intervene. The attack succeeds entirely within the
+layer-separated blind spot.
+
+% -----------------------------------------------------------------------------
+\subsection{Governance Gap and Design Goals}
+\label{sec:bg-goals}
+
+The foregoing analysis reveals a single governance gap with two facets: the
+layers are \emph{causally disconnected} (no shared identifier), and the spawn
+boundary is \emph{semantically unguarded} (privileges and tenant identity are
+not enforced to be non-increasing). From this gap we derive the design goals
+that Neuron must satisfy:
+
+\begin{description}
+    \item[G1. Unified causal audit.] Every governance decision---resource,
+    isolation, or permission---must carry a single per-turn trace identifier
+    and be aggregated into a unified audit chain, so that cross-layer
+    correlation and real-time attack truncation become possible.
+
+    \item[G2. Spawn-time privilege non-increase.] A child agent's privileges
+    must be a subset of its parent's; spawn must never constitute an
+    escalation, closing the attack surface of Section~\ref{sec:bg-attack}.
+
+    \item[G3. Tenant isolation across spawn.] Tenant identity must propagate
+    across spawn boundaries, and tenant-ownership checks must execute as a
+    hard pre-check that cannot be bypassed by permissive modes.
+
+    \item[G4. Depth-aware escalation.] Every approval request must carry the
+    spawn-tree context (depth and parent chain), and destructive operations
+    originating from deeply nested sub-agents must be denied automatically.
+
+    \item[G5. Resource-layer throttling.] The shared substrates must enforce
+    per-tenant rate limits that act \emph{before} the permission layer, so
+    that contention is damped at the source rather than policed after damage.
+
+    \item[G6. Zero regression.] All closures must be transparent to headless
+    execution, preserving existing fallback contracts so that the runtime's
+    correctness test suite remains green.
+\end{description}
+
+Goals G1 and G5 target the coupled-failure mode of Section~\ref{sec:bg-lim}; goals
+G2--G4 target the LIM-specific attack surfaces of Section~\ref{sec:bg-attack}; G6
+constrains the design space to evolvable, non-disruptive closures. The Neuron
+architecture presented in Section~\ref{sec:arch} is designed to satisfy these
+goals jointly, rather than in the layer-separated fashion that motivates this
+work.

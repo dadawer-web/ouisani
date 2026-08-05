@@ -1,0 +1,47 @@
+%% ethics.tex
+
+\section{Ethics Statement and Design Recommendations}
+\label{sec:ethics}
+
+\subsection{System Identity and Authorship}
+
+The system studied in this paper, \system{}, is a multi-agent LLM operating system developed and maintained by the authors of this paper. The two attack vectors studied (V1: \code{ReflectionInjectionRecovery} trust escalation; V2: \code{TopologyMutationStrategy} privilege escalation) were identified during a security review of the authors' own codebase, not through adversarial probing of a third-party system. We are the maintainers of \system{}; the work is therefore a \emph{self-study of vulnerabilities in our own prototype}, not a black-box security audit of an external deployed system.
+
+\paragraph{Positioning.}
+We explicitly avoid the term ``vulnerability disclosure'' for this work. ``Disclosure'' conventionally refers to reporting a flaw discovered in a third-party, deployed system to its maintainers. In our setting, the system is the authors' own prototype, has never been publicly released, and has no external users. The contribution is therefore better described as: \emph{(i)~we propose a new attack class (Recovery-Channel Injection), (ii)~we instantiate and empirically study it on a representative self-healing architecture prototype developed by the authors, and (iii)~we propose and evaluate a portable defense design}. We frame the evidence accordingly: the 57\%/100\% ASR figures are measurements on the authors' own prototype under a specific configuration, not field observations from a deployed system.
+
+\paragraph{Naming.}
+The system under study is referred to throughout this paper by the placeholder \system{} (the LaTeX macro \verb|\system{}| expands to the chosen name). The name used here is a paper-level label for the prototype under study; it is not a product name and does not refer to any externally deployed system.
+
+\subsection{Internal Remediation Timeline}
+
+Because the attack vectors are in the authors' own system, no external CVE request or third-party notification was required. The internal review and remediation timeline is:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{2026-04-12:} V1 identified during a red-team review of the recovery pipeline. Root cause identified as the missing \code{TrustOrigin} propagation in \code{ToolErrorRecovery}.
+    \item \textbf{2026-04-19:} V2 identified during the same review. Root cause identified as the \code{parseAndValidate(validate=false)} call in \code{TopologyMutationStrategy}.
+    \item \textbf{2026-04-26:} Defense design finalized (\trustorigin{} Tagging + unified \reauthgate{}). Implementation completed in a feature branch.
+    \item \textbf{2026-05-10:} Defense merged to the main branch and deployed to the internal staging environment. No production incident has been attributed to V1 or V2 prior to the fix; the issues were discovered proactively, not in response to an attack.
+    \item \textbf{2026-05-17:} Real-LLM evaluation (the experiment reported in \S\ref{sec:evaluation}) started on the patched codebase; the baseline (DEFENSE\_OFF) measurements were obtained by toggling the defense off via a runtime flag on the same patched code, ensuring the only difference between configurations is the defense itself.
+    \item \textbf{2026-06-21:} Paper submitted for double-blind review. The patched code is the current code; no separate ``patched release'' was issued because the system has not been publicly released.
+\end{itemize}
+
+\subsection{Ethics Statement}
+
+\paragraph{No third-party harm.} Because \system{} is the authors' own system and has not been publicly released, the experiments in this paper do not expose any third-party user to risk. No live user data was used in the evaluation; all attack payloads were synthetic and directed at canary tools deployed in an isolated test environment.
+
+\paragraph{Attack payload release.} We commit to releasing the attack payloads, the evaluation harness, and the anonymized real-LLM response logs upon publication. We follow the principle of \emph{responsible release}: the released artifacts include only payloads that target \emph{structural} properties of the recovery pipeline (provenance, privilege) and do not include model-specific jailbreaks that would transfer to unrelated production systems. The defense is shipped alongside the attack payloads, so that any party reproducing the attack also has the fix available.
+
+\paragraph{LLM API usage.} The real-LLM evaluation consumed approximately 400 paid API calls to DeepSeek-V4-Flash (via SenseNova) and Qwen2.5-72B-Instruct (via SiliconFlow) for the main \system{} evaluation, plus approximately 200 additional calls to DeepSeek-V4-Flash for the unmodified LangGraph end-to-end experiment (\S\ref{sec:langgraph-real}), and 100 additional calls for the Reflexion end-to-end exploit (\S\ref{sec:reflexion-e2e}), at a total cost of under US\$20. No model provider's terms of service were violated; the prompts used are research-purpose red-team prompts targeting our own system and the standard LangGraph/Reflexion frameworks, not attempts to extract training data or bypass model safety training in general.
+
+\paragraph{Communication to other framework maintainers.}
+Our evidence for cross-framework impact varies by framework:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{LangGraph}: The evidence varies by attack vector. The V1 \emph{forward-path} experiment on \code{create\_react\_agent} (ASR=0.88) uses entirely library-default components---this is a genuine end-to-end exploit on unmodified LangGraph, and we will notify the LangGraph maintainers at least 45 days prior to publication with the exploit code and results, framing it as a vulnerability report. The V1 \emph{recovery-path} experiment (ASR=0.76) and the V2 experiment (ASR=0.54) both use \code{StateGraph} with author-constructed recovery/role-switcher nodes, because LangGraph ships no built-in recovery primitive; these are not exploits on unmodified LangGraph source code, and we frame them as \emph{design recommendations} (``if you add a recovery node, consider provenance tagging and a privilege-downgrade invariant'') rather than vulnerability reports. We will communicate both the vulnerability report (forward-path) and the design recommendation (recovery-path, V2) to the LangGraph maintainers at least 45 days prior to publication, and will provide the program committee with verification evidence (issue links, acknowledgment emails) upon request.
+    \item \textbf{Reflexion}: The end-to-end exploit in \S\ref{sec:reflexion-e2e} (ASR=0.52, two variants at 100\%) uses Reflexion's actual \code{generic\_generate\_func\_impl} retry path at commit \texttt{218cf0e}---not an author-constructed reconstruction. This is a genuine vulnerability in shipped production code: an adversarial test case whose output contains an injection directive is captured as \code{feedback}, wrapped in a high-trust frame, and delivered to the LLM, which obeys. We will notify the Reflexion maintainers at least 45 days prior to publication with the exploit code, the measured ASR, and a recommended fix (provenance tagging on the \code{feedback} string + untrusted-framing when the feedback source is external), framing it as a vulnerability report.
+    \item \textbf{AutoGen}: We have a \emph{simplified port} that reproduces the V2 vector on a configured harness (\S\ref{sec:second-system}), not an exploit on unmodified AutoGen source. We frame our communication as a design recommendation with partial exploit evidence.
+    \item \textbf{MetaGPT, Aider, OpenHands}: We have \emph{source-level structural observations} only (no end-to-end exploit). We frame our communication as a design recommendation (``consider adding provenance tagging and an untrusted-framing wrapper to your retry path''), not a vulnerability report.
+\end{itemize}
+We will provide the program committee with verification evidence of this communication (e.g., issue links, acknowledgment emails) upon request.
+
+\paragraph{Broader impact.} Self-healing mechanisms are becoming a standard component of production LLM agent systems, and the recovery-channel trust boundary they introduce is currently under-recognized. By naming and characterizing this boundary, we aim to enable framework authors to design recovery pipelines with explicit provenance and privilege invariants from the outset, rather than retrofitting them after deployment. The cost of the proposed defense (sub-millisecond machinery overhead, zero false alarms) is low enough that we expect it to become a default component of future self-healing agent architectures.

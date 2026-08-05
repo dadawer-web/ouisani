@@ -25,10 +25,10 @@ import org.slf4j.LoggerFactory;
  * <b>opt-in 开关</b>：{@code aios.recovery.reauthGate}（默认 <b>false</b>）—— 默认关闭以保持论文1
  * 编排器逻辑字节级稳定；新论文实验置 true 启用。关闭时编排器行为与论文1 完全一致。
  * <p>
- * <b>已知限制</b>：{@link TopologyMutationStrategy} 的 {@code resumeNode} 副作用发生在 {@code apply()}
- * 内部（先于本关卡）。故本关卡对拓扑突变是"检测+升级"而非"阻止执行"—— 但对<b>未来</b>把副作用
- * 延后到编排器执行的策略（声明 requiresReauthorization 但不在 apply 内执行），本关卡是真正的
- * PREVENT 层。Layer 1 已在 apply 内 PREVENT 拓扑突变的越权。
+ * <b>副作用时序</b>：{@link TopologyMutationStrategy} 的 {@code resumeNode} 副作用已重构为延后到
+ * 编排器 reauth 通过后执行（不在 {@code apply()} 内）。故本关卡对拓扑突变是真正的 PREVENT ——
+ * 越权角色在副作用发生前被拦截。Layer 1（策略内 {@link RoleReplacementValidator}）+ Layer 2（本关卡）
+ * 双重 PREVENT。
  *
  * @see RecoveryResult#requiresReauthorization()
  * @see PermissionChecker#checkRoleMutation
@@ -94,10 +94,12 @@ public final class RecoveryReauthorizationGate {
      * @return 重授权结果
      */
     public static ReauthResult check(RecoveryResult result, RecoveryContext context, PermissionChecker pc) {
-        if (!isEnabled()) {
-            return ReauthResult.skip("reauth gate disabled (aios.recovery.reauthGate=false)");
-        }
+        // requiresReauthorization=true 的结果强制校验 —— 防越权是硬约束，不受 opt-in 开关控制。
+        // 普通结果（requiresReauthorization=false）仍受 isEnabled() 控制，保论文1 字节稳定。
         if (result == null || !result.requiresReauthorization()) {
+            if (!isEnabled()) {
+                return ReauthResult.skip("reauth gate disabled (aios.recovery.reauthGate=false)");
+            }
             return ReauthResult.skip("result does not require reauthorization");
         }
 

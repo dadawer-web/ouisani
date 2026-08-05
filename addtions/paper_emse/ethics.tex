@@ -1,0 +1,34 @@
+%% ethics.tex
+
+\section{Ethics Statement}
+\label{sec:ethics}
+
+\subsection{Vulnerability Disclosure}
+
+The empirical analysis in this paper identifies a structural pattern---the trust-escalation trampoline---in the recovery paths of six production-grade LLM agent frameworks. For one framework (Reflexion), we additionally confirmed the pattern's exploitability through an end-to-end case study (\S\ref{sec:reflexion-e2e}). We address the ethical implications of these findings as follows.
+
+\paragraph{Reflexion (confirmed end-to-end exploit).}
+The end-to-end case study in \S\ref{sec:reflexion-e2e} (ASR=0.52, two variants at 100\%) uses Reflexion's actual \code{generic\_generate\_func\_impl} retry path at commit \texttt{218cf0e}---not an author-constructed reconstruction. This is a genuine vulnerability in shipped production code: an adversarial test case whose output contains an injection directive is captured as \code{feedback}, wrapped in a high-trust \code{[unit test results]} frame, and delivered to the LLM, which obeys. We will notify the Reflexion maintainers at least 45 days prior to publication with the exploit code, the measured ASR, and a recommended fix (provenance tagging on the \code{feedback} string + untrusted framing when the feedback source is external), framing it as a vulnerability report.
+
+\paragraph{MetaGPT, Aider, AutoGen (structural observations).}
+For MetaGPT, Aider, and AutoGen, our evidence is at the \emph{source-level structural observation} stage only: we have identified the trampoline signature (no provenance tag $\wedge$ high-trust frame) in their recovery paths but have not executed end-to-end exploits against their actual code. We frame our communication as a \emph{design recommendation}---``consider adding provenance tagging and an untrusted-framing wrapper to your retry path''---rather than a vulnerability report. We will communicate this recommendation to the maintainers at least 45 days prior to publication.
+
+\paragraph{LangGraph, OpenHands (partial/no trampoline).}
+LangGraph and OpenHands exhibit partial or no trampoline signature. We will share our source-level analysis with their maintainers as a design recommendation, noting that LangGraph's partial provenance tagging (\code{ToolMessage} with \code{status="error"}) is a step in the right direction and encouraging its extension to cover tool-returned error strings.
+
+\paragraph{Verification evidence.}
+We will provide the program committee with verification evidence of all maintainer communications (e.g., issue links, acknowledgment emails) upon request.
+
+\subsection{Responsible Release}
+
+\paragraph{Attack payload release.}
+We commit to releasing the analysis scripts, the Reflexion exploit code, and the anonymized evaluation logs upon publication. We follow the principle of \emph{responsible release}: the released artifacts include only payloads that target the \emph{content-provenance} property of the recovery pipeline (the trust-escalation trampoline via untagged failure content) and do not include model-specific jailbreaks that would transfer to unrelated production systems. The recommended fix (provenance tagging at the capture site, \S\ref{sec:defense}) is documented alongside the attack payloads, so that any party reproducing the analysis also has the remediation guidance available.
+
+\paragraph{LLM API usage.}
+The Reflexion end-to-end case study consumed approximately 100 API calls to gpt-5.6-luna at temperature~0.7, at a total cost of under US\$5. No model provider's terms of service were violated; the prompts used are research-purpose evaluation prompts targeting the standard Reflexion framework's retry path, not attempts to extract training data or bypass model safety training in general.
+
+\paragraph{No third-party harm.}
+All experiments were conducted in an isolated test environment. No live user data was used; all attack payloads were synthetic and directed at canary tools deployed for evaluation purposes. The Reflexion exploit targets the framework's retry path in a controlled benchmark setting, not a deployed production system with real users.
+
+\paragraph{Broader impact.}
+Self-healing mechanisms are becoming a standard component of production LLM agent systems, and the trust boundary they introduce on the recovery path is currently under-recognized in the software engineering community. By empirically documenting the systemic provenance gap and proposing a content-level provenance-tagging defense to close it, we aim to enable framework authors to design recovery pipelines with explicit provenance tracking from the outset, rather than retrofitting it after deployment. Authorization-based defenses for privileged side effects on the recovery path are an adjacent but distinct concern outside the scope of this paper.

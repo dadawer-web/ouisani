@@ -1,0 +1,30 @@
+flowchart TB
+    Tool[VFS / Tool<br/>web_fetch, file_read]:::tool
+    Tool -->|抛出异常| Capture[Capture Site<br/>ToolErrorRecovery]:::capture
+    Capture -->|判定来源| Tag[TaggedContent<br/>origin = TOOL_OUTPUT_EXTERNAL<br/>sourceRef = web_fetch://evil.com]:::tag
+
+    Tag -->|传入 RecoveryContext| Strategy[Recovery Strategy<br/>ReflectionInjection / TopologyMutation]:::strategy
+    Strategy -->|根据 origin 选择模板<br/>EXTERNAL -> untrusted template| Result[RecoveryResult<br/>requiresReauthorization = true<br/>side effect = deferred callback]:::result
+
+    Result -->|被 Orchestrator 拦截| Gate{Reauthorization Gate<br/>RecoveryOrchestrator}:::gate
+    Gate -->|requiresReauthorization<br/>== true ?| Check[PermissionChecker<br/>+ RoleSelector<br/>P_new <= P_old ?]:::check
+
+    Check -->|通过<br/>合法降级| Exec[执行延迟副作用<br/>resumeNode newRole]:::pass
+    Check -->|拒绝<br/>越权提权| Block[阻断<br/>RecoveryResult.failed]:::block
+
+    Exec --> Final([恢复成功<br/>权限未提升]):::pass
+    Block --> Deny([恢复被拒<br/>攻击被阻止]):::block
+
+    Invariant[权限降级不变式<br/>P recovery action <= P failed execution<br/>类比 OS: 异常处理器不得提权]:::note
+    Invariant -.->|约束| Check
+
+    classDef tool fill:#e0e7ff,stroke:#4f46e5,stroke-width:1.5px,color:#1e1b4b
+    classDef capture fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px,color:#1e3a8a
+    classDef tag fill:#cffafe,stroke:#0891b2,stroke-width:2px,color:#164e63
+    classDef strategy fill:#fef3c7,stroke:#d97706,stroke-width:1.5px,color:#78350f
+    classDef result fill:#fde68a,stroke:#d97706,stroke-width:2px,color:#78350f
+    classDef gate fill:#fbbf24,stroke:#b45309,stroke-width:2.5px,color:#78350f
+    classDef check fill:#fed7aa,stroke:#ea580c,stroke-width:2px,color:#7c2d12
+    classDef pass fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#14532d
+    classDef block fill:#fecaca,stroke:#dc2626,stroke-width:2px,color:#7f1d1d
+    classDef note fill:#f3f4f6,stroke:#6b7280,stroke-width:1px,stroke-dasharray:4 2,color:#374151

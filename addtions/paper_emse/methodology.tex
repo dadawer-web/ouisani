@@ -1,0 +1,115 @@
+%% methodology.tex
+
+\section{Research Methodology}
+\label{sec:methodology}
+
+This study employs a multi-case study design with taxonomy construction, controlled experimentation, and defense evaluation, following the guidelines for case study research in software engineering by Runeson and H{\"o}st~\cite{runeson2009} and the empirical-security evaluation principles of Wohlin et al.~\cite{wohlin2012}. The methodology is organized into three phases that map one-to-one onto the three research questions, plus a cross-cutting statistical-reporting protocol. The methodology consists of eight components: research design, framework selection, data collection (RQ1), taxonomy construction (RQ1), judgment criteria (RQ1), exploitability validation (RQ2), defense evaluation (RQ3), and statistical reporting.
+
+\subsection{Research Design}
+\label{sec:method-design}
+
+We adopt a \emph{multi-case study} design~\cite{runeson2009} in which each of the six LLM agent frameworks constitutes a case. The unit of analysis is the \emph{recovery path} of each framework, as defined in \S\ref{sec:bg-scope}. The study proceeds in three phases that map onto the three research questions:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Phase 1 -- Taxonomy construction and cross-case analysis (RQ1).} We perform source-level code analysis of all six frameworks' recovery paths and construct a taxonomy of provenance-handling patterns using grounded theory coding~\cite{glaser1967,strauss1998}. The output is a three-category taxonomy (no-provenance, partial-provenance, full-provenance) and a binary classification of each framework against the trust-escalation trampoline criteria (Q1: provenance tag; Q2: high-trust frame). This phase establishes \emph{prevalence}.
+    \item \textbf{Phase 2 -- Exploitability and severity validation (RQ2).} We empirically test whether the trampoline signature is practically exploitable through four complementary experiments that escalate in ecological validity: (i)~a controlled testbed experiment on \system{}~\cite{omo} using real LLM APIs (mechanism attribution via controlled ablation); (ii)~cross-framework validation on LangGraph's public API (no source modification, to establish that the vulnerability class is not an artifact of the testbed); (iii)~an end-to-end exploit on Reflexion's actual shipped retry path (to confirm exploitability on production code that real users run); and (iv)~a forward-defense bypass experiment (to establish RCI as an independent attack surface). This phase establishes \emph{exploitability and severity}.
+    \item \textbf{Phase 3 -- Defense effectiveness evaluation (RQ3).} We evaluate the \trustorigin{} defense along four axes: (i)~against three naive baselines transplanted to the recovery channel; (ii)~across models of increasing instruction-following strength (DeepSeek/Qwen, gpt-oss-120b, closed-weight frontier); (iii)~against a defense-aware attacker who knows the defense exists; and (iv)~under defense-cost analysis (false alarms and latency overhead). This phase establishes \emph{defense effectiveness and its boundary conditions}.
+\end{enumerate}
+
+This three-phase design follows the recommendation of Kitchenham et al.~\cite{kitchenham2002} that empirical research in software engineering should combine qualitative analysis (taxonomy construction) with quantitative validation (controlled and in-the-wild measurement) to strengthen both internal and external validity. The escalating-ecological-validity structure of Phase 2 follows the security-evaluation convention of moving from white-box testbeds (mechanism attribution) to black-box third-party frameworks (external validity) to in-the-wild production code (ecological validity).
+
+\subsection{Framework Selection Criteria}
+\label{sec:method-selection}
+
+We selected frameworks for inclusion using the following criteria, designed to ensure that the study covers production-grade, actively maintained systems with explicit self-healing functionality:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{GitHub stars $\geq$ 2,000}: ensures the framework has achieved meaningful adoption and is not a toy or research prototype alone.
+    \item \textbf{Active maintenance}: the repository has commits within the last 12 months, indicating ongoing development.
+    \item \textbf{Explicit retry/reflection/debug loop}: the framework ships code that captures execution failures and re-injects diagnostic content into subsequent LLM calls. We excluded single-shot agents (no recovery logic) and frameworks where retry is limited to API-level rate-limit handling.
+    \item \textbf{Open-source with accessible source code}: the recovery path must be inspectable at the source level.
+\end{itemize}
+
+Applying these criteria, we selected six frameworks: Reflexion~\cite{reflexion,reflexion-code} ($\sim$2.4k stars), MetaGPT~\cite{meta-agent} ($\sim$40k stars), Aider~\cite{aider-code} ($\sim$3.4k stars), OpenHands~\cite{openhands-code} ($\sim$60k stars), AutoGen~\cite{autogen} ($\sim$35k stars), and LangGraph~\cite{langgraph} ($\sim$10k stars). The combined star count exceeds 105k, indicating broad adoption across the LLM agent developer community.
+
+\subsection{Data Collection}
+\label{sec:method-data}
+
+For each framework, we performed source-level code analysis following these steps:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Commit fixation}: we analyzed each framework at a specific, recorded commit hash to ensure reproducibility. The commit hashes are listed in the replication package.
+    \item \textbf{Recovery path identification}: we identified the code paths responsible for failure capture, content packaging, and re-injection by searching for keywords (\code{retry}, \code{reflect}, \code{debug}, \code{error}, \code{exception}, \code{feedback}) and tracing the control flow from exception handlers to LLM call sites.
+    \item \textbf{Code excerpt extraction}: for each framework, we extracted the relevant code excerpts (function names, prompt templates, message construction logic) that constitute the recovery path. These excerpts are reproduced in \S\ref{sec:results} and in the replication package.
+    \item \textbf{Verification}: a second researcher independently verified the extracted excerpts by re-fetching them at the cited commit and confirming that the regex patterns matched. The verification status is reported in Table~\ref{tab:trampoline}.
+\end{enumerate}
+
+\subsection{Taxonomy Construction}
+\label{sec:method-taxonomy}
+
+We constructed the recovery-pattern taxonomy using the grounded theory coding procedures of Glaser and Strauss~\cite{glaser1967} as refined by Strauss and Corbin~\cite{strauss1998}:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Open coding}: we line-by-line coded each framework's recovery path, labeling each code segment with descriptive codes (e.g., ``error string concatenated verbatim'', ``system-level framing applied'', ``role-playing instruction prepended'').
+    \item \textbf{Axial coding}: we grouped the open codes into categories around the axis of \emph{provenance handling}---how the framework treats the origin of failure content. This produced the three-category taxonomy reported in \S\ref{sec:rq1-taxonomy}: no-provenance, partial-provenance, and full-provenance.
+    \item \textbf{Selective coding}: we identified the core category---the \emph{trust-escalation trampoline}---as the structural signature that integrates the axial categories into a coherent pattern. The trampoline is defined as the combination of no-provenance tagging and high-trust framing.
+\end{itemize}
+
+\subsection{Judgment Criteria}
+\label{sec:method-criteria}
+
+For each framework, we asked two questions of the recovery path code:
+
+\begin{description}[leftmargin=*]
+    \item[\textbf{Q1} (Provenance tag?)] Does the recovery path distinguish internally generated diagnostic content (compilation errors, framework exceptions) from externally originated content embedded in the failure payload (test output, fetched files, tool return values)?
+    \item[\textbf{Q2} (High-trust frame?)] Does the recovery path wrap the failure payload in a high-trust frame (system message, role-playing instruction, ``previous attempt'' envelope, or the same message role used for successful results) before re-injecting it into the next LLM call?
+\end{description}
+
+A framework is classified as exhibiting the \textbf{trust-escalation trampoline} signature if and only if $\text{Q1} = \text{No} \wedge \text{Q2} = \text{Yes}$. A framework with $\text{Q1} = \text{Partial}$ (some errors are tagged but not all) is classified as \emph{partial trampoline}. A framework with $\text{Q2} = \text{No}$ (no high-trust framing applied) is classified as \emph{no trampoline}, regardless of Q1.
+
+\subsection{Exploitability Validation (RQ2)}
+\label{sec:method-validation}
+
+Phase 2 addresses RQ2 through four experiments of escalating ecological validity. The detailed designs are reported in \S\ref{sec:severity}; we summarize the methodological rationale here.
+
+\subsubsection{Controlled Testbed Experiment}
+The controlled experiment on \system{}~\cite{omo} serves \emph{mechanism attribution}: because production frameworks do not expose the internal hooks needed to isolate whether content-level provenance drives a given defense outcome, we instrument the testbed at every trust-boundary crossing. The experiment compares two matched configurations (DEFENSE\_OFF vs.\ DEFENSE\_ON) across two task sets (\rci{} attack and benign recovery), 100 trials per cell (400 total), using two real LLM APIs (DeepSeek-V4-Flash, Qwen2.5-72B-Instruct) at temperature 0.7. The testbed's role is explicitly limited to mechanism attribution; the claim that the vulnerability class generalizes beyond the testbed rests on the LangGraph and Reflexion experiments.
+
+\subsubsection{Cross-Framework Validation on LangGraph}
+To establish that the vulnerability is not an artifact of the authors' testbed, we replicate the attack on LangGraph's~\cite{langgraph} public API (v1.1.10, langchain v1.2.18) using \emph{no source modification}. We report a recovery-path experiment (author-constructed recovery node on \code{StateGraph}, matching common Reflexion-style patterns), a forward-path experiment (entirely library-default \code{create\_react\_agent} with built-in \code{ToolNode}), and a real agentic-loop experiment (\code{bind\_tools} with actual tool execution).
+
+\subsubsection{End-to-End Exploit on Reflexion}
+To confirm exploitability on production code that real users run, we execute an end-to-end RCI exploit against Reflexion's~\cite{reflexion-code} \emph{actual} shipped retry path---not a reconstruction. Reflexion was selected because: (i)~it is the smallest of the six codebases, making end-to-end analysis tractable; (ii)~its retry path is self-contained in a single function (\code{generic\_generate\_func\_impl}); (iii)~it exhibits the full trampoline signature (Q1=No, Q2=Yes); and (iv)~it ships a standard benchmark (LeetCode-Hard) that provides a realistic execution context. The exploit uses the verbatim system prompt (\texttt{PY\_REFLEXION\_CHAT\_INSTRUCTION}), few-shot example, and \code{parse\_code\_block} from commit \texttt{218cf0e}. We test 5 injection variants against a benign control arm ($N=10$ per variant, 50 per arm, 100 total), with gpt-5.6-luna at temperature 0.7. Attack success = the LLM's parsed code block contains \code{canary\_probe}.
+
+\subsubsection{Forward-Defense Bypass}
+To establish RCI as an \emph{independent} attack surface (not merely a variant of indirect prompt injection~\cite{greshake2023indirect}), we run two configurations on the same recovery pipeline ($N=10$ per variant, 50 total per config): CONFIG\_A with no forward-path defenses, and CONFIG\_B with three forward-path defenses fully enabled (input sanitizer, LLM-based injection detector, tool-permission check). The key design choice: all three forward-path defenses inspect the \emph{user input} (benign), while the adversarial content enters via the tool's \emph{failure} (uninspected by forward-path defenses).
+
+\subsection{Defense Evaluation (RQ3)}
+\label{sec:method-defense}
+
+Phase 3 evaluates the \trustorigin{} defense along four axes, each designed to test a distinct threat to defense effectiveness:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Naive-baseline comparison (\S\ref{sec:naive-baseline}).} We reimplement three state-of-the-art forward-path defenses (Instruction Hierarchy~\cite{instruction-hierarchy}, Spotlighting~\cite{spotlighting}, Keyword Filter) directly on the recovery path and measure their ASR against the same 100-trial workload. The Keyword Filter is additionally evaluated on 5 paraphrased variants to test signature-dependence. This axis tests whether the OS-principled redesign is necessary or whether naive transplantation suffices.
+    \item \textbf{Cross-model generalization (\S\ref{sec:cross-model}).} We re-run the \rci{} evaluation on gpt-oss-120b~\cite{gpt-oss} (open-weights, NVIDIA NIM, $N=50$ per cell) and on a closed-weight model accessed via official API ($N=50$ per cell). This axis tests whether the defense holds on stronger instruction-following models, where content-level provenance signaling may be overridden.
+    \item \textbf{Defense-aware attacker (\S\ref{sec:defense-aware}).} We define 5 defense-aware attack strategies (authority-appeal, urgency-framing, indirect-reference, role-assumption, multi-step), each crafted with knowledge of the defense. $N=20$ per strategy (100 total). We note up front that this is a \emph{single-round} design---a fully adaptive multi-round attacker is stronger still and is discussed as future work. This axis tests robustness against adversaries who know the defense exists.
+    \item \textbf{Defense-cost analysis (\S\ref{sec:defense-cost}).} We measure false alarm rate (FAR) on 100 benign recovery trials and latency overhead (machinery overhead excluding LLM inference, and total end-to-end latency including LLM inference) over $N=30$ repeated trials per cell. This axis quantifies the operational cost of the defense on legitimate self-healing.
+\end{itemize}
+
+\subsection{Statistical Reporting Protocol}
+\label{sec:method-stats}
+
+To support replication and reviewer verification, all quantitative experiments follow a unified statistical-reporting protocol:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Attack Success Rate (ASR).} We report the pooled ASR over all trials per (configuration, task set) pair, with a \textbf{Wilson 95\% confidence interval} for the binomial proportion. To convey per-payload variability, we additionally report the per-variant ASR range (min--max across the 5 variants) and the median per-variant ASR (p50 ASR).
+    \item \textbf{Pairwise comparisons.} Baseline-vs.\ defended comparisons use \textbf{Fisher's exact test} (two-sided). The Bonferroni-corrected significance threshold $\alpha/2 = 0.025$ applies to the main comparison in Table~\ref{tab:results}; supplementary experiments are descriptive and report point estimates and Wilson CIs without further multiple-comparison correction, because they answer different research questions rather than re-testing the same hypothesis.
+    \item \textbf{Inter-annotator agreement.} Because the attack-success detector is rule-based over free-form LLM responses, we validate its reliability with a stratified sample of 100 responses labeled independently by two human annotators using the same written rubric. We report Cohen's $\kappa$ for each pair (annotator-annotator and classifier-annotator), with asymptotic 95\% CIs.
+    \item \textbf{Latency.} Defense-overhead measurements are reported as mean$\pm$std over $N=30$ repeated trials; total end-to-end latency additionally reports a 95\% bootstrap CI. Welch's $t$-test is used for latency comparisons.
+    \item \textbf{Raw-data release.} All raw trial logs, annotation rubrics, the 100 annotated responses, and the analysis scripts are released as a replication package, enabling independent verification of every reported number.
+\end{itemize}
+
+\subsection{Threats to Validity}
+\label{sec:method-threats}
+
+Threats to validity---internal, external, construct, conclusion, and reliability---are discussed in detail in \S\ref{sec:threats-to-validity}, following the classification of Wohlin et al.~\cite{wohlin2012}. The methodological choices that mitigate each threat are noted here in brief: (i)~the taxonomy uses a structured coding protocol with verifiable code excerpts and independent verification (\S\ref{sec:method-taxonomy}); (ii)~the controlled testbed is limited to mechanism attribution, with external validity established on third-party frameworks (LangGraph) and production code (Reflexion); (iii)~the judgment criteria (Q1, Q2) are binary and operationalized against specific code patterns; (iv)~all quantitative experiments report Wilson 95\% CIs and pairwise Fisher exact tests.

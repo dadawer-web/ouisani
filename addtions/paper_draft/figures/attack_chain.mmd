@@ -1,0 +1,35 @@
+flowchart LR
+    User([合法用户]):::benign --> Web1[正常网页/文件]:::benign
+    Web1 --> Agent1[Agent 正常执行]:::benign
+    Agent1 -->|成功输出| Done([任务完成]):::benign
+
+    Attacker([攻击者<br/>External Content Provider]):::attacker -.->|构造| Mal[恶意网页/文件<br/>Poisoned API]:::malicious
+    Mal -.->|web_fetch/file_read| Agent2[Agent 解析失败<br/>Parsing Error]:::malicious
+    Agent2 -.->|捕获异常| Dump[带毒 Core Dump/lastErrorTrace<br/>String 无溯源标签]:::malicious
+    Dump -.->|触发| Orch[Recovery Orchestrator<br/>11+ 恢复策略]:::critical
+    Orch -.->|V1: 高信任模板注入<br/>SYSTEM CRITICAL| Prompt[下一轮 Prompt<br/>恶意指令被执行]:::critical
+    Orch -.->|V2: 零权限校验<br/>resumeNode| Esc([权限提升<br/>System_Admin]):::critical
+
+    subgraph ForwardPath [正向路径 - 入口边界有防御]
+        User
+        Web1
+        Attacker
+        Mal
+        Agent1
+        Agent2
+    end
+    subgraph ReversePath [反向路径 - 恢复边界无防御]
+        Dump
+        Orch
+        Prompt
+        Esc
+    end
+    ForwardPath -.->|失败即跨越信任边界| ReversePath
+
+    classDef benign fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#14532d
+    classDef attacker fill:#fee2e2,stroke:#dc2626,stroke-width:2px,color:#7f1d1d
+    classDef malicious fill:#fecaca,stroke:#dc2626,stroke-width:1.5px,stroke-dasharray:5 3,color:#7f1d1d
+    classDef critical fill:#7f1d1d,stroke:#7f1d1d,stroke-width:2px,color:#fef2f2
+
+    style ForwardPath fill:#f0fdf4,stroke:#16a34a,stroke-dasharray:3 3
+    style ReversePath fill:#fef2f2,stroke:#dc2626,stroke-dasharray:3 3

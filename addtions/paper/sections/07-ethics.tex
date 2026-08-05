@@ -1,0 +1,90 @@
+% =============================================================================
+%  Section 7 — Responsible Disclosure and Ethics Statement
+% =============================================================================
+\section{Responsible Disclosure and Ethics Statement}
+\label{sec:ethics}
+
+\paragraph{System provenance and authorship.}
+Neuron is a research prototype developed by the authors of this paper; it
+is not a third-party commercial product, and the authors are its sole
+maintainers. The system name ``Neuron''\footnote{The name ``Neuron'' is
+chosen as a research-system identifier. An unrelated open-source PHP web
+application framework sharing a similar name exists; it has a completely
+different architecture (PHP web framework vs.\ the Java-based governance
+runtime described here), and the two projects share no code, design, or
+maintainers.} is used solely for anonymity during double-blind review and
+does not correspond to any deployed commercial product.
+
+\paragraph{Vulnerability disclosure.}
+The two vulnerability classes identified in this paper---coupled
+resource--security failure (Section~\ref{sec:bg-lim}) and the LIM-specific
+spawn-time attack surface (Section~\ref{sec:bg-attack})---were discovered
+by the authors during the design and implementation of Neuron. Because
+Neuron is the authors' own system, the ``disclosure'' is self-disclosure
+of design flaws that were identified and remediated during development,
+not a third-party vulnerability report. No CVE was filed, because the
+vulnerabilities are design-level properties of a research prototype, not
+implementation bugs in a deployed product.
+
+\paragraph{Fix timeline.}
+Both vulnerability classes were remediated in the Neuron codebase prior to
+paper submission:
+\begin{itemize}
+    \item \textbf{Coupled resource--security failure}: The unified audit
+    chain (\texttt{UnifiedAuditLog}), per-turn trace identifier
+    (\texttt{TraceContext}), and \IO{} circuit-breakers
+    (\texttt{VfsRateLimiter}, \texttt{EventBusRateLimiter}) were
+    implemented in the initial runtime build. The coupled enforcement loop
+    (Section~\ref{sec:arch-coupled}) has been present since the first
+    evaluated version.
+    \item \textbf{Spawn-time privilege escalation}: The
+    \texttt{SpawnPrivilegeContext} (privilege non-increase) and
+    tenant-identity propagation via \texttt{CallerContext} were
+    implemented before the evaluation of Section~\ref{sec:eval-cross}. The
+    depth-aware \texttt{EscalationPolicy} was added in the same commit.
+    No production deployment existed prior to the fix.
+\end{itemize}
+
+\paragraph{Ethics and broader impact.}
+This work studies security mechanisms for multi-tenant LLM agent runtimes.
+The governance scenarios are evaluated in a controlled research environment
+against the authors' own system; no third-party systems, users, or data
+were involved. The evaluation harness and probe payloads are released as
+part of the replication package to enable independent verification and
+future defense research; they do not target any specific deployed system
+or individual. The supplementary real-LLM experiment
+(Section~\ref{sec:eval-supplement}) uses commercial LLM APIs under their
+respective terms of service, with API costs borne by the authors; no
+personally identifiable information was processed, and the adversarial
+prompts were confined to the controlled experimental context.
+
+\paragraph{Potential for harm and mitigations.}
+The attack techniques described in this paper (resource-contention
+flooding, spawn-time privilege escalation, natural-language escalation)
+are applicable to any multi-agent framework that lacks spawn-time
+privilege propagation. To mitigate misuse, we delay the release of
+fully weaponized attack scripts until after publication, and the released
+replication package focuses on the \emph{defense} mechanisms and
+\emph{evaluation harness} rather than on ready-to-run exploit code. The
+naive baseline experiment (Section~\ref{sec:eval-naive}) demonstrates
+that forward-path defenses are insufficient, which we hope motivates the
+community to adopt structural enforcement rather than to exploit the gap.
+
+\paragraph{Data availability.}
+The evaluation data, experiment scripts, and raw LLM responses are
+preserved in the replication package: statistical analysis
+(\texttt{statistical\_analysis.json}), annotation agreement
+(\texttt{annotation\_agreement.csv}), naive baseline
+(\texttt{naive\_baseline.csv}), and second-system reproduction
+(\texttt{second\_system\_reproduction.csv}). To support reproducibility
+during double-blind review, an anonymized artifact bundle containing
+the raw result files (CSV/JSON), the evaluation harness, the
+capability-surface classifier, and the TLA$^+$ specification is
+available via the anonymous supplementary archive referenced in the
+cover letter; the full system source and the weaponized attack scripts
+will be released post-publication under an open-source license. The
+artifact bundle allows reviewers to re-run the deterministic
+experiments (Scenario~6, capability classifier, joint-decision,
+starvation) and to inspect the raw LLM responses underlying the
+stochastic experiments, though re-running the LLM trials requires the
+reviewer's own API credentials.

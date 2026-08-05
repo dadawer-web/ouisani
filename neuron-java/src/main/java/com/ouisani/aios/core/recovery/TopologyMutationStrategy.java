@@ -97,10 +97,11 @@ public class TopologyMutationStrategy implements RecoveryStrategy {
             log.info("[TopologyMutation] 确认能力不匹配且角色校验通过: suggestedRole={}, reason={}, dumpOrigin={}",
                     suggestedRole, decision.reason(), taggedDump.origin());
 
-            // 4. 构造 MedicalReport 并调用 resumeNode 触发拓扑突变
-            //    副作用（角色变更）发生在 apply() 内 —— defense #2/#3 的 RoleReplacementValidator
-            //    已在 parseAndValidate 内拦截越权；结果声明 requiresReauthorization=true 供
-            //    编排器层 RecoveryReauthorizationGate 二次确认（纵深防御）。
+            // 4. 构造 MedicalReport —— 角色替换副作用延后到编排器 reauth 通过后执行
+            //    重构（洞2 强化）：apply() 不再直接调 resumeNode。副作用必须在编排器层
+            //    RecoveryReauthorizationGate 重授权通过后才执行，确保越权角色在副作用
+            //    发生前被拦截（PREVENT），而非事后检测+升级。Layer 1（RoleReplacementValidator）
+            //    在 parseAndValidate 内已 PREVENT；Layer 2（编排器 reauth）兜底。
             AutoMedicAgent.MedicalReport report = new AutoMedicAgent.MedicalReport(
                     AutoMedicAgent.Outcome.INCAPABLE,
                     decision.reason(),
@@ -108,14 +109,23 @@ public class TopologyMutationStrategy implements RecoveryStrategy {
                     suggestedRole
             );
 
-            boolean mutated = WorkflowEngine.instance().resumeNode(nodeId, report, workflowId);
-            if (mutated) {
-                // okRequiringReauthorization：声明本结果产生角色变更副作用，编排器可二次把关
-                return RecoveryResult.okRequiringReauthorization(
-                        "Topology mutation successful: replaced with " + suggestedRole, null);
-            } else {
-                return RecoveryResult.failed("Topology mutation failed");
-            }
+            // 把"执行角色替换"封装为回调，存入 context 供编排器 reauth 通过后执行
+            final AutoMedicAgent.MedicalReport finalReport = report;
+            final String finalNodeId = nodeId;
+            final String finalWorkflowId = workflowId;
+            final String finalSuggestedRole = suggestedRole;
+            context.withMetadata(RecoveryOrchestrator.META_PENDING_SIDE_EFFECT,
+                    (java.util.function.Function<RecoveryContext, RecoveryResult>) ctx -> {
+                        boolean mutated = WorkflowEngine.instance()
+                                .resumeNode(finalNodeId, finalReport, finalWorkflowId);
+                        return mutated
+                                ? RecoveryResult.ok("Topology mutation applied: replaced with " + finalSuggestedRole)
+                                : RecoveryResult.failed("resumeNode returned false for topology mutation");
+                    });
+
+            // 声明 requiresReauthorization —— 编排器在执行 pendingSideEffect 前强制过 reauth gate
+            return RecoveryResult.okRequiringReauthorization(
+                    "Topology mutation pending reauth: proposed " + suggestedRole, null);
 
         } catch (Exception e) {
             log.error("[TopologyMutation] 拓扑突变失败: {}", e.getMessage());

@@ -1,0 +1,264 @@
+% =============================================================================
+%  Section 6 — Conclusion
+% =============================================================================
+\section{Conclusion}
+\label{sec:conc}
+
+% -----------------------------------------------------------------------------
+\subsection{Summary}
+\label{sec:conc-summary}
+
+We have argued that multi-tenant LLM agent runtimes introduce a class of
+\emph{coupled resource--security failures} that layer-separated isolation
+cannot prevent: under resource contention, the security module is itself
+starved of the resources it needs to enforce, and during the contention
+window that precedes a hard failure, privileged operations slip through a
+permission layer that has no causal link to the ongoing attack. The root
+cause is the absence of a shared causal identifier across the governance
+layers, compounded by a LIM-specific attack surface---spawn-time privilege
+escalation, tenant-identity loss across spawn, and depth-oblivious
+approval---that classical isolation models were never designed to handle.
+
+To close this gap, we presented \textbf{Neuron}, a multi-tenant LLM agent
+governance runtime built on the principle of \emph{coupled governance},
+and made four contributions. \emph{First}, we presented a coupled
+resource--security governance architecture that fuses cgroup-based
+resource control, sandbox-based execution isolation, and permission-based
+access control through two complementary mechanisms: a unified audit
+chain keyed by a per-turn trace identifier for cross-layer audit
+correlation, and a cross-layer joint-decision mechanism in which a
+resource-layer signal tightens the permission verdict in real time,
+together with a pseudocode-level invariant argument showing that
+spawn-time privilege non-increase holds across all code paths.
+\emph{Second}, we closed the LIM attack surface through spawn-time
+privilege non-increase, tenant-identity propagation, and a depth-aware
+escalation policy using a dual-track destructive-tool classification
+(name whitelist + capability-surface classifier) that closes the
+name-evasion bypass. \emph{Third}, we stated an explicit threat model
+and enumerated the conditions under which the guarantees degrade or
+fail. \emph{Fourth}, we validated the architecture through reproducible
+experiments yielding statistically aggregated evidence across two
+core governance scenarios, four adaptive probes, and an
+external-framework architectural comparison contrasting Neuron's
+coupled governance with the layer-separated designs of AutoGen,
+LangGraph, and MCP---noting explicitly that these are general-purpose
+orchestration frameworks rather than multi-tenant security systems,
+so the comparison characterizes the architectural gap rather than
+claims victory over a straw man. The
+benign-workload evaluation confirms a $0.00\%$ false-positive rate across
+14{,}850 operations and governance overhead below $0.01\%$ of
+end-to-end latency.
+
+The evaluation substantiates the coupled governance thesis along three
+evidentiary tiers. \emph{First}, a dedicated permission-layer starvation
+experiment (Section~\ref{sec:eval-starvation}) directly induces the
+central coupled-failure mode: under resource pressure, the permission
+decision correctness drops to $66.67\%$ (Baseline) and $63.33\%$
+(Permission-only) due to deadline fallback to the permissive default,
+while coupled governance preserves $100\%$ correctness with a $6.8\times$
+p95 latency improvement---direct evidence that the permission layer
+degrades under resource pressure and that coupling prevents the
+degradation. \emph{Second}, a cross-layer joint-decision experiment
+(Section~\ref{sec:eval-joint}) shows a resource-layer signal
+(rate-limit rejection count) \emph{changing} the permission verdict in
+real time: under sustained pressure, the depth threshold tightens from
+$\geq 2$ to $\geq 1$, intercepting depth~1 destructive-tool requests
+that the static policy would have allowed---the missing ``resource
+signal actually changed the permission decision'' scenario that
+distinguishes coupled governance from three independent modules sharing
+a trace identifier. \emph{Third}, the original Scenario~6 results hold:
+under a simultaneous resource--permission cross-attack, coupled
+governance achieves a $100\%$ interception rate across all three attack
+vectors, where permission-only enforcement achieves only $\approx 67\%$
+and the baseline $0\%$; under four adaptive attacks, it remains
+effective against trace forgery, ThreadLocal leakage, and
+depth-spoofing, with the residual low-and-slow surface disclosed in
+the failure-case analysis. The original $0\%$ attack success rate
+was conditioned on a
+destructive-tool name whitelist; integrating the capability-surface
+classifier (Section~\ref{sec:eval-capability-classifier}) closes the
+F6 name-evasion bypass, raising the interception rate on
+name-evasion attacks from $0\%$ (name-only) to $100\%$
+(capability-integrated) with a $0\%$ false-positive rate.
+
+We emphasize that the Scenario~6 policy is a deterministic pure function
+of the seeded inputs, so its $0\%$ attack success rate is reported as a
+raw proportion without inferential intervals; the genuinely stochastic
+binary metrics are the supplementary real-LLM experiments
+(Section~\ref{sec:eval-supplement}) and the external-framework
+real-AutoGen reproduction (Section~\ref{sec:eval-external}), where the
+Wilson CI serves its standard inferential role. Under
+resource-contention flooding, coupled governance confines co-resident
+normal-agent read latency to the uncontended regime
+(p95\,$\approx$\,0.029\,ms), a $11.8\times$ improvement at p95 and
+$20.4\times$ at p99 over the layer-separated baseline, with all
+latencies directly measured via \texttt{System.nanoTime()}. The same
+governance gap is reproduced on AutoGen, LangGraph, and MCP. These are
+general-purpose orchestration frameworks rather than multi-tenant
+security systems; no directly comparable baseline exists. The
+architectural differentiation from prior systems is threefold: relative
+to AIOS~\cite{mei2025aios}, Neuron couples rather than isolates the
+resource and permission layers; relative to the dual-LLM
+pattern~\cite{anthropic2024dual}, Neuron enforces privilege
+non-increase at the runtime layer rather than relying on a trusted
+planner LLM; relative to classical container isolation, Neuron treats
+the LLM token and spawn tree as first-class governance objects. The
+coupled-failure surface is the contribution. This is attained at a
+measured $0.00\%$ false-positive rate across 14{,}850 benign
+operations on a live multi-tenant workload, and the governance
+overhead is a small fraction of a single LLM call
+(Section~\ref{sec:eval-e2e}). The coupling of resource and security
+enforcement---not either layer in isolation---is what closes the
+contention-window attack surface, establishing coupled governance as
+an architectural baseline for multi-tenant agent runtimes.
+
+% -----------------------------------------------------------------------------
+\subsection{Limitations}
+\label{sec:conc-lim}
+
+The failure-case analysis of Section~\ref{sec:lim-failure} identifies
+eight conditions under which the coupled governance guarantees degrade
+or fail. We restate the most consequential of them here, in condensed
+form, as the explicit limitations of this work.
+
+\paragraph{L1: Low-and-slow attacks under the rate threshold.}
+The rate limiter is rate-based, not morphology-based. An attacker operating
+at 19 writes/s---just below the 20 writes/s per-tenant threshold---bypasses
+the limiter by construction (Section~\ref{sec:eval-adaptive}, A1). Benign
+impact is bounded (p95\,$<$\,0.1\,ms) but not eliminated. This is the
+fundamental limitation of rate-based governance.
+
+\paragraph{L2: Prevention-layer scope.}
+The threat model of Section~\ref{sec:threat} assumes the adversary can
+already issue malicious escalation requests; Neuron's defense is structural
+enforcement at the runtime layer, not prevention at the prompt-injection
+layer. Indirect prompt injection that succeeds in coercing the agent to
+\emph{issue} a request is out of scope; the runtime's contribution is to
+ensure that any such request, once issued, is adjudicated under
+spawn-tree context and resource pressure.
+
+\paragraph{L3: Single-node scope.}
+The core evaluation uses a single runtime instance. A supplementary
+multi-node experiment (Section~\ref{sec:eval-distributed}) verifies that
+governance properties---trace propagation, privilege non-increase,
+depth-aware escalation, joint-decision coupling, and audit
+correlation---hold across three nodes via HTTP federation, with
+$30/30$ correctness on all five scenarios and cross-node overhead of
+$2$--$3\times$ (single-digit milliseconds). However, distributed
+resource-pressure consensus (which would require the Raft path) and
+cross-node tenant-identity attestation via cryptographic credentials
+remain open; the current federated experiment propagates governance
+state but does not achieve consensus on shared resource signals.
+
+\paragraph{L4: Sub-millisecond improvement under LLM-dominant regimes.}
+The $11.8\times$ p95 improvement is measured at the VFS layer, where
+latencies are sub-millisecond. In end-to-end turns dominated by LLM
+inference (200\,ms--2\,s per call), the governance overhead is a small
+fraction of total latency (Section~\ref{sec:eval-e2e}). The improvement
+remains significant for high-throughput multi-tenant runtimes---where
+contended VFS access is the bottleneck---but is not the dominant factor
+in single-turn, LLM-bound workloads.
+
+\paragraph{L5: Partial formal verification of the spawn invariant.}
+The invariant argument of Section~\ref{sec:arch-invariant} is
+pseudocode and enumeration-based. We supplemented it with a TLA$^+$
+specification and TLC model checking
+(Section~\ref{sec:eval-tla-scale}): the three spawn invariants
+(privilege non-increase, no-leak-on-exception, no-cross-tenant-leak)
+are verified over 1{,}681 reachable states in a finite model
+(3~privilege levels $\times$ 2~tenants $\times$ 2~spawn depths $\times$
+2~concurrent threads), and three mutation configurations each
+precisely violate the target invariant, confirming the specification
+is non-vacuous. This is a partial verification---not a
+machine-checked proof in the style of seL4~\cite{klein2009sel4}---and
+a future full mechanization in a proof assistant (Coq or Lean) is
+needed to close the gap.
+
+\paragraph{L6: Evaluation scale.}
+The security and false-positive evaluation uses 3~tenants $\times$
+3~agents $=$ 9~concurrent agents over 3--10~second windows. A
+dedicated scalability benchmark (Section~\ref{sec:eval-tla-scale}) extends
+this to 150~tenants $\times$ 3~agents $=$ 450~concurrent agents and
+confirms that the two structural governance primitives---audit-chain
+append and \texttt{SpawnPrivilegeContext} propagation---remain stable
+across the $50\times$ concurrency range (616--1545\,ops/s and
+1.6--3.1\,$\mu$s respectively), and that per-tenant token-bucket
+partitioning prevents lock contention from growing with $N$. At
+$N \geq 100$ (300+ agents), the writeText measurement saturates
+because the rate limiter denies most writes, but the governance
+primitives continue to function. The denial-path audit I/O remains an
+engineering optimization target (batch appends, asynchronous denial
+logging) rather than a structural flaw. The $50\times$ scaling data
+substantially narrows the uncertainty for $\geq 100$~tenant deployment.
+
+\paragraph{L7: Heuristic coupling rule.}
+The cross-layer joint-decision rule of Section~\ref{sec:eval-joint}---a
+hand-tuned threshold (\texttt{PRESSURE\_THRESHOLD}=50) above which the
+depth threshold tightens by one level---is a heuristic calibrated on
+the depth-based escalation morphology evaluated in this paper. It is
+not a learned policy, nor is it provably optimal: a different attack
+morphology (e.g.\ breadth-based fan-out, or a non-depth escalation
+axis) would require a different coupling rule and threshold
+recalibration. The threshold selection is justified empirically by the
+token-bucket geometry and the deadline-fallback latency
+(Section~\ref{sec:eval-joint}), but the rule's generalization to
+unseen morphologies is unproven. A learned coupling function that
+adapts the tightening rule to the observed attack morphology is left
+as future work.
+
+\paragraph{L8: Single-system evaluation (partially addressed).}
+All governance-effectiveness, latency, and scalability measurements
+are conducted on Neuron's own Java/JVM implementation. The
+external-framework comparison (Section~\ref{sec:eval-external})
+validates that the attack surface is structural---the same attacks
+succeed on AutoGen, LangGraph, and MCP---and the cross-system porting
+experiment (Section~\ref{sec:eval-external}, ``Cross-system porting
+of the joint-decision mechanism'') further validates that the core
+coupling mechanism (\texttt{ResourcePressureAwareEscalationPolicy})
+can be ported to real AutoGen~0.7.5 as a framework-agnostic
+middleware, producing the same resource-signal-changes-permission-verdict
+behavior ($100\%$ interception on AutoGen + joint decision vs.\ $0\%$
+on AutoGen + static). However, the portability of the full coupling
+mechanism (trace identifier injection, depth-aware escalation, and
+pressure-aware joint decision together) to non-JVM runtimes
+(Python, Rust, Go) and to non-cgroup resource backends (container
+orchestration platforms, serverless schedulers) is not yet tested.
+We disclose the residual gap: the contribution is the governance
+\emph{design} validated on one full realization (Neuron) plus one
+ported mechanism (joint decision on AutoGen), not a portable library
+demonstrated across multiple complete runtimes.
+
+% -----------------------------------------------------------------------------
+\subsection{Future Work}
+\label{sec:conc-future}
+
+Three extensions follow naturally from the limitations above.
+
+First, we will introduce \emph{class-aware \IO{} rate limiting} that
+discriminates not only between reads and writes (as the current
+\texttt{VfsRateLimiter} does) but also between \IO{} \emph{classes}---metadata
+lookups, bulk scans, embedding-store fetches, and network egress---each with
+its own token bucket and its own coupling to the permission layer. Class-aware
+limiting would let the runtime throttle the specific \IO{} morphology of a
+low-and-slow attack (L1) while leaving benign mixed workloads unaffected,
+sharpening the source-side throttling on which the coupled enforcement loop
+depends.
+
+Second, we will extend coupled governance from a single runtime to a
+\emph{multi-node cluster} setting, in which the per-turn trace identifier
+spans runtime boundaries and the unified audit chain is aggregated across
+nodes. Distributed coupled governance raises new questions---cross-node
+tenant-identity attestation, consensus on resource-pressure signals, and a
+federated escalation policy---that the single-node \texttt{TraceContext}
+does not address (L3). It is the prerequisite for governing multi-tenant
+agent fleets that share GPUs and model-serving front-ends across machines.
+
+Third, we will \emph{mechanize the spawn-time privilege non-increase
+invariant} in a proof assistant (e.g., Coq or Lean), targeting a
+machine-checked proof that the property holds for all reachable states of
+the spawn path (L5). The pseudocode-level argument of
+Section~\ref{sec:arch-invariant} provides the proof outline; mechanization
+will require formalizing the \texttt{PermissionProfile} subsumption order,
+the \texttt{SpawnPrivilegeContext} semantics, and the virtual-thread
+inheritance contract, and discharging the concurrent-case obligations that
+are currently argued informally.

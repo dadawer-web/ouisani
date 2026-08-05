@@ -1,0 +1,84 @@
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  AIOS — Distributed Cluster Deployment (3-Node)              ║
+# ║  Neuron multi-node governance experiment topology            ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# Usage:
+#   docker compose -f docker-compose.cluster.yml up --build
+#
+# Each node runs an independent Neuron runtime instance with its own
+# governance state. Nodes discover peers via AIOS_CLUSTER_PEERS for
+# cross-node A2A federation (trace propagation, privilege inheritance,
+# depth-aware escalation, joint-decision, audit correlation).
+
+version: "3.8"
+
+services:
+  neuron-node1:
+    build: .
+    container_name: neuron-node1
+    ports:
+      - "8081:8080"
+    environment:
+      - AIOS_PORT=8080
+      - AIOS_NODE_ID=node1
+      - AIOS_CLUSTER_ENABLED=true
+      - AIOS_CLUSTER_PEERS=neuron-node2:8080,neuron-node3:8080
+      - JAVA_OPTS=
+    networks:
+      - neuron-cluster
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  neuron-node2:
+    build: .
+    container_name: neuron-node2
+    ports:
+      - "8082:8080"
+    environment:
+      - AIOS_PORT=8080
+      - AIOS_NODE_ID=node2
+      - AIOS_CLUSTER_ENABLED=true
+      - AIOS_CLUSTER_PEERS=neuron-node1:8080,neuron-node3:8080
+      - JAVA_OPTS=
+    networks:
+      - neuron-cluster
+    depends_on:
+      - neuron-node1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  neuron-node3:
+    build: .
+    container_name: neuron-node3
+    ports:
+      - "8083:8080"
+    environment:
+      - AIOS_PORT=8080
+      - AIOS_NODE_ID=node3
+      - AIOS_CLUSTER_ENABLED=true
+      - AIOS_CLUSTER_PEERS=neuron-node1:8080,neuron-node2:8080
+      - JAVA_OPTS=
+    networks:
+      - neuron-cluster
+    depends_on:
+      - neuron-node1
+      - neuron-node2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+networks:
+  neuron-cluster:
+    driver: bridge

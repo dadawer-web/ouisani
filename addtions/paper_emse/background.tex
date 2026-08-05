@@ -1,0 +1,51 @@
+%% background.tex
+
+\section{Background}
+\label{sec:background}
+
+This section provides the conceptual background necessary to understand the empirical analysis. We describe the self-healing architectural pattern in LLM agents (\S\ref{sec:bg-selfhealing}), introduce the concepts of trust boundaries and provenance tracking (\S\ref{sec:bg-trust}), and define the scope of what we mean by a ``recovery path'' (\S\ref{sec:bg-scope}).
+
+\subsection{Self-Healing Patterns in LLM Agents}
+\label{sec:bg-selfhealing}
+
+Self-healing in LLM agent frameworks refers to the automated detection of execution failures and the subsequent re-injection of diagnostic context to improve the likelihood of success on retry. We identify three principal self-healing patterns in production frameworks:
+
+\paragraph{Retry with error context.}
+The simplest pattern captures the error message or exception trace from a failed attempt and appends it to the next LLM call's context. Reflexion~\cite{reflexion} exemplifies this pattern: when a generated function fails unit tests, the test runner's output is wrapped in a ``previous attempt'' envelope and fed back to the LLM. Aider~\cite{aider-code} follows a similar pattern for failed \code{SEARCH/REPLACE} edits, reading the target file and embedding its content in a \code{ValueError} that is re-injected into the next iteration. The implicit assumption is that the error content is \emph{trustworthy diagnostic signal} to be acted upon, not adversarial content to be defended against.
+
+\paragraph{Reflection and self-correction.}
+A more sophisticated pattern has the LLM explicitly reflect on its own failure before retrying. Self-Refine~\cite{self-refine} iterates refinement with self-produced feedback; CRITIC~\cite{critic} externalizes verification to tool-augmented self-critique. MetaGPT~\cite{meta-agent} implements a \code{DebugError} action that feeds test stderr back to the LLM under a role-playing frame. These mechanisms uniformly assume that the failure payload---the critique, the error message, the verification trace---is a faithful report of the failure's cause.
+
+\paragraph{Topology mutation.}
+Multi-agent frameworks additionally restructure the agent graph on failure. AutoGen~\cite{autogen} supports dynamic agent role reassignment; SWE-agent~\cite{swe-agent} reconfigures its tool interface when an action fails. These strategies assume that the diagnostic information triggering the restructuring is a faithful report, and that acting on it is safe because the failure is presumed benign. We note that topology-mutation surfaces introduce a distinct authorization concern (privilege escalation via role replacement); this is outside the scope of the present empirical study, which focuses on the content-level trust boundary (see \S\ref{sec:threat-scope}).
+
+\subsection{Trust Boundaries and Provenance Tracking}
+\label{sec:bg-trust}
+
+A \emph{trust boundary} is an interface at which content of differing trust levels is separated and labeled. Classical operating systems enforce trust boundaries via privilege levels (kernel vs.\ userspace) and provenance tags (e.g., the \code{PAGE\_USER} marker that prevents userspace data from being executed as kernel code)~\cite{saltzer1975protection,levine2003system}. Data crossing a trust boundary must be explicitly labeled and handled according to its origin.
+
+\emph{Provenance tracking} is the practice of recording where content originated and propagating that label through all subsequent transformations. In the context of LLM agents, provenance tracking would require distinguishing at minimum:
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Internally generated content}: framework exceptions, compilation errors, system diagnostics---produced by the trusted computing base.
+    \item \textbf{Externally originated content}: web pages, file contents, tool return values, test case outputs---produced by sources outside the agent's trust boundary.
+\end{itemize}
+
+The distinction matters because the two content classes warrant different trust levels on the recovery path. Internally generated diagnostics are safe to act upon (they reflect the framework's own state). Externally originated content embedded in a failure payload may contain adversarial directives and should be treated as untrusted even when it appears in an error trace. Failing to enforce this distinction allows adversarial content to inherit the trust level of framework diagnostics---the structural root cause of the \rci{} attack class studied in this paper.
+
+\subsection{Defense Mechanism: \trustorigin{} Tagging}
+\label{sec:bg-defense}
+
+To close the provenance gap, this paper studies a content-level defense that mirrors trust-boundary enforcement in classical operating systems. \trustorigin{} Tagging assigns a provenance label to every piece of failure content at the capture site---distinguishing internally generated diagnostics (\code{SYSTEM\_GENERATED}, \code{TOOL\_OUTPUT\_INTERNAL}) from externally originated content (\code{TOOL\_OUTPUT\_EXTERNAL}, \code{USER\_INPUT})---and propagates the label through the recovery chain, so that externally originated content is re-injected under an explicit untrusted frame rather than a high-trust system frame. This is the agent analog of the \code{PAGE\_USER} provenance tag that prevents userspace data from being executed as kernel code~\cite{levine2003system}. The defense is content-level and probabilistic: it changes the framing under which the failure content reaches the next-round LLM, but it does not deterministically prevent a sufficiently strong instruction-following model from obeying injected content even under an untrusted frame. The empirical profile of this degradation---specifically, how defended ASR rises with model instruction-following strength---is a primary subject of RQ3 (\S\ref{sec:defense-eval}). Authorization-based defenses for privileged side effects on the recovery path (e.g., role replacement, topology mutation) are outside the scope of this paper.
+
+\subsection{Research Scope: What Is a ``Recovery Path''?}
+\label{sec:bg-scope}
+
+For the purpose of this empirical study, we define the \emph{recovery path} as the sequence of code-level operations that begins when an agent execution fails and ends when the failure's diagnostic content is re-injected into a subsequent LLM call. This includes:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Failure capture}: the point at which an exception, error message, test output, or diagnostic log is caught by the framework's recovery logic.
+    \item \textbf{Content packaging}: the construction of the prompt, message, or context fragment that wraps the failure content for re-injection (e.g., wrapping a test output in a ``[unit test results]'' envelope).
+    \item \textbf{Re-injection}: the point at which the packaged content enters the next LLM call's context, including the role (system, user, assistant, tool) and framing under which it is delivered.
+\end{enumerate}
+
+We deliberately exclude the \emph{forward execution path}---the initial tool call, input processing, and LLM invocation---from our scope, as the forward path has been extensively studied in the prompt injection literature~\cite{greshake2023indirect,liu2024formalizing}. Our focus is on the \emph{reverse} path: the recovery pipeline that processes failure content and re-introduces it into the agent's context. This scoping decision follows the case study methodology of Runeson and H{\"o}st~\cite{runeson2009}, who recommend clearly bounded units of analysis to maintain internal validity.

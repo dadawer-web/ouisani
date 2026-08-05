@@ -1,0 +1,37 @@
+%% cover_letter_emse.tex
+%% Compile separately: pdflatex cover_letter_emse.tex
+
+\documentclass[11pt]{letter}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+
+\begin{document}
+
+\begin{letter}{Editor-in-Chief\\
+Empirical Software Engineering}
+
+\opening{Dear Editor,}
+
+\textbf{Subject: Submission of manuscript ``Recovery-Channel Prompt Injection in Self-Healing LLM Agent Frameworks: A Multi-Case Study and Controlled Empirical Evaluation''}
+
+We are pleased to submit the above-referenced manuscript for consideration by \emph{Empirical Software Engineering}.
+
+\textbf{Summary.}
+This paper presents an empirical study of \rci{}---a prompt-injection attack class delivered through the failure payload on the recovery path of self-healing LLM agent frameworks. We employ a three-phase methodology addressing three research questions: (RQ1)~How prevalent is the \emph{trust-escalation trampoline} signature (no provenance tag on failure content combined with high-trust re-injection framing) across production agent frameworks?---a multiple-case study of six frameworks (Reflexion, MetaGPT, Aider, OpenHands, AutoGen, LangGraph) with grounded-theory coding; (RQ2)~How exploitable and severe is the resulting attack?---controlled experiments on a white-box testbed (100 trials per configuration, real LLM APIs), cross-framework validation on LangGraph, and a confirmed end-to-end exploit on Reflexion's actual retry path (0.52 ASR, $p < 0.001$); (RQ3)~How effective is the content-level \trustorigin{} provenance-tagging defense, and under what conditions does it degrade?---naive-baseline comparison, cross-model generalization (open-weights and closed-weight models), defense-aware attacker analysis, and defense-cost measurement.
+
+\textbf{Contribution type.}
+This is an empirical software engineering contribution. The paper uses established empirical methodologies: multiple-case study design (Runeson \& H\"ost 2009), grounded-theory coding (Glaser \& Strauss 1967), controlled experiments with statistical hypothesis testing (Wilson confidence intervals, Fisher exact tests with Bonferroni correction), inter-annotator agreement (Cohen's $\kappa$), and threats-to-validity analysis. The paper reports both confirmatory and non-confirmatory results, including under-powered experiments reported honestly as suggestive rather than confirmatory. The central empirical finding is that content-level provenance defenses are effective but probabilistic, and degrade predictably as models become stronger instruction-followers---quantifying the ceiling of content-level mitigation on the recovery channel.
+
+\textbf{Fit with EMSE.}
+The manuscript fits EMSE's scope in empirical software engineering: it uses established empirical methodologies (multiple-case study, grounded theory, controlled experiments with statistical tests), studies a population of real-world software artifacts (production agent frameworks with combined $\sim$105k GitHub stars), and reports findings with appropriate statistical rigor including honest reporting of under-powered results. The paper's primary contribution is empirical: it measures the prevalence, exploitability, and defense-effectiveness of an attack class on production frameworks, rather than proposing a new architectural design.
+
+We confirm that this manuscript has not been published and is not under consideration elsewhere. We look forward to the editors' and reviewers' feedback.
+
+\closing{Sincerely,\\[1em]
+Anonymous Author(s)\\
+(for double-blind review)}
+
+\end{letter}
+
+\end{document}

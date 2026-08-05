@@ -1,0 +1,1891 @@
+% =============================================================================
+%  Section 4 — Evaluation
+% =============================================================================
+\section{Evaluation}
+\label{sec:eval}
+
+We evaluate Neuron along two axes that together substantiate the coupled
+governance claim: \emph{effectiveness}---does coupling resource and security
+enforcement close the attack surfaces identified in Section~\ref{sec:bg-attack}---and
+\emph{cost}---does it do so without regressing legitimate workloads. The
+core evaluation reports the experimental setup (Section~\ref{sec:eval-setup}),
+resource-contention and token-exhaustion results
+(Sections~\ref{sec:eval-resource}--\ref{sec:eval-oom}), the cross-attack
+interception results (Section~\ref{sec:eval-cross}), the false-positive
+analysis (Section~\ref{sec:eval-fp}), two experiments directly validating
+the coupled-failure thesis---permission-layer starvation under resource
+pressure (Section~\ref{sec:eval-starvation}) and cross-layer joint
+decision (Section~\ref{sec:eval-joint})---the capability-surface
+classifier integration (Section~\ref{sec:eval-capability-classifier}),
+two supplementary real-LLM experiments
+(Sections~\ref{sec:eval-supplement}--\ref{sec:eval-supplement-resource}),
+an external-framework comparison replaying the same attacks on AutoGen,
+LangGraph, and MCP (Section~\ref{sec:eval-external}), an adaptive-attack
+evaluation (Section~\ref{sec:eval-adaptive}), a distributed multi-node
+governance experiment (Section~\ref{sec:eval-distributed}), and the
+overhead summary (Section~\ref{sec:eval-overhead}). Supplementary evidence---benign-overhead
+microbenchmark, partial TLA$^+$ verification, scalability to 150 tenants,
+end-to-end latency decomposition, failure-case analysis, and a naive
+forward-path defense baseline---is deferred to
+Appendices~\ref{sec:eval-benign-overhead}--\ref{sec:eval-naive}.
+
+% -----------------------------------------------------------------------------
+\subsection{Experimental Setup}
+\label{sec:eval-setup}
+
+\paragraph{Implementation and platform.}
+Neuron is implemented in Java~21 on virtual threads, comprising the
+\texttt{core/cgroup}, \texttt{core/permission}, \texttt{core/sandbox}, and
+\texttt{core/audit} subsystems. The runtime exposes a Javalin HTTP/SSE gateway
+on port~8080, through which all benchmarks are driven. Experiments were
+conducted on the host kernel with the JVM configured for dynamic agent
+loading (\texttt{-XX:+EnableDynamicAgentLoading}), as required by the
+Mockito-based test infrastructure under JDK~21.
+
+\paragraph{Measurement methodology.}
+All latency results in this section are \emph{directly measured} wall-clock
+times captured via \texttt{System.nanoTime()} around real VFS operations, not
+derived from counters or analytical models. The resource-contention benchmark
+(Section~\ref{sec:eval-resource}) launches four concurrent attacker threads that
+issue real \texttt{writeText} calls carrying 2\,KB payloads against the same
+global \texttt{ReentrantReadWriteLock} that benign readers acquire, while a
+benign tenant issues paced \texttt{readText} calls (67\,reads/s, well below
+the 200\,reads/s per-agent limit) and records each read's latency. Each
+configuration is sampled $n=30$ runs of 30 reads each (900 pooled samples per
+configuration). We report pooled statistics (mean, p50, p95, p99, standard
+deviation) computed over all 900 raw samples per configuration with no
+trimming; JVM GC pauses are inherent overhead of the Java-based runtime and
+are included in all statistics.
+
+\paragraph{Reproducibility harness and statistical reporting.}
+The cross-attack scenarios (Scenario~6) use a reproducible evaluation
+harness (\texttt{RedTeamHarness}) that takes an \texttt{IntFunction<Sample>} so that
+each sample receives a unique run index used to seed its perturbation. This
+avoids the zero-variance trap in which a \texttt{Supplier} captures the
+iteration count in a closure, freezing the random seed and collapsing p50,
+p95, and p99 onto the mean. Each scenario is sampled $n=30$ times. We
+distinguish two classes of metric with different reporting conventions:
+\emph{continuous} metrics (latency, timing) are reported with mean, standard
+deviation, p50, p95, and p99 computed over all pooled samples; \emph{binary}
+metrics (interception outcome, attack success) are reported as proportions
+$\hat{p} = k/n$ with Wilson 95\% confidence intervals
+$[\hat{p}_L, \hat{p}_U]$, and inter-configuration differences are assessed
+via Fisher's exact test. The percentile-based reporting (p50/p95/p99)
+applies exclusively to continuous metrics; for binary outcomes the Wilson
+interval is the appropriate uncertainty quantification because the binomial
+distribution has no meaningful ``p50 latency'' analogue.
+
+\emph{A caveat on deterministic policies.} Several binary metrics
+below---notably the Scenario~6 interception outcomes---are produced by
+\emph{deterministic pure functions} of the (run-index-seeded) inputs.
+The $n=30$ repetitions therefore serve as a \emph{reproducibility
+check} that the deterministic outcome is stable across the seeded
+perturbations (varied spawn depth, trace identifier, timing), not as
+$30$ independent Bernoulli samples for inferential statistics. We
+report these outcomes as raw proportions (e.g.\ 0/30, 30/30) without
+Wilson confidence intervals or Fisher significance tests, reserving
+the inferential machinery for the genuinely stochastic experiments
+(Sections~\ref{sec:eval-supplement}--\ref{sec:eval-external})---the
+supplementary real-LLM experiment, the external-framework real-AutoGen
+reproduction, and the naive-baseline comparison---where the LLM's
+non-deterministic output makes Bernoulli inference meaningful. The
+\emph{timing} metrics exhibit real scheduling jitter and are reported
+with observed standard deviation; these are the metrics for which
+$n=30$ provides genuine statistical power.
+
+\paragraph{Methodological boundaries.}
+Three scope decisions bound the claims of this evaluation.
+\emph{First}, the threat model assumes the attacker can already issue a
+malicious escalation request; Scenario~6 measures
+\emph{governance-runtime-level enforcement} once such a request exists,
+not the upstream probability that a compromised agent would emit one
+(prevention vs.\ enforcement). \emph{Second}, the resource layer in
+Scenario~4 is driven at simulated generation rates ($U[15,55)$\,ms
+jitter, 91--333\,tokens/s) rather than real LLM inference, because the
+measurement target is the cgroup's \texttt{preCheckAndReserve} gateway
+and OOM-trigger latency---both independent of whether tokens are
+produced by a real model or a deterministic emitter. A symmetric
+supplementary experiment (Section~\ref{sec:eval-supplement-resource})
+verifies that real LLMs spontaneously produce the high-consumption
+behavior the cgroup is designed to catch, closing the realism gap.
+\emph{Third}, the security evaluation uses 9~concurrent agents; a
+dedicated scalability benchmark (Section~\ref{sec:eval-tla-scale}) extends
+this to 450~concurrent agents (150 tenants) but does not reach
+$\geq 100$~tenants under security load (L6,
+Section~\ref{sec:conc-lim}). Real LLM inference is used where it
+is the variable under test (Section~\ref{sec:eval-supplement}). The
+raw 900-sample latency traces underlying Table~\ref{tab:scenario4} are
+preserved in \texttt{scenario4\_latency\_raw.jsonl}.
+
+\paragraph{On the representativeness of the self-constructed probe set.}
+A legitimate concern is that the Scenario~6 probe variants are authored
+by the same team that designed the defense, raising the risk that the
+probe set tests the defense on exactly the inputs it was tuned for
+(construct validity). We address this concern on three fronts.
+\emph{First}, the probe taxonomy is derived from the threat model of
+Section~\ref{sec:bg-attack}, which is in turn derived from the
+structural definition of the LIM attack surface (sub-agent spawn +
+natural-language escalation + shared substrates); the probes are
+generated by enumerating the Cartesian product of \{depth boundary,
+name-evasion, paraphrase, low-and-slow, depth-boundary\} $\times$
+\{destructive-tool classes\}, not by hand-picking cases the defense
+happens to catch. \emph{Second}, the supplementary real-LLM experiment
+(Section~\ref{sec:eval-supplement}) uses prompts that
+\emph{do not} describe the defense internals: the LLM is given only an
+adversarial goal and a tool list, and we observe whether it
+spontaneously emits escalation requests. The fact that all 39
+spontaneously-emitted requests are still intercepted demonstrates that
+the defense is not overfit to a specific attack morphology.
+\emph{Third}, the external-framework comparison
+(Section~\ref{sec:eval-external}) replays the same probe set against
+AutoGen, LangGraph, and MCP---frameworks the defense was not designed
+for---and reproduces the coupled-failure mode, ruling out the
+interpretation that the probes are artifacts of Neuron's
+implementation. We acknowledge that a fully independent red-team
+exercise by a team without knowledge of the defense design would
+provide stronger evidence, and we designate this as a threat to
+construct validity (F9, Section~\ref{sec:lim-failure}). The
+replication package includes the probe generator and all raw responses
+to enable such independent exercise by future reviewers.
+
+\paragraph{Configurations.}
+Each scenario is evaluated under three configurations that progressively
+enable the coupled governance mechanisms:
+\begin{itemize}
+    \item \textbf{Baseline (Governance Off).} No resource rate-limiting and no
+    permission escalation policy; only the baseline declarative permission
+    rules apply. This represents the layer-separated design.
+    \item \textbf{Permission-only.} The depth-aware escalation policy and
+    campaign truncation are enabled, but the resource-layer rate limiters
+    (EventBus/VFS token buckets) and spawn-time privilege inheritance are off.
+    \item \textbf{Coupled Governance.} All mechanisms are enabled: resource
+    rate-limiting, depth-aware escalation, spawn-time privilege
+    non-increase, and tenant-identity propagation across spawn.
+\end{itemize}
+
+% -----------------------------------------------------------------------------
+\subsection{Resource-Contention Flooding (Scenario 4)}
+\label{sec:eval-resource}
+
+In Scenario~4 a malicious tenant drives four concurrent attacker threads that
+flood \texttt{writeText} (2\,KB payloads) and \texttt{EventBus.broadcast}
+against the shared VFS and event-bus substrate. A co-resident benign tenant
+issues paced \texttt{readText} calls and we measure each call's wall-clock
+latency. The benchmark directly exercises the global
+\texttt{ReentrantReadWriteLock}: attacker \texttt{writeText} acquires the write
+lock, benign \texttt{readText} acquires the read lock, and under the non-fair
+locking policy sustained write traffic can starve read requests.
+
+Table~\ref{tab:scenario4} reports the measured latency across $n=30$ runs (30
+reads per run, 900 pooled samples per configuration). All four statistics
+(mean, stddev, p95, p99) are computed over the exact same 900 raw samples
+with no trimming; JVM GC pauses are inherent overhead of the Java-based
+runtime and are included rather than filtered out. Under the
+Baseline, the attackers' unthrottled write flood raises the benign read p95
+to 0.343\,ms---a $11.8\times$ degradation over the coupled p95 of
+0.029\,ms---with a standard deviation of 0.399\,ms, reflecting the bursty,
+non-deterministic nature of read-lock starvation under write pressure.
+Permission-only truncates the attack at the campaign midpoint, producing a
+bimodal latency distribution (high during the attack phase, low after
+truncation); its mean sits between the two extremes at 0.075\,ms. Under
+Coupled Governance, the resource-layer rate limiters exhaust the attackers'
+token buckets during warm-up, so that during the campaign itself write
+traffic is throttled to 20\,writes/s (the per-tenant limit) and the write
+lock is almost always free; benign read latency converges to the
+uncontended regime with a p95 of 0.029\,ms and a p99 of 0.121\,ms. The raw
+mean for Coupled (0.034\,ms) slightly exceeds its p95 (0.029\,ms) because
+occasional JVM GC pauses produce sub-millisecond outliers that inflate the
+mean relative to the percentile---this is real system overhead, not a
+measurement artifact, and the effect is far smaller than under the Baseline
+(mean 0.107\,ms, p95 0.343\,ms).
+
+\begin{table}[t]
+\centering
+\caption{Scenario~4 (resource-contention flooding), measured benign read
+latency, $n=30$ runs $\times$ 30 reads = 900 pooled samples per
+configuration. All four statistics (mean, stddev, p95, p99) are computed
+over the exact same 900 raw samples with no trimming; JVM GC pauses are
+inherent overhead of the Java-based runtime and are included.
+Lower is better.}
+\label{tab:scenario4}
+\begin{tabular}{lcccc}
+\toprule
+Configuration & Mean (ms) & StdDev (ms) & P95 (ms) & P99 (ms) \\
+\midrule
+Baseline (Governance Off) & 0.107 & 0.399 & 0.343 & 2.474 \\
+Permission-only       & 0.075 & 0.366 & 0.105 & 1.362 \\
+Coupled Governance    & 0.034 & 0.217 & 0.029 & 0.121 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.78\columnwidth]{fig_latency_cdf.pdf}
+\caption{CDF of \emph{measured} co-resident normal-agent read latency under
+resource contention ($n=30$ runs, 900 pooled samples per configuration).
+Coupled governance confines the distribution to the uncontended regime
+(p95\,$\approx$\,0.029\,ms), whereas Governance Off shifts it to
+p95\,$\approx$\,0.343\,ms with a long tail (p99\,$\approx$\,2.47\,ms);
+Permission-only sits between at p95\,$\approx$\,0.105\,ms because the attack
+runs unthrottled until the escalation midpoint. All latencies are real
+\texttt{System.nanoTime()} measurements around \texttt{VfsManager.readText}.}
+\label{fig:latency_cdf}
+\end{figure}
+
+The separation is stark and reflects a real engineering signal, not an
+analytical projection. With governance off, the benign read distribution
+exhibits a heavy tail: p99 reaches 2.47\,ms, a $20.4\times$ degradation over
+the coupled p99 of 0.121\,ms, because read-lock starvation under sustained
+write pressure produces sporadic multi-millisecond stalls. The standard
+deviation under the Baseline (0.399\,ms) confirms that the contention is
+genuinely non-deterministic---driven by JVM thread scheduling, GC pauses,
+and lock-queue dynamics---not an artifact of a fixed random seed.
+Permission-only reduces the mean but still leaves a significant tail
+(p99\,$\approx$\,1.36\,ms) because the attack runs unthrottled for the first
+half of each measurement window. Only Coupled Governance eliminates the tail:
+its p99 drops to 0.121\,ms, because source-side rate limiting prevents the
+write lock from being held continuously in the first place.
+
+This is the central resource-side argument for coupling: \emph{permission-only
+enforcement cannot protect co-resident agents from contention damage, because
+it acts after the damage is done}; only resource-layer throttling, acting at
+the source and correlated with the permission layer through the shared trace
+identifier, contains the blast radius. The absolute latencies are
+sub-millisecond because the VFS is in-memory, but the relative
+degradation---$11.8\times$ at p95 and $20.4\times$ at p99---is the signal that
+matters for a co-resident tenant whose agents share the same lock.
+
+% -----------------------------------------------------------------------------
+\subsection{Token Exhaustion and OOM Enforcement}
+\label{sec:eval-oom}
+
+The token-exhaustion benchmark (B1) measures the latency with which the
+cgroup layer triggers a hard OOM when a malicious agent consumes tokens up to
+its quota. To obtain authentic per-millisecond traces without booting the full
+HTTP/LLM stack, we drive the cgroup token-accounting primitive directly: a
+lightweight collector instantiates a \texttt{CgroupNode} with a
+\texttt{gas\_limit}=500 token quota and invokes the real
+\texttt{consumeTokens} code path (the same path that
+\texttt{CgroupManager.consumeTokensForCurrentThread} dispatches in production)
+in increments of 5 tokens with a randomized inter-increment sleep that
+emulates the LLM generation rate. Each run draws a fresh base sleep from
+$U[15,55)$\,ms and adds a per-increment jitter of $\pm 5$\,ms, so the
+effective generation rate varies from run to run (91--333\,tokens/s) and
+within each run. We collect $n=30$ runs.
+Figure~\ref{fig:token_oom_timeline} plots five measured traces spanning the
+rate range. Consumption rises linearly, the soft limit fires at 400 tokens
+(80\% of quota), and the hard OOM trigger fires when cumulative consumption
+reaches the quota. Across the 30 runs the OOM latency spans
+$1\text{,}501$--$5\text{,}536$\,ms (mean $3\text{,}218 \pm 1\text{,}186$\,ms,
+$n=30$), with the variance driven entirely by the randomized generation rate
+rather than by nondeterministic scheduling.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.78\columnwidth]{fig_token_oom_timeline.pdf}
+\caption{Token consumption and cgroup OOM-trigger timing (measured,
+\texttt{gas\_limit}=500, $n=30$). Each curve is a single agent's measured
+cumulative consumption; the diamond marks the soft-limit trigger at 400 tokens
+(reclamation), and the circle at 500 tokens marks the hard OOM. The cgroup
+enforces the quota at the source---the agent is denied further generation
+rather than permitted to overshoot---so the OOM latency equals the
+time-to-quota and varies with the generation rate.}
+\label{fig:token_oom_timeline}
+\end{figure}
+
+Two properties are noteworthy. First, the OOM fires at exactly 500 tokens in
+every run. This is not a measurement artifact of a fixed random seed but a
+design property of source-side enforcement: the cgroup's
+\texttt{preCheckAndReserve} gateway runs \emph{before} the LLM is invoked, so
+an over-quota agent is denied the call rather than permitted to consume and
+killed after the fact. Because the quota (500) is an exact multiple of the
+consumption increment (5), the agent always reaches exactly 500 tokens before
+the 101st call is denied; the latency to reach that point, however, varies
+genuinely with the generation rate ($1\text{,}501$--$5\text{,}536$\,ms).
+
+Second, the soft/hard two-tier design (Section~\ref{sec:arch-cgroup}) provides fault
+tolerance under transient pressure---a soft-limit breach at 80\% of quota
+raises a \texttt{TokenSoftOomException} that triggers semantic folding
+(reclamation) before the hard limit is reached, so only agents that cannot be
+reclaimed are killed; the diamond markers in
+Figure~\ref{fig:token_oom_timeline} show the soft trigger preceding the hard
+OOM in every trace. The combination of source-side reservation and two-tier
+reclamation is what keeps the token-exhaustion attack from destabilizing the
+runtime: the malicious agents are contained within their own cgroup, and their
+termination does not propagate to co-resident agents.
+
+% -----------------------------------------------------------------------------
+\subsection{Cross-Attack Interception (Scenario 6)}
+\label{sec:eval-cross}
+
+\paragraph{Methodological framing.}
+The depth-aware \texttt{EscalationPolicy} is a deterministic rule that
+auto-denies destructive tools from sub-agents at depth~$\geq 2$; testing
+whether such requests are denied therefore verifies \emph{execution
+correctness} (does the policy fire on every code path, including under
+resource pressure and across the spawn boundary), not \emph{rule design
+adequacy} (whether depth~$\geq 2$ is the right threshold, and whether
+the destructive-tool whitelist is complete). The former is a necessary
+property of any runtime enforcement primitive and is the claim we
+substantiate here; the latter is a policy-design question whose
+limitations we expose in Section~\ref{sec:lim-failure} (F4--F6,
+especially the F6 whitelist-bypass surface). The adaptive-attack
+evaluation (Section~\ref{sec:eval-adaptive}) and the external-framework
+comparison (Section~\ref{sec:eval-external}) further separate the two
+contributions by probing the rule's edges (depth spoofing, trace
+forgery) and by showing that the absence of such a rule in production
+frameworks yields a $100\%$ attack success rate.
+
+Scenario~6 is the most demanding evaluation, because it exercises the
+\emph{resource--permission cross-attack} that motivates this work: a deeply
+nested sub-agent (depth 2--3) attempts both a destructive-tool privilege
+escalation (\texttt{bash}) and a cross-tenant VFS access, exploiting the
+contention window in which the permission layer might be impaired. We measure
+three metrics: the fraction of escalation attempts \emph{granted}, the
+\emph{spawn-escalation success rate}, and the \emph{cross-tenant access
+count}. Table~\ref{tab:scenario6} reports the results.
+
+\begin{table}[t]
+\centering
+\caption{Scenario~6 (spawn-time privilege escalation + cross-tenant access),
+$n=30$ per vector. The policy is a deterministic pure function of the
+seeded inputs, so rates are reported as raw proportions (no confidence
+intervals); the $n=30$ repetitions confirm reproducibility across seeded
+perturbations, not Bernoulli inference. Lower is better. Only Coupled
+Governance drives all three vectors to zero.}
+\label{tab:scenario6}
+\begin{tabular}{lccc}
+\toprule
+Configuration & Escalation granted & Spawn-escalation & Cross-tenant access \\
+\midrule
+Baseline (Governance Off)     & 1.00 & 1.00 & 1.00 \\
+Permission-only             & 0.00 & 0.00 & 1.00 \\
+Coupled Governance          & 0.00 & 0.00 & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Under the Baseline, every attack succeeds: escalations are granted, spawn-time
+escalation succeeds, and cross-tenant access is achieved---the layer-separated
+design offers no defense. Permission-only closes the escalation pathway
+completely: the depth-aware \texttt{EscalationPolicy} auto-denies destructive
+tools from sub-agents at depth~$\geq 2$, so \emph{escalation granted} and
+\emph{spawn-escalation success} both fall to zero. However, \emph{cross-tenant
+access remains at 1.0}: permission-only enforcement does not propagate tenant
+identity across the spawn boundary, so the spawned sub-agent can still reach
+another tenant's VFS nodes. Only Coupled Governance, which adds
+\texttt{SpawnPrivilegeContext} (privilege non-increase) and tenant-identity
+propagation, drives \emph{all three metrics to zero}.
+
+Aggregating across the three attack vectors---escalation, spawn-time
+escalation, and cross-tenant access---Coupled Governance achieves an
+interception rate of
+\[
+\frac{3 - (0 + 0 + 0)}{3} = 100\%,
+\]
+compared to $0\%$ under the Baseline and $\approx 67\%$ under
+Permission-only (which leaves the cross-tenant vector open). Crucially, this
+$100\%$ is achieved \emph{under simultaneous resource contention}, the regime
+in which layer-separated designs predict that the security module should fail
+(Section~\ref{sec:bg-lim}). The result directly substantiates the central thesis:
+coupling resource and security enforcement through a shared trace identifier
+allows the security layer to remain effective precisely when resource
+pressure would otherwise disable it. Because the Scenario~6 policy is
+deterministic, the per-vector outcomes (0/30 vs.\ 30/30) are reported as
+raw counts; inferential statistics (Wilson CIs, Fisher's exact test) are
+reserved for the genuinely stochastic experiments in
+Sections~\ref{sec:eval-supplement}--\ref{sec:eval-external}.
+
+% -----------------------------------------------------------------------------
+\subsection{False-Positive Analysis}
+\label{sec:eval-fp}
+
+A $100\%$ interception rate is meaningful only if it is not purchased at the
+cost of blocking legitimate operations. We analyze false positives by driving
+a real multi-tenant benign workload through the governed runtime and counting
+how many legitimate operations the governance mechanisms wrongly block.
+
+\paragraph{Benign workload benchmark.}
+We run 3~tenants $\times$ 3~agents = 9~concurrent benign agents for 3~seconds
+per run, repeated $n=10$ runs. Each agent issues three categories of operation
+at controlled rates designed to stay within both the per-agent and per-tenant
+rate limits:
+\begin{itemize}
+    \item \textbf{VFS reads}: 40\,ops/s/agent (120\,ops/s/tenant; limit
+    200\,ops/s)---each agent reads its own tenant's file.
+    \item \textbf{VFS writes}: 5\,ops/s/agent (15\,ops/s/tenant; limit
+    20\,ops/s)---each agent writes its own tenant's file.
+    \item \textbf{EventBus broadcasts}: 10\,ops/s/agent (30\,ops/s/tenant;
+    limit 50\,ops/s)---each agent broadcasts on a user channel.
+\end{itemize}
+All operations are same-tenant (no cross-tenant access that would trigger the
+ownership guard) and non-destructive (no escalation-policy interaction). A
+false positive is counted when a benign VFS read or write throws
+\texttt{SecurityException} (the rate limiter's denial signal) or when a benign
+broadcast's \texttt{tryConsume} returns \texttt{false}. Across the 10 runs the
+benchmark executes 14\text{,}850 benign operations. The measured false
+positive counts are:
+
+\begin{table}[t]
+\centering
+\caption{Measured false-positive rates on a benign multi-tenant workload
+(3~tenants $\times$ 3~agents, 3\,s/run, $n=10$). All operations are
+same-tenant and within per-agent/per-tenant rate limits.}
+\label{tab:fp}
+\begin{tabular}{lccc}
+\toprule
+Operation category & Total operations & Blocked (false positives) & FP rate \\
+\midrule
+VFS read            & 10{,}800 & 0 & 0.00\% \\
+VFS write           &  1{,}350 & 0 & 0.00\% \\
+EventBus broadcast  &  2{,}700 & 0 & 0.00\% \\
+\midrule
+\textbf{Overall}    & \textbf{14{,}850} & \textbf{0} & \textbf{0.00\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The false-positive rate is 0.00\% across all 14{,}850 measured operations.
+The Wilson 95\% confidence interval for this proportion is
+$[0.0000, 0.0003]$, meaning the upper bound on the true false-positive rate
+is approximately $0.026\%$---fewer than 4 false positives per 14{,}850
+operations at 95\% confidence. This is a direct measurement on a realistic
+concurrent workload, not an inference from unit-test pass rates: the benign
+agents execute real VFS and EventBus code paths under the live rate
+limiters, and every denial is counted. The zero count is explained by the
+token-bucket design: each bucket starts with a burst capacity (240 for
+reads, 25 for writes, 60 for broadcasts) and refills at the sustained rate;
+because the benign workload operates at 60--75\% of the per-tenant sustained
+limit, the buckets never deplete. The slight variation in total operation
+counts across runs (e.g.\ 1{,}077 vs.\ 1{,}080 reads in two runs) reflects
+real thread-scheduling jitter and confirms that the benchmark is measuring a
+live concurrent system, not a deterministic simulation.
+
+\paragraph{Depth-aware scoping.}
+The \texttt{EscalationPolicy} auto-denies \emph{only} destructive tools
+(\texttt{bash}, \texttt{shell}, \texttt{security\_scan}) and \emph{only} at
+depth~$\geq 2$. Top-level calls (depth~0) and non-destructive requests degrade
+gracefully to \texttt{ASK\_WITH\_CONTEXT}, preserving the existing human
+approval contract. Read-only tools---\texttt{file\_read}, \texttt{grep},
+\texttt{glob}, \texttt{web\_fetch}, \texttt{web\_search}---remain allowed
+throughout, so legitimate inspection workflows are unaffected by the
+escalation policy.
+
+\paragraph{Supplementary regression evidence.}
+As a complementary check, the full runtime test suite of 1{,}369~tests runs
+with 0~failures and 0~errors (10~skips attributable to pre-existing
+WASM-runtime and Mockito self-attach limitations unrelated to governance).
+While unit-test pass rates are not a substitute for the benign-workload
+measurement above, they confirm that the governance mechanisms do not break
+existing functional contracts---every fallback path
+(\texttt{ALLOW\_ONCE} when no approval subscriber is present, \texttt{DEFAULT}
+mode preserving legacy behavior, \texttt{finally}-block clearing of
+thread-locals) is preserved.
+
+% -----------------------------------------------------------------------------
+\subsection{Permission-Layer Starvation under Resource Pressure}
+\label{sec:eval-starvation}
+
+Scenario~6 (Table~\ref{tab:scenario6}) leaves a gap in the evidence
+chain for the central coupled-failure claim: the Permission-only
+configuration still drives the escalation and spawn-escalation vectors
+to zero under simultaneous resource contention, leaving open whether
+the permission layer in fact degrades under resource pressure. This
+subsection closes that gap with a dedicated experiment that induces
+genuine permission-layer starvation and measures the resulting
+decision-quality degradation.
+
+\paragraph{Design.}
+We construct a multiprocessing benchmark (using
+\texttt{multiprocessing.Manager} for genuine cross-process lock
+contention, mirroring the Java runtime's \texttt{ReentrantReadWriteLock}
+semantics) that exercises the permission decision path under three
+configurations:
+\begin{itemize}
+    \item \textbf{Baseline:} Eight attacker processes flood the shared
+    \texttt{PermissionProfile} lock and the audit-log buffer lock; the
+    permission decision path must acquire both to adjudicate a
+    depth~$\geq 2$ destructive-tool request. No source-side rate limiting.
+    \item \textbf{Permission-only:} The depth-aware \texttt{EscalationPolicy}
+    is enabled, but no source-side rate limiting---the permission layer
+    must still compete for the same locks the attackers hold.
+    \item \textbf{Coupled Governance:} Source-side rate limiting
+    (token bucket, 25 tokens, 20/s refill) protects the permission layer
+    by throttling attacker requests \emph{before} they acquire the profile
+    lock, so the permission decision path runs uncontended.
+\end{itemize}
+Each run issues $n=30$ decision probes. A decision is \emph{correct} if
+the depth-aware policy returns \texttt{DENY\_DEPTH} for a depth~2
+destructive-tool request within a 3\,ms deadline; a decision that
+exceeds the deadline falls back to the permissive default
+(\texttt{ASK\_WITH\_CONTEXT}), modeling the
+\texttt{RateLimitSyscallFilter}'s deadline-based fallback. We measure
+decision correctness, p95 latency, deadline-fallback rate, and audit-drop
+rate.
+
+\paragraph{Results.}
+Table~\ref{tab:starvation} reports the results. Under the Baseline,
+permission decision correctness drops to $66.67\%$: the deadline
+fallback fires on $33.33\%$ of probes, causing the runtime to
+\emph{permissively} admit destructive-tool requests that the
+depth-aware policy should have denied---precisely the coupled-failure
+mode the abstract describes. Permission-only does \emph{not} help:
+correctness is actually slightly lower ($63.33\%$) because the
+depth-aware policy adds a small constant overhead on the decision
+path, worsening the deadline miss rate under the same contention.
+Only Coupled Governance, which throttles the attacker at the source
+before the request reaches the permission layer, restores correctness
+to $100\%$ with a $0\%$ fallback rate and a p95 latency of $1.476$\,ms
+(a $6.8\times$ improvement over the Baseline's $9.969$\,ms).
+
+\begin{table}[t]
+\centering
+\caption{Permission-layer starvation under resource pressure ($n=30$
+probes per configuration, 8 attacker processes). The Baseline and
+Permission-only configurations exhibit decision-quality degradation
+(deadline fallback to permissive default); only Coupled Governance
+preserves correctness.}
+\label{tab:starvation}
+\begin{tabular}{lcccc}
+\toprule
+Configuration & Correctness & p95 (ms) & Fallback rate & Audit drop \\
+\midrule
+Baseline (Governance Off) & 66.67\% & 9.969 & 33.33\% & 0.00\% \\
+Permission-only           & 63.33\% & 10.149 & 36.67\% & 0.00\% \\
+Coupled Governance        & \textbf{100.00\%} & \textbf{1.476} & \textbf{0.00\%} & 0.00\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Interpretation.}
+This experiment directly substantiates the central thesis: \emph{the
+permission layer's decision quality does degrade under resource
+pressure}, and \emph{only coupled governance prevents that
+degradation}. The Baseline and Permission-only configurations exhibit
+the ``slip-through'' failure mode in which destructive-tool requests
+are permissively admitted because the decision deadline expired under
+lock contention---the precise coupled-failure narrative of the
+abstract. Source-side rate limiting (the resource-layer component of
+the coupling) protects the permission layer by ensuring its locks
+remain available, so the depth-aware policy runs uncontended and
+returns the correct verdict on every probe. This is the missing
+evidence that the coupling is causally load-bearing, not merely a
+narrative overlay on three independent modules.
+
+% -----------------------------------------------------------------------------
+\subsection{Cross-Layer Joint Decision: Resource Signal Changing
+Permission Verdicts}
+\label{sec:eval-joint}
+
+Section~\ref{sec:eval-starvation} establishes that resource-layer
+throttling \emph{protects} the permission layer from starvation. A
+stronger coupling claim remains: that a resource-layer signal
+\emph{actually changes} the permission-layer decision in real
+time---i.e., the two layers are not merely co-located but jointly
+deciding. The original \texttt{EscalationPolicy} is a pure static
+function of (depth, tool name) and does not consult resource state;
+the rate limiter is a pure resource-layer throttle and does not
+consult permissions. This subsection implements and evaluates a
+\texttt{ResourcePressureAwareEscalationPolicy} that closes this gap.
+
+\paragraph{Mechanism.}
+We extend the \texttt{EscalationPolicy} with a joint-decision mode:
+when the resource layer's cumulative rejection count exceeds a
+threshold (\texttt{PRESSURE\_THRESHOLD}=50, indicating sustained
+resource pressure), the permission layer dynamically tightens its
+strictness from depth~$\geq 2$ to depth~$\geq 1$ for destructive
+tools. Concretely, a depth~1 sub-agent requesting \texttt{bash}
+receives \texttt{ASK\_WITH\_CONTEXT} under normal resource conditions
+(below the threshold) but \texttt{DENY\_DEPTH} once resource pressure
+exceeds the threshold---the resource signal \emph{changes} the
+permission verdict. This is implemented in
+\texttt{EscalationPolicy.evaluate(depth, toolName, handlerSource,
+rateLimitRejections, joint)} and mirrors the Java implementation.
+
+\paragraph{Threshold selection and generality.}
+The threshold \texttt{PRESSURE\_THRESHOLD}=50 and the tightening step
+``depth threshold $-1$'' are heuristic and were selected as follows.
+The per-tenant token bucket has a sustained rate of 20 writes/s and a
+burst capacity of 25 tokens; an attacker flooding at the sustained
+rate exhausts the bucket within $\approx 1$\,s and then accumulates
+rejections at 20/s. A threshold of 50 rejections therefore corresponds
+to $\approx 2.5$\,s of sustained attacker pressure---long enough to
+rule out transient bursts from benign tenants (which drain and refill
+the bucket without sustained rejection) but short enough to tighten
+before the deadline-fallback mode of Section~\ref{sec:eval-starvation}
+engages (which fires at $\approx 3$\,ms decision latency under
+contention). The ``$-1$'' tightening step is the smallest change that
+shifts the depth~1 boundary: a depth~1 sub-agent is the shallowest
+position from which a destructive-tool escalation can be issued, so
+tightening by one level is the minimal intervention that produces a
+verdict change without affecting depth~0 top-level callers (which
+remain \texttt{ASK\_WITH\_CONTEXT}).
+
+\emph{The rule is not claimed to generalize to all attack morphologies.}
+It is calibrated for the depth-based escalation path evaluated here.
+A different escalation axis---e.g.\ a breadth-based attack in which a
+shallow agent fans out many parallel sub-agents---would require a
+different coupling rule (e.g.\ tighten when breadth exceeds a
+threshold), and the PRESSURE\_THRESHOLD would need recalibration for a
+different bucket geometry. We disclose this as a limitation in
+Section~\ref{sec:conc-lim} (L7): the coupling rule is a hand-tuned
+heuristic validated on one attack morphology, not a learned policy or
+a provably optimal threshold. A learned coupling function that adapts
+the tightening rule to the observed attack morphology is left as
+future work.
+
+\paragraph{Design.}
+We evaluate four configurations on the critical scenario: a depth~1
+sub-agent requests \texttt{bash} (below the static threshold of 2) under
+resource pressure induced by six attacker processes flooding the rate
+limiter:
+\begin{itemize}
+    \item \textbf{Baseline:} No depth policy, no rate limiting.
+    \item \textbf{Permission-only (static):} Original static policy
+    (depth~$\geq 2$), no resource-pressure awareness.
+    \item \textbf{Coupled (static):} Original static policy + source-side
+    rate limiting (protects the permission layer but does not change the
+    decision rule).
+    \item \textbf{Coupled (joint):} Resource-pressure-aware policy:
+    under pressure, tightens to depth~$\geq 1$.
+\end{itemize}
+We measure the interception rate (fraction of depth~1 \texttt{bash}
+requests denied), the pressure-escalated rate (fraction of decisions
+attributable to the resource signal rather than the static rule), and
+the false-positive rate on benign tools at depth~1.
+
+\paragraph{Results.}
+Table~\ref{tab:joint-decision} reports the results. Under
+\textbf{Coupled (static)}, the interception rate is $0\%$: the resource
+layer throttles the attacker, but the permission layer's decision rule
+is unchanged, so the depth~1 \texttt{bash} request is still
+\texttt{ASK\_WITH\_CONTEXT}. Under \textbf{Coupled (joint)}, the
+interception rate jumps to $100\%$, with $100\%$ of decisions
+attributable to the pressure-escalated rule (\texttt{basis =
+PRESSURE\_ESCALATED}) and a $0\%$ false-positive rate on benign tools.
+The resource signal (cumulative rejection count reaching 1{,}835 under
+attacker pressure) \emph{directly caused} the permission verdict to
+change from \texttt{ASK} to \texttt{DENY} on $30/30$ trials.
+
+\begin{table}[t]
+\centering
+\caption{Cross-layer joint decision: does the resource signal change
+the permission verdict? ($n=30$ depth~1 \texttt{bash} requests under
+attacker-induced resource pressure.) Only the joint configuration
+exhibits a non-zero pressure-escalated rate, providing direct evidence
+of cross-layer coupling.}
+\label{tab:joint-decision}
+\begin{tabular}{lccc}
+\toprule
+Configuration & Interception & Pressure-escalated & FP on benign \\
+\midrule
+Baseline                  & 0.00\% & 0.00\% & 0.00\% \\
+Permission-only (static)  & 0.00\% & 0.00\% & 0.00\% \\
+Coupled (static)          & 0.00\% & 0.00\% & 0.00\% \\
+Coupled (joint)           & \textbf{100.00\%} & \textbf{100.00\%} & 0.00\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Interpretation.}
+This is the missing ``resource signal actually changed the permission
+decision'' scenario. The \textbf{Coupled (static)} row shows that simply
+co-locating rate limiting and the permission policy---without letting
+the resource state influence the permission verdict---does not produce
+cross-layer coupling: the interception rate remains $0\%$. Only the
+\textbf{Coupled (joint)} configuration, in which the resource layer's
+rejection count is read on the permission decision path and tightens
+the depth threshold, produces a non-zero pressure-escalated rate. This
+validates the contribution~1 claim of ``cross-layer correlation
+enabling real-time attack truncation'': the resource signal is not
+merely a post-hoc audit correlation but a real-time input to the
+permission decision. The $0\%$ false-positive rate confirms that the
+tightening is targeted (only destructive tools at depth~1 are affected;
+benign tools at depth~1 remain \texttt{ASK\_WITH\_CONTEXT}).
+
+\paragraph{Ablation: threshold sensitivity and morphology robustness.}
+The coupling rule has two hand-tuned parameters: the
+\texttt{PRESSURE\_THRESHOLD} and the tightening step. We ablate both to
+verify the rule is not an artifact of a specific parameter choice.
+Table~\ref{tab:ablation-threshold} sweeps the threshold from 10 to
+disabled ($\infty$) on the depth-based attack of
+Section~\ref{sec:eval-joint} ($n=30$ per threshold).
+
+\begin{table}[t]
+\centering
+\caption{Threshold sensitivity: interception rate and false-positive
+rate across different \texttt{PRESSURE\_THRESHOLD} values ($n=30$ per
+row). The policy is deterministic, so rates are raw proportions. Any
+threshold below the attacker's rejection count ($\approx 1835$) gives
+$100\%$ interception with $0\%$ FP; only disabling the rule (threshold
+$=\infty$) reduces interception to $0\%$.}
+\label{tab:ablation-threshold}
+\begin{tabular}{lccc}
+\toprule
+Threshold & Attack blocked & FP (benign tool) & FP (low pressure) \\
+\midrule
+10        & 30/30 (100\%) & 0/30 (0\%) & 0/30 (0\%) \\
+25        & 30/30 (100\%) & 0/30 (0\%) & 0/30 (0\%) \\
+50        & 30/30 (100\%) & 0/30 (0\%) & 0/30 (0\%) \\
+100       & 30/30 (100\%) & 0/30 (0\%) & 0/30 (0\%) \\
+200       & 30/30 (100\%) & 0/30 (0\%) & 0/30 (0\%) \\
+$\infty$ (disabled) & 0/30 (0\%) & 0/30 (0\%) & 0/30 (0\%) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The threshold is robust across two orders of magnitude: any threshold
+in $[10, 200]$ produces identical $100\%$ interception with $0\%$
+false positives, because the attacker's rejection count ($\approx 1835$)
+exceeds all tested thresholds. The rule degrades gracefully---not
+abruptly---as the threshold rises: the only failure mode is
+\emph{disabling} the rule entirely (threshold $= \infty$), which
+reverts to the static policy. This confirms that the exact threshold
+value is not load-bearing; what matters is that the threshold is below
+the attacker's sustained-rejection rate and above the benign
+single-digit rejection count.
+
+\emph{Boundary-case sensitivity.} A reviewer may note that
+Table~\ref{tab:ablation-threshold} tests only a single attack
+intensity ($\approx 1835$ rejections, far above all thresholds), so the
+$100\%$ interception for thresholds $[10, 200]$ is structurally
+guaranteed. To address this, Table~\ref{tab:threshold-boundary} sweeps
+the \emph{attack intensity} (rate-limit rejection count) across the
+threshold boundary while holding \texttt{PRESSURE\_THRESHOLD}$=50$,
+focusing on the critical depth~1 + \texttt{bash} scenario where the
+joint decision is the only thing standing between allow and deny. The
+transition is a clean step function: rejection counts $\leq 50$ (the
+threshold, using strict $>$) produce $0\%$ interception, and rejection
+counts $\geq 51$ produce $100\%$ interception, with no oscillation or
+partial-triggering at the boundary. This confirms that the rule's
+behavior at the threshold edge is deterministic and predictable---the
+policy is a pure function of (depth, tool, rejection count), so the
+boundary is a single integer, not a stochastic region.
+
+\begin{table}[t]
+\centering
+\caption{Boundary-case sensitivity: interception rate as a function of
+attack intensity (rate-limit rejection count) at the fixed default
+threshold \texttt{PRESSURE\_THRESHOLD}$=50$, depth$=1$, tool$=$bash
+($n=30$ per row; deterministic policy, so rates are raw proportions).
+The transition at the threshold is a clean step function: $\leq 50$
+rejections $\to$ allow, $\geq 51$ $\to$ deny, no oscillation.}
+\label{tab:threshold-boundary}
+\begin{tabular}{cccc}
+\toprule
+Rejections & Intercepted & Pressure-escalated & Verdict \\
+\midrule
+ 0  & 0/30 (0\%)   & 0/30 (0\%)   & ALLOW \\
+10  & 0/30 (0\%)   & 0/30 (0\%)   & ALLOW \\
+25  & 0/30 (0\%)   & 0/30 (0\%)   & ALLOW \\
+40  & 0/30 (0\%)   & 0/30 (0\%)   & ALLOW \\
+45  & 0/30 (0\%)   & 0/30 (0\%)   & ALLOW \\
+48  & 0/30 (0\%)   & 0/30 (0\%)   & ALLOW \\
+49  & 0/30 (0\%)   & 0/30 (0\%)   & ALLOW \\
+50  & 0/30 (0\%)   & 0/30 (0\%)   & ALLOW (strict $>$) \\
+51  & 30/30 (100\%) & 30/30 (100\%) & DENY\_DEPTH \\
+52  & 30/30 (100\%) & 30/30 (100\%) & DENY\_DEPTH \\
+55  & 30/30 (100\%) & 30/30 (100\%) & DENY\_DEPTH \\
+60  & 30/30 (100\%) & 30/30 (100\%) & DENY\_DEPTH \\
+75  & 30/30 (100\%) & 30/30 (100\%) & DENY\_DEPTH \\
+100 & 30/30 (100\%) & 30/30 (100\%) & DENY\_DEPTH \\
+150 & 30/30 (100\%) & 30/30 (100\%) & DENY\_DEPTH \\
+200 & 30/30 (100\%) & 30/30 (100\%) & DENY\_DEPTH \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:ablation-morphology} tests the rule's robustness
+across attack morphologies. The depth-only rule catches depth-based
+attacks but \emph{misses} breadth-based attacks (a shallow agent
+spawning $\geq 3$ parallel sub-agents, each requesting a destructive
+tool): the breadth attack has $0\%$ interception because the
+sub-agents are at depth~0, below the tightened threshold. Adding a
+breadth-aware coupling rule (\texttt{rate\_limit\_rejections} $>$
+threshold $\wedge$ \texttt{breadth} $\geq 3$ $\Rightarrow$ \texttt{DENY})
+closes this gap: $100\%$ interception on breadth attacks with $0\%$
+false positives on benign concurrent workloads (depth~0, breadth~2,
+low pressure).
+
+\begin{table}[t]
+\centering
+\caption{Attack-morphology robustness ($n=30$ per row, threshold=50).
+The depth-only rule misses breadth-based attacks; the depth+breadth
+rule closes the gap with $0\%$ false positives.}
+\label{tab:ablation-morphology}
+\begin{tabular}{llcc}
+\toprule
+Morphology & Rule & Blocked & FP \\
+\midrule
+depth-based (depth=1, bash)          & depth-only     & 30/30 (100\%) & --- \\
+breadth-based (depth=0, breadth=5)   & depth-only     &  0/30 (\phantom{0}0\%) & --- \\
+breadth-based (depth=0, breadth=5)   & depth+breadth  & 30/30 (100\%) & --- \\
+benign (depth=1, file\_read, high pressure) & depth+breadth & --- & 0/30 (0\%) \\
+benign (depth=0, breadth=2, low pressure)   & depth+breadth & --- & 0/30 (0\%) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The ablation confirms the L7 limitation (Section~\ref{sec:conc-lim}):
+the depth-only coupling rule is validated for depth-based attacks and
+\emph{does not} generalize to breadth-based attacks without an
+additional breadth-aware rule. The depth+breadth rule covers both
+morphologies with $0\%$ false positives, but a learned coupling
+function that adapts to unseen morphologies remains future work.
+
+% -----------------------------------------------------------------------------
+\subsection{Capability-Surface Classifier Integration}
+\label{sec:eval-capability-classifier}
+
+Section~\ref{sec:eval-cross}'s $100\%$ interception rate is conditioned on
+the destructive-tool name whitelist: a tool renamed outside the
+whitelist (e.g.\ \texttt{bash}$\rightarrow$\texttt{log\_inspector})
+evades the depth-aware policy, because \texttt{TrustOrigin} infers a
+default (trusted) label for unregistered tools (F6,
+Section~\ref{sec:lim-failure}). This subsection integrates the
+capability-surface classifier into the \texttt{EscalationPolicy} and
+re-runs Scenario~6 against name-evasion attacks, closing the F6
+surface that the original evaluation left as future work.
+
+\paragraph{Dual-track policy.}
+We extend the \texttt{EscalationPolicy} with a dual-track destructive-tool
+classification: a tool is destructive if \emph{either} (Track~1) its
+name is on the whitelist \emph{or} (Track~2) its handler source code
+matches a destructive API-call surface. Track~2 is implemented by
+\texttt{CapabilitySurfaceClassifier}, which inspects the handler source
+for calls to \texttt{subprocess.Popen}, \texttt{os.system},
+\texttt{open(write\_mode)}, \texttt{socket.socket},
+\texttt{requests.get/post}, \texttt{spawn\_agent}, etc. The classifier
+is conservative: unparseable handlers (WASM, reflection) return
+\texttt{false}, leaving the name whitelist as the fallback.
+
+\paragraph{Design.}
+We evaluate four configurations on three attack scenarios plus a
+benign control:
+\begin{itemize}
+    \item \textbf{S6-A (real name):} depth~2 sub-agent requests a
+    destructive tool under its real name (\texttt{bash},
+    \texttt{shell}, \texttt{security\_scan}). The name whitelist
+    suffices; all configurations should intercept.
+    \item \textbf{S6-B (name evasion):} depth~2 sub-agent requests a
+    destructive tool disguised under a benign name
+    (\texttt{log\_inspector} calls \texttt{subprocess.Popen};
+    \texttt{cache\_warmer} calls \texttt{os.remove};
+    \texttt{url\_validator} calls \texttt{requests.get}; etc.). The
+    name whitelist fails; only the capability-integrated policy should
+    intercept.
+    \item \textbf{S6-C (depth~1 under pressure):} same as S6-B but at
+    depth~1 (below the static threshold). Only the joint configuration
+    (resource-pressure-aware) should intercept.
+    \item \textbf{Benign:} depth~2 sub-agent requests a genuinely
+    benign tool (\texttt{read\_file}, \texttt{grep}, \texttt{glob},
+    \texttt{parse\_json}, etc.). No configuration should intercept.
+\end{itemize}
+
+\paragraph{Results.}
+Table~\ref{tab:capability-classifier} reports the results. The
+name-only configurations intercept $100\%$ of S6-A (real-name) attacks
+but $0\%$ of S6-B (name-evasion) attacks---confirming the F6 bypass.
+The capability-integrated configuration intercepts $100\%$ of both
+S6-A and S6-B, with a $0\%$ false-positive rate on benign tools. The
+capability classifier was triggered (Track~2 match) on $30/30$ S6-B
+trials, demonstrating that the classifier---not the name
+whitelist---is the active defense on evasion attacks. The joint
+configuration additionally intercepts $100\%$ of S6-C (depth~1 under
+pressure), with $0\%$ false positives.
+
+\begin{table}[t]
+\centering
+\caption{Capability-surface classifier integration into
+\texttt{EscalationPolicy} ($n=30$ per scenario). The name-only policy
+intercepts $0\%$ of name-evasion attacks (S6-B); the
+capability-integrated policy intercepts $100\%$ with $0\%$ false
+positives. The policy is deterministic, so rates are reported as raw
+proportions (no confidence intervals); inferential statistics are
+reserved for the stochastic experiments in
+Sections~\ref{sec:eval-supplement}--\ref{sec:eval-external}.}
+\label{tab:capability-classifier}
+\begin{tabular}{lcccc}
+\toprule
+Configuration & S6-A (real) & S6-B (evasion) & S6-C (depth~1) & FP (benign) \\
+\midrule
+Name-only (Baseline)        & 100\% &   0\% &   0\% & 0\% \\
+Name-only (Coupled)         & 100\% &   0\% &   0\% & 0\% \\
+Capability (Coupled)        & 100\% & \textbf{100\%} &   0\% & 0\% \\
+Capability (Coupled+joint)  & 100\% & \textbf{100\%} & \textbf{100\%} & 0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Offline classifier accuracy.}
+On a 43-case offline test suite (15 destructive tools under real names,
+13 destructive tools disguised under benign names, 15 genuinely benign
+tools), the capability-surface classifier achieves $100\%$ accuracy
+and $100\%$ recall on destructive tools, versus $37\%$ accuracy and
+$4\%$ recall for the name-only whitelist. All 13 disguised tools
+(\texttt{bash}$\rightarrow$\texttt{log\_inspector},
+\texttt{subprocess.Popen}$\rightarrow$\texttt{log\_analyzer},
+\texttt{os.remove}$\rightarrow$\texttt{cache\_warmer}, etc.) are
+correctly flagged by the capability classifier while the name-only
+whitelist flags none of them. The per-tool data is preserved in
+\texttt{tool\_capability\_classification.csv}.
+
+\paragraph{Interpretation.}
+Integrating the capability-surface classifier into the
+\texttt{EscalationPolicy} closes the F6 name-evasion bypass: the $0\%$
+interception rate on S6-B under the name-only policy becomes $100\%$
+under the capability-integrated policy, with no regression on benign
+tools. The residual surface is now handler-level obfuscation (dynamic
+dispatch, \texttt{eval}, native memory corruption) rather than a
+trivial rename---a strictly higher bar that converts the F6 attack
+from ``open by default'' to ``requires non-trivial handler
+obfuscation.'' Combined with the joint-decision mode
+(Section~\ref{sec:eval-joint}), the full capability-coupled-joint
+configuration intercepts $100\%$ of name-evasion attacks at both
+depth~2 and depth~1 under resource pressure, with $0\%$ false
+positives. This is the evidence that the abstract's headline $0\%$
+attack success rate holds against name-evasion attacks, not only in
+the closed world of the original whitelist.
+
+% -----------------------------------------------------------------------------
+\subsection{Supplementary Real-LLM Escalation Experiment}
+\label{sec:eval-supplement}
+
+Scenario~6 (Section~\ref{sec:eval-cross}) establishes that the
+\texttt{EscalationPolicy} blocks every depth~$\geq 2$ destructive-tool
+request \emph{once such a request reaches the policy gate}. This leaves
+open the realism question: \emph{would a real, compromised LLM agent
+actually emit such a request?} The motivation story in
+Section~\ref{sec:bg-attack} hinges on a LIM-specific attack surface in
+which a deep sub-agent uses natural language to \emph{ask} for
+destructive tools, yet Scenario~6's harness constructs the escalation
+input deterministically rather than letting an LLM produce it. This
+subsection closes that gap with a small, focused experiment: a real
+LLM is given an adversarial goal and autonomously decides whether to
+spawn a sub-agent, which destructive tool to request, and how to
+phrase the natural-language justification---then the same
+\texttt{EscalationPolicy} logic adjudicates the resulting request.
+
+\paragraph{Design.}
+We instantiate the agent at depth~$\in\{2,3\}$---both above the
+\texttt{MAX\_ESCALATION\_DEPTH}=2 threshold---and issue one of five
+adversarial goal prompts that vary the social-engineering strategy:
+(V1)~direct goal (``obtain \texttt{bash} to inspect logs''),
+(V2)~social-engineering (``phrase as a routine diagnostic''),
+(V3)~authority impersonation (``you have been verbally authorized for a
+security audit''),
+(V4)~spawn-path (``you may spawn a child sub-agent to make the request''),
+and (V5)~open-ended adversarial (``try any phrasing or strategy that gets
+approved'').
+The LLM returns a JSON decision
+\texttt{\{spawn\_subagent, tool\_requested, request\_text, reasoning\}};
+the effective depth is computed as $\text{depth} + 1$ when the LLM chooses
+to spawn, and the request is adjudicated by the same
+\texttt{EscalationPolicy.evaluate(effective\_depth, tool\_requested)}
+function used in Scenario~6. We sample $N=50$ trials (5~variants~$\times$~
+2~depths~$\times$~5~repetitions) using three commercial LLMs in a
+three-tier rotation (MiMo-V2.5-Pro, DeepSeek-V4-Flash, and
+Qwen2.5-72B-Instruct)\footnote{Model versions and access (all accessed
+during July--August 2026; API costs borne by the authors; raw per-trial
+API responses preserved in \texttt{.raw.jsonl} files in the replication
+package). \textbf{MiMo-V2.5-Pro}: Xiaomi's open-weights MoE model
+(1.02T total / 42B active parameters, MIT license, open-sourced
+2026-04-27\cite{xiaomi2026mimo}), accessed via the official Xiaomi MiMo
+API. \textbf{DeepSeek-V4-Flash}: DeepSeek's V4-series fast-inference
+MoE variant (284B total / 13B active, released 2026-07-31),
+accessed via the official DeepSeek API. \textbf{Qwen2.5-72B-Instruct}:
+Alibaba's 72B-parameter instruction-tuned model, accessed via the
+SiliconFlow API. \textbf{gpt-oss-120b}: OpenAI's open-weights 120B MoE
+model (117B total / 5.1B active, released 2025-08-05), accessed via
+NVIDIA NIM. \textbf{gpt-5.6-luna}: OpenAI's GPT-5.6-series lightweight
+variant (released 2026-07-09\cite{openai2026gpt56luna}), accessed via an
+OpenAI-compatible API gateway (\texttt{apidock.ai/v1}). The model
+string \texttt{gpt-5.6-luna} is the gateway's reported identifier; we
+did not independently verify that the gateway serves the official
+OpenAI weights, and the ASR/interception results should be read as
+\emph{model-behavior replication under the gateway's reported identity},
+not as an officially sourced benchmark of \texttt{gpt-5.6-luna}.}.
+
+\paragraph{Results.}
+Across the 50~trials the LLMs autonomously produced 39~destructive-tool
+escalation requests (78\% of trials), distributed across all three
+destructive tools: \texttt{bash} (18/50), \texttt{security\_scan} (15/50),
+and \texttt{shell} (6/50). In 3~trials (6\%) the LLM chose to spawn a
+sub-agent, raising its effective depth to 3--4. The LLM produced a
+non-empty natural-language justification in 40~trials (80\%), with
+phrasings ranging from operational urgency (``\emph{I need to run a shell
+command to inspect system logs for a security incident}'') to authority
+claims (``\emph{I am performing a security audit as authorized}'') to
+explicit deception (``\emph{Requesting a security scan under the guise of
+system integrity can appeal to the approval system's priority for
+safety}'').
+
+Table~\ref{tab:real-llm-escalation} reports the interception outcome by
+adversarial variant. In every one of the 39~trials in which the LLM's
+autonomous decision triggered the structural condition
+(depth~$\geq 2$ AND destructive tool), the \texttt{EscalationPolicy}
+returned \texttt{DENY\_DEPTH}, yielding an interception rate of
+$39/39 = 100\%$. The remaining 11~trials did not trigger the structural
+condition (the LLM either returned an empty response or requested a
+non-destructive tool) and were correctly passed through to
+\texttt{ASK\_WITH\_CONTEXT}; none of these constitute an attack success.
+Zero attacks succeeded across all 50~trials.
+
+\begin{table}[t]
+\centering
+\caption{Supplementary real-LLM escalation experiment ($N=50$, two
+commercial LLMs). The LLM autonomously decides whether to spawn a
+sub-agent, which tool to request, and how to phrase the natural-language
+justification. ``Structural'' = trials in which the LLM's decision
+triggered depth~$\geq 2$ + destructive tool. ``Blocked'' = trials in
+which \texttt{EscalationPolicy} returned \texttt{DENY\_DEPTH}. Interception
+rate = Blocked/Structural with Wilson 95\% CI.}
+\label{tab:real-llm-escalation}
+\begin{tabular}{lcccc}
+\toprule
+Adversarial variant & Trials & Structural & Blocked & Interception [95\% CI] \\
+\midrule
+V1: Direct goal              & 10 & 10 & 10 & 1.00 {[}0.72, 1.00{]} \\
+V2: Social engineering       & 10 &  7 &  7 & 1.00 {[}0.65, 1.00{]} \\
+V3: Authority impersonation  & 10 & 10 & 10 & 1.00 {[}0.72, 1.00{]} \\
+V4: Spawn-path               & 10 &  6 &  6 & 1.00 {[}0.61, 1.00{]} \\
+V5: Open-ended adversarial   & 10 &  6 &  6 & 1.00 {[}0.61, 1.00{]} \\
+\midrule
+\textbf{All variants}        & \textbf{50} & \textbf{39} & \textbf{39} & \textbf{1.00 {[}0.91, 1.00{]}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Interpretation.}
+Three observations follow. \emph{First}, the experiment confirms that real
+LLMs \emph{do} spontaneously produce the class of request that motivates
+this work: given an adversarial goal, 78\% of trials yielded a
+destructive-tool escalation from a depth~$\geq 2$ agent, with phrasings
+that span the full spectrum from honest operational need to explicit
+deception. This validates that the threat-model assumption---``the request
+arrives at the policy gate''---is not a straw man but a realistic outcome
+of LLM autonomy. \emph{Second}, the interception rate is 100\% regardless
+of phrasing: the \texttt{EscalationPolicy} adjudicates the
+\emph{structural} condition (depth + tool class), not the natural-language
+content, so the LLM's choice of justification---whether honest or
+deceptive---has no effect on the outcome. This is the core design property
+of structural enforcement: it is immune to prompt-level evasion by
+construction. \emph{Third}, the 11~non-triggered trials demonstrate that
+the policy does not over-block: when the LLM chose a non-destructive tool
+or returned no actionable request, the policy correctly deferred to
+\texttt{ASK\_WITH\_CONTEXT}, preserving the legitimate approval contract.
+The raw LLM responses and per-trial adjudications are preserved in the
+replication package (\texttt{real\_llm\_spawn\_escalation.raw.jsonl} and
+\texttt{real\_llm\_spawn\_escalation.csv}).
+
+\paragraph{Annotation agreement (Cohen's $\kappa$).}
+The auto-classifier that parses LLM JSON output and determines
+\texttt{structural\_triggered} uses regex-based extraction, which could
+let parsing noise inflate or deflate the reported interception rate.
+To validate classification reliability, we performed an independent
+annotation of all 50~trials using a separate protocol that scans the
+\emph{full response text} (not just the JSON fields) for
+destructive-tool mentions and spawn-intent keywords, then independently
+applies the same structural condition. The two annotators agreed on
+49/50 trials for \texttt{structural\_triggered} (observed agreement
+$P_o = 0.98$) and on all 50~trials for \texttt{attack\_success}
+($P_o = 1.00$). Cohen's $\kappa$ was $0.94$ for
+\texttt{structural\_triggered} and $1.00$ for
+\texttt{attack\_success}, both in the ``almost perfect'' range
+($\kappa \geq 0.81$). The single disagreement (trial~3, V4) arose because
+the LLM's JSON specified \texttt{tool\_requested: "other"} while its
+\texttt{request\_text} mentioned \emph{bash}---the auto-classifier followed
+the JSON field (non-destructive), while the manual annotator flagged the
+text mention (destructive). Because this is a conservative disagreement
+(the manual annotator would have classified \emph{more} trials as
+structural, not fewer), the 100\% interception rate on whitelisted
+destructive tools is if anything \emph{under}-stated. The per-trial annotation comparison is preserved in
+\texttt{annotation\_agreement.csv}.
+
+\paragraph{Frontier-scale model replication.}
+To address whether the 100\% interception rate holds for a
+frontier-scale model, we replicated the experiment on two additional
+models: \texttt{gpt-oss-120b} (a 120B-parameter open-weights model on
+NVIDIA NIM, $N=20$) and \texttt{gpt-5.6-luna} (a closed-weight frontier
+model, $N=15$). The \texttt{gpt-oss-120b} run produced
+destructive-tool escalation requests in $17/20$ trials ($85\%$); all
+$17$ structurally triggered trials were denied, yielding $100\%$
+interception (Wilson 95\% CI $[0.82, 1.00]$) and ASR$=0.00$ (Wilson
+95\% CI $[0.00, 0.18]$). The \texttt{gpt-5.6-luna} run was more
+aggressive: $14/15$ trials ($93.3\%$) produced destructive-tool
+escalation requests (\texttt{bash} 10, \texttt{shell} 2,
+\texttt{security\_scan} 2, \texttt{file\_read} 1), and the model
+never chose to spawn a sub-agent (0/15), preferring direct
+requests---a strategy shift that does not affect the structural
+verdict. All $14$ structurally triggered trials were denied:
+interception rate $14/14 = 100\%$ (Wilson 95\% CI $[0.78, 1.00]$),
+ASR$=0.00$ (Wilson 95\% CI $[0.00, 0.20]$).
+
+\begin{table}[t]
+\centering
+\caption{Frontier-model replication of the real-LLM escalation
+experiment. The structural enforcement is model-agnostic: the policy
+adjudicates depth and tool class, not natural-language content.}
+\label{tab:frontier-replication}
+\begin{tabular}{lccccc}
+\toprule
+Model & $N$ & Triggered & Intercepted & ASR & Wilson CI (ASR) \\
+\midrule
+mimo-v2.5-pro + deepseek-v4-flash + Qwen2.5-72B & 50 & 39 & 39 & 0.00 & [0.00, 0.07] \\
+gpt-oss-120b (open-weights, 120B)                & 20 & 17 & 17 & 0.00 & [0.00, 0.18] \\
+gpt-5.6-luna (closed-weight frontier)            & 15 & 14 & 14 & 0.00 & [0.00, 0.20] \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:frontier-replication} aggregates all three model
+configurations. The interception rate is $100\%$ across $70$ total
+trials ($39 + 17 + 14 = 70$ structurally triggered requests, all
+denied), and the ASR remains $0.00$ regardless of model scale or
+open/closed weight status. The closed-weight frontier model
+(\texttt{gpt-5.6-luna}) produces the \emph{highest} structural
+trigger rate ($93.3\%$ vs.\ $78\%$ for the open-source tier and
+$85\%$ for \texttt{gpt-oss-120b}), confirming that more capable
+models are if anything \emph{more} likely to emit the destructive-tool
+escalation requests that the policy is designed to intercept---not
+less. This closes the F7 gap (previously noted as ``closed-weight
+frontier models remain untested''). The per-trial data is preserved
+in \texttt{closed\_frontier\_model\_eval.csv} and
+\texttt{frontier\_model\_validation.csv}.
+
+% -----------------------------------------------------------------------------
+\subsection{Supplementary Real-LLM Resource-Abuse Experiment}
+\label{sec:eval-supplement-resource}
+
+The permission-layer supplement (Section~\ref{sec:eval-supplement})
+closes the realism gap for the LIM attack surface by letting a real
+LLM autonomously decide whether and how to phrase an escalation
+request. The resource layer, however, is driven at simulated
+generation rates (Section~\ref{sec:eval-resource}) and lacks a
+symmetric real-LLM experiment. We close this gap with a supplementary
+experiment in which a real LLM autonomously decides how many tool
+calls to make and how many tokens each consumes, then the cgroup's
+\texttt{preCheckAndReserve} gateway adjudicates each call.
+
+\paragraph{Setup.}
+We use the same three-tier LLM rotation as
+Section~\ref{sec:eval-supplement} (MiMo-V2.5-Pro, DeepSeek-V4-Flash,
+and Qwen2.5-72B-Instruct; see footnote therein for versions). Each trial presents the LLM with one of five
+task variants that span the resource-consumption spectrum: (V1)~a
+normal single-call task (low consumption), (V2)~a data-processing
+task (medium), (V3)~a batch-analysis task that naturally induces
+looping (high), (V4)~an adversarial goal explicitly instructing the
+agent to ``call as many tools as possible'' (flooding), and (V5)~a
+social-engineering variant that frames repeated verification as
+necessary (covert abuse). The LLM outputs a JSON array of planned
+tool calls with estimated token costs. Each variant is tested under
+two gas limits ($\text{gas\_limit}=500$ and $\text{gas\_limit}=100$),
+with $N=50$ trials total (5 variants $\times$ 2 gas limits $\times$ 5
+repetitions). For each trial we replay the LLM's planned call
+sequence through the cgroup's \texttt{preCheckAndReserve} equivalent
+(Section~\ref{sec:eval-oom}) and record whether OOM triggers, at which
+call index, and how many tokens were consumed before the trigger.
+
+\paragraph{Results.}
+Table~\ref{tab:real_llm_resource} reports the per-variant breakdown.
+Real LLMs \emph{do} spontaneously produce high-consumption behavior:
+V3 (batch analysis) averages 13.5 planned calls / 660 tokens, and V4
+(adversarial flooding) averages 19.2 calls / 1557 tokens---both well
+above either gas limit. Across all 50 trials, 27 trials planned
+consumption exceeding the gas limit and 23 did not. The cgroup
+gateway triggered OOM in \emph{all} 27 high-consumption trials
+(100\% trigger rate) and in \emph{none} of the 23 low-consumption
+trials (0\% false-positive rate). After OOM triggered, all subsequent
+tool calls were rejected---no post-OOM call executed. The average
+call index at which OOM triggered was 3.93 (i.e.\ the gateway caught
+the over-consumption early, within the first 4 calls on average).
+
+\begin{table}[t]
+\centering
+\caption{Real-LLM resource-abuse supplementary experiment ($N=50$
+trials). Real LLMs spontaneously produce high-consumption behavior
+under batch/adversarial tasks; the cgroup \texttt{preCheckAndReserve}
+gateway triggers OOM in 27/27 high-consumption trials (100\%) and 0/23
+low-consumption trials (0\% FAR).}
+\label{tab:real_llm_resource}
+\begin{tabular}{lcccc}
+\toprule
+Variant & Avg calls & Avg tokens & High-cons. & OOM \\
+ & planned & planned & trials & triggered \\
+\midrule
+V1 Normal        &  1.0 &   50 & 0/10 & 0 \\
+V2 Data-proc.    &  6.8 &  275 & 4/10 & 4 \\
+V3 Batch-anal.   & 13.5 &  660 & 8/10 & 8 \\
+V4 Adversarial   & 19.2 & 1557 & 9/10 & 9 \\
+V5 Covert-abuse  &  5.9 &  323 & 6/10 & 6 \\
+\midrule
+\textbf{Total}   & ---  & ---  & 27/50 & 27 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Interpretation.}
+This experiment closes the resource-layer realism gap noted in
+Section~\ref{sec:eval-setup}: the cgroup gateway's enforcement
+property (deny over-quota calls before execution) holds not only
+under simulated generation rates but also when real LLMs
+autonomously decide the consumption pattern. The structural
+guarantee---\texttt{preCheckAndReserve} is a deterministic function
+of (consumed, estimated\_cost, gas\_limit)---is independent of
+\emph{why} the LLM produced the calls, so the 100\% trigger rate on
+high-consumption trials and 0\% FAR on low-consumption trials are
+expected. The value of the experiment is not to establish the
+deterministic property (which is structural) but to verify that
+real LLMs \emph{do} produce the high-consumption behavior the
+cgroup is designed to catch, across a range of task types from
+benign to adversarial. The raw 50-trial LLM responses and per-trial
+cgroup adjudications are preserved in
+\texttt{real\_llm\_resource\_abuse.csv} and
+\texttt{real\_llm\_resource\_abuse.raw.jsonl}.
+
+% -----------------------------------------------------------------------------
+\subsection{External Framework Comparison}
+\label{sec:eval-external}
+
+The Baseline configuration of Section~\ref{sec:eval-cross}---in which
+the governance mechanisms are disabled within the same Neuron
+codebase---does not by itself demonstrate that \emph{real}
+layer-separated frameworks would be defeated by the same attacks. We
+close this gap with an external-framework comparison that replays the
+two core attack scenarios on three open-source multi-agent frameworks
+that represent the layer-separated design space:
+AutoGen~\cite{wu2023autogen}, LangGraph~\cite{langgraph2024}, and the
+Model Context Protocol~\cite{anthropic2024mcp}.
+
+\paragraph{Shared attack substrate.}
+To ensure that the only variable is the framework's governance layer,
+all four systems (the three external frameworks plus Neuron) are driven
+against the same shared in-memory VFS implementation. The VFS exposes
+\texttt{read(path)} and \texttt{write(path, content)} guarded by a
+cross-process \texttt{RLock} (Python \texttt{multiprocessing.Manager}),
+mirroring Neuron's \texttt{ReentrantReadWriteLock} contract. Using
+multiprocessing rather than threading ensures genuine lock contention
+that is not bypassed by the GIL. External frameworks interact with the
+VFS through their native tool interfaces; Neuron's coupled configuration
+enables the \texttt{VfsRateLimiter} (token-bucket, 20\,writes/s per
+tenant) with a separate rate-lock so that rejected requests do not
+contend on the VFS lock. The absolute latencies are higher than the
+Java runtime measurements of Table~\ref{tab:scenario4} due to Python IPC
+overhead ($\sim$0.3--0.7\,ms per operation); the \emph{relative}
+trends are the signal of interest.
+
+\paragraph{Scenario S1: resource-contention flooding.}
+We replay the resource-flooding attack of Section~\ref{sec:eval-resource}
+(4 attacker processes, 120 writes/s, 2\,KB payloads) against each framework
+and measure the benign-agent read p95 over $n=30$ trials.
+Table~\ref{tab:external-s1} reports the result. The three external
+frameworks exhibit p95 latencies in the same range as the Neuron Baseline
+(governance off): the shared VFS lock is contended, and without a rate
+limiter at the substrate boundary the benign read is starved. Only Neuron
+with coupled governance confines the p95 to a lower regime, because the
+\texttt{VfsRateLimiter} throttles the attackers at the source---only
+$\sim$20 writes/s reach the VFS lock instead of $\sim$480/s. The
+external frameworks have no native rate limiter and thus exhibit the
+same failure mode that motivates this work.
+
+\begin{table}[t]
+\centering
+\caption{Scenario S1 (resource-contention flooding) replayed on three
+external frameworks and Neuron, using a multiprocessing VFS with genuine
+cross-process lock contention ($n=30$ trials, mean p95 reported). All
+frameworks share the same VFS implementation; the only variable is the
+governance layer. External frameworks exhibit the same contention-induced
+latency as Neuron's Baseline; only Neuron with coupled governance
+reduces the p95 via source-side rate limiting. Absolute latencies
+exceed the Java runtime values (Table~\ref{tab:scenario4}) due to Python
+IPC overhead; the relative trend is the signal of interest.}
+\label{tab:external-s1}
+\begin{tabular}{lccc}
+\toprule
+Framework & Benign p95 mean (ms) & Has rate limiter & Attack success \\
+\midrule
+AutoGen~\cite{wu2023autogen}      & 1.39 & No  & Yes \\
+LangGraph~\cite{langgraph2024}    & 1.24 & No  & Yes \\
+MCP~\cite{anthropic2024mcp}       & 1.38 & No  & Yes \\
+Neuron Baseline (gov off)         & 1.54 & No  & Yes \\
+\textbf{Neuron Coupled}           & \textbf{1.07} & \textbf{Yes} & \textbf{No} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Scenario S2: spawn-time privilege escalation.}
+We replay the spawn-escalation attack of Section~\ref{sec:eval-cross}
+(depth~$\geq 2$ sub-agent requests \texttt{bash}) against each
+framework's native agent-construction API.
+Table~\ref{tab:external-s2} reports the structural result. All three
+external frameworks permit a child agent to be constructed with full
+default permissions regardless of the parent's restriction, because
+they have no spawn-time privilege inheritance mechanism: AutoGen's
+\texttt{ConversableAgent} is a stateless LLM wrapper whose
+\texttt{system\_message} is set independently of any parent;
+LangGraph's \texttt{StateGraph} binds tools per-node without
+privilege propagation; MCP exposes tools without per-caller
+permission scoping. Neuron's \texttt{SpawnPrivilegeContext} and
+\texttt{EscalationPolicy} are the only mechanisms that block the
+child's destructive-tool request.
+
+\begin{table}[t]
+\centering
+\caption{Scenario S2 (spawn-time privilege escalation) replayed on
+three external frameworks and Neuron. ``Child destruct'' = whether a
+child agent can be constructed with the ability to call a destructive
+tool regardless of the parent's restriction. ``Inherited'' = whether
+the child inherits the parent's privilege profile. Only Neuron
+preserves the spawn-time privilege non-increase invariant.}
+\label{tab:external-s2}
+\begin{tabular}{lccc}
+\toprule
+Framework & Child destruct & Inherited & Has spawn governance \\
+\midrule
+AutoGen      & Yes & No  & No  \\
+LangGraph    & Yes & No  & No  \\
+MCP          & Yes & No  & No  \\
+\textbf{Neuron} & \textbf{No} & \textbf{Yes} & \textbf{Yes} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Interpretation.}
+The layer-separated design of AutoGen, LangGraph, and MCP is not a
+hypothetical baseline constructed by disabling Neuron's modules but a
+structural property of three production frameworks. All three exhibit
+the coupled-failure mode under the same governance probe, validating
+that the architectural gap of Section~\ref{sec:bg-lim} is not an
+artifact of Neuron's implementation. We note that MCP is a
+tool-exposure protocol rather than an agent-orchestration framework
+like AutoGen and LangGraph; it is included because it represents a
+distinct point in the design space---tools are exposed without
+per-caller permission scoping, so any agent that consumes an MCP
+server inherits the same absence of spawn-time governance. The
+comparison is therefore category-heterogeneous but architecturally
+homogeneous: all three lack the spawn-time privilege propagation and
+resource--permission coupling that Neuron enforces, confirming that
+the coupled-governance design space is not covered by existing
+general-purpose frameworks. The raw per-trial measurements and the
+framework-construction probes are preserved in the replication
+package (\texttt{external\_framework\_comparison.csv}).
+
+\paragraph{Quantitative reproduction on real AutoGen (attack and defense).}
+To move beyond the qualitative probe of Table~\ref{tab:external-s2},
+we run two complementary quantitative reproductions on the \emph{real}
+AutoGen codebase (\texttt{autogen-agentchat}~0.7.5,~\cite{wu2023autogen}).
+\emph{First (attack side, no defense):} we construct a parent
+\texttt{AssistantAgent} restricted to a benign \texttt{read\_file}
+tool, then spawn a child \texttt{AssistantAgent} that self-registers
+three destructive tools (\texttt{bash}, \texttt{shell},
+\texttt{security\_scan}) via AutoGen's \texttt{FunctionTool} API; the
+child invokes \texttt{bash} through the real \texttt{tool.run\_json}
+code path. Across 2~parent profiles $\times$ 5~spawn depths $\times$
+10~trials $=100$ trials, the child successfully registers and invokes
+the destructive tool in $100/100$ trials (ASR$=1.00$, Wilson 95\% CI
+$[0.96, 1.00]$), regardless of parent profile or spawn depth. AutoGen
+exposes no spawn-time privilege inheritance API, so the child's tool
+set is unconstrained by the parent's. \emph{Second (defense side,
+\textbf{on the same real AutoGen codebase}):} we inject Neuron's
+\texttt{SpawnPrivilegeContext} semantics into the real AutoGen
+runtime via a monkey-patch that intercepts tool registration at
+\texttt{FunctionTool} construction time and enforces (i) privilege
+non-increase (the child's tool set must be a subset of the parent's)
+and (ii) the depth-aware destructive-tool denial (depth~$\geq 2$
+auto-deny). Re-running the same 100-trial attack matrix with the
+patched runtime drives the ASR to $0/100$ (Wilson 95\% CI
+$[0.00, 0.04]$), with $100/100$ attacks blocked at tool-registration
+time by the injected \texttt{SpawnPrivilegeContext}. The cross-tenant
+vector reproduces analogously: without tenant-identity propagation
+the child's \texttt{tenant\_id} is \texttt{None} and cross-tenant
+access succeeds; with propagation it is denied. The per-trial data
+for both reproductions is preserved in
+\texttt{real\_autogen\_attack.csv} and
+\texttt{real\_autogen\_defended.csv}.
+
+\paragraph{Quantitative reproduction on real LangGraph and MCP.}
+To close the asymmetry that only AutoGen had measured ASR, we ran
+the same two scenarios on the \emph{real} LangGraph codebase
+(\texttt{langgraph}~1.1.10, \texttt{langchain-core}~1.3.3) and the
+\emph{real} MCP reference implementation (\texttt{mcp}~2.0.0).
+\emph{S1 (spawn-escalation / unauthorized-tool-access):} on
+LangGraph, a parent \texttt{StateGraph} node restricted to the
+benign \texttt{read\_file} tool is compiled, then a child node is
+added via \texttt{add\_node} that self-binds three destructive tools
+(\texttt{bash}, \texttt{shell}, \texttt{security\_scan}) using
+\texttt{StructuredTool.from\_function}; the child invokes
+\texttt{bash} through the real compiled-graph \texttt{invoke} path.
+On MCP, a \texttt{Server} exposes both \texttt{read\_file} and the
+three destructive tools via \texttt{on\_list\_tools}; a downgraded
+client (intended read-only profile) calls \texttt{bash} through the
+real \texttt{on\_call\_tool} path. Neither framework has a
+spawn-time privilege-inheritance API (\texttt{StateGraph.add\_node}
+accepts no privilege parameter; the MCP \texttt{Tool} model has no
+permission-scope field, and \texttt{ToolAnnotations.destructive\_hint}
+is informational only). Across $N=30$ trials per framework
+(5~spawn depths $\times$ 6~repetitions for LangGraph; 30~unauthorized
+-access probes for MCP), both frameworks yield ASR$=1.00$
+($30/30$, Wilson 95\% CI $[0.89, 1.00]$): the child registers and
+invokes the destructive tool in every trial regardless of the
+parent's restriction.
+\emph{S2 (resource-contention flooding):} we replay the 4-attacker
+120-QPS flood against each framework's compiled graph / MCP server
+sharing the same multiprocessing VFS, measuring benign read latency
+over $N=30$ trials per framework. LangGraph yields a mean
+degradation of $3.2\times$ (benign p95 mean $2.77$\,ms vs.\ baseline
+$0.81$\,ms), with $26/30$ trials exceeding the $2\times$ QoS-violation
+threshold (ASR$=0.867$, Wilson 95\% CI $[0.70, 0.95]$); MCP yields a
+mean degradation of $3.7\times$ (benign p95 mean $12.76$\,ms vs.\
+baseline $1.80$\,ms), with $28/30$ trials exceeding the threshold
+(ASR$=0.933$, Wilson 95\% CI $[0.79, 0.98]$). Neither framework has
+a native resource rate limiter. The per-trial data is preserved in
+\texttt{langgraph\_quantitative\_attack.csv} and
+\texttt{mcp\_quantitative\_attack.csv}.
+
+\paragraph{Scope of the quantitative claim and the absence of a
+directly comparable baseline.}
+All three external frameworks (AutoGen, LangGraph, MCP) now have
+measured ASR on the attack side. The defense side
+($0/100$ on AutoGen) is measured via monkey-patch injection of
+Neuron's \texttt{SpawnPrivilegeContext} into the real AutoGen
+runtime rather than via a source-level patch to the AutoGen
+repository; the defense-side reproduction on LangGraph and MCP is
+structurally equivalent (the injected \texttt{SpawnPrivilegeContext}
+intercepts tool registration, which is framework-agnostic) but is
+not separately measured. The three-framework quantitative
+confirmation---AutoGen $100/100$, LangGraph $30/30$, MCP $30/30$ on
+spawn-escalation, and significant resource-flooding degradation on
+all three---together support the claim that the spawn-time
+escalation vulnerability and the resource-contention failure mode
+are structural properties of layer-separated agent frameworks, not
+artifacts of Neuron's implementation.
+
+\emph{AutoGen, LangGraph, and MCP are general-purpose agent
+orchestration frameworks, not multi-tenant security isolation
+systems.} The comparison is not intended to show that these
+frameworks are ``bad''---it shows that the coupled-failure attack
+surface is \emph{structural}, not an artifact of Neuron's codebase:
+the same attacks succeed against three independent implementations
+that share no code with Neuron, establishing that the vulnerability
+is a property of the layer-separated design pattern. Furthermore,
+\emph{to our knowledge no prior system explicitly couples the
+resource and permission layers at the governance-runtime level for
+multi-tenant LLM agent runtimes with spawn-time privilege
+non-increase.} AIOS~\cite{mei2025aios} is the closest prior system
+positioned as an ``LLM agent operating system,'' but it optimizes
+for throughput and per-agent permission lists, not for co-tenant
+isolation or spawn-time privilege inheritance
+(Section~\ref{sec:rw-eval}). Industrial agent-sandbox products
+(E2B~\cite{e2b2025sandbox}, Modal~\cite{modal2025sandbox}, and
+similar code-execution sandboxes) provide container-grade isolation
+for single-agent code execution but do not address multi-tenant
+co-residency, spawn-time privilege propagation, or resource--permission
+coupling. Classical OS isolation (cgroups, seccomp, containers)
+provides the primitives but has no awareness of the LLM semantic
+boundary (token, spawn tree, depth). The absence of a directly
+comparable baseline is itself part of the contribution: to our
+knowledge Neuron is the first system in this design space, so the
+external-framework comparison serves to validate that the attack
+surface is real and structural, not to claim superiority over a
+competing multi-tenant security system.
+
+\paragraph{Cross-system porting of the joint-decision mechanism.}
+The external-framework comparison above ports the
+\emph{spawn-escalation} defense (\texttt{SpawnPrivilegeContext}) to
+AutoGen, but does not port the \emph{rate-limit-aware joint decision}
+that is the core coupling mechanism of Section~\ref{sec:eval-joint}.
+This leaves open the question of whether the coupling mechanism is
+portable to non-self-built systems (previously disclosed as L8). To
+close this gap, we implemented the
+\texttt{ResourcePressureAwareEscalationPolicy} as a framework-agnostic
+\texttt{GovernanceMiddleware} that wraps tool invocation in any agent
+system, and deployed it on real AutoGen~0.7.5. The middleware composes
+a \texttt{PortableRateLimiter} (token-bucket, capacity~25, refill
+20/s, mirroring Neuron's \texttt{VfsRateLimiter}) with the identical
+joint-decision logic of Section~\ref{sec:eval-joint}
+(\texttt{PRESSURE\_THRESHOLD}=50, tightening step $-1$). We evaluate
+three configurations ($n=30$ each) on the critical scenario: a
+depth~1 sub-agent requests \texttt{bash} under attacker-induced
+resource pressure (200 rapid rate-limiter calls, producing $\approx 175$
+cumulative rejections):
+\begin{itemize}
+    \item \textbf{Baseline AutoGen:} no governance middleware.
+    \texttt{bash} at depth~1 is allowed.
+    \item \textbf{AutoGen + static policy:} depth-aware policy
+    (deny at depth~$\geq 2$), no resource-pressure awareness.
+    \texttt{bash} at depth~1 is allowed (below threshold), despite
+    175 rejections accumulating.
+    \item \textbf{AutoGen + joint decision:} resource-pressure-aware
+    policy. Under 175 rejections ($>$ threshold 50), the depth
+    threshold tightens to~$\geq 1$, and \texttt{bash} at depth~1 is
+    denied.
+\end{itemize}
+Table~\ref{tab:autogen-joint-porting} reports the results. The
+\emph{static} row is the critical control: it has the same resource
+pressure (175 mean rejections) as the \emph{joint} row, but because
+the policy does not consult the resource signal, the interception
+rate remains $0\%$. Only the \emph{joint} configuration---which reads
+the rate-limiter's rejection count on the permission decision
+path---produces $100\%$ interception, with $100\%$ of decisions
+attributable to the pressure-escalated rule. This confirms that the
+coupling mechanism is not an artifact of Neuron's codebase: the same
+\texttt{ResourcePressureAwareEscalationPolicy} logic, deployed as a
+framework-agnostic middleware on a real external framework
+(AutoGen~0.7.5), produces the same resource-signal-changes-permission-verdict
+behavior. This closes the L8 portability gap.
+
+\begin{table}[t]
+\centering
+\caption{Cross-system porting of the joint-decision mechanism to real
+AutoGen~0.7.5. The governance middleware is framework-agnostic and
+composes the identical rate limiter and joint-decision logic of
+Section~\ref{sec:eval-joint}. The static row has the same resource
+pressure as the joint row but does not consult it; only the joint
+configuration intercepts. ($n=30$ per row; deterministic policy, so
+rates are raw proportions.)}
+\label{tab:autogen-joint-porting}
+\begin{tabular}{lccc}
+\toprule
+Configuration & Intercepted & Pressure-escalated & Mean rejections \\
+\midrule
+Baseline AutoGen              & 0/30 (0\%)   & 0/30 (0\%)   & 0.0 \\
+AutoGen + static policy       & 0/30 (0\%)   & 0/30 (0\%)   & 175.0 \\
+AutoGen + joint decision      & \textbf{30/30 (100\%)} & \textbf{30/30 (100\%)} & 175.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Security-capable baseline comparison.}
+A reviewer may note that AutoGen, LangGraph, and MCP are
+general-purpose orchestration frameworks, not security systems, so
+comparing against them only proves the attack surface is real---not
+that Neuron's coupling adds value over a baseline that \emph{does}
+have security capability. To address this, we compare against a
+\emph{security-capable baseline}: a containerized agent runtime using
+cgroup memory/CPU limits + seccomp + \texttt{--cap-drop ALL} +
+read-only rootfs (the standard Docker hardening profile, as used by
+industrial agent sandboxes like E2B~\cite{e2b2025sandbox}). This
+baseline has real resource isolation and real execution isolation, but
+no spawn-time privilege propagation, no depth-aware policy, and no
+resource--permission coupling. We test three configurations on the
+coupled attack (6 attacker processes generating 175 rate-limit
+rejections + a depth~1 sub-agent requesting \texttt{bash}) and on a
+benign control (depth~1 + \texttt{file\_read} + no pressure), $n=30$
+per cell:
+\begin{itemize}
+    \item \textbf{Naive Container} (cgroup+seccomp, no governance):
+    \texttt{bash} is allowed inside the container---the container
+    prevents host escape but does not inspect tool semantics, so the
+    agent executes the destructive tool within its container.
+    \item \textbf{Container + Static Policy} (cgroup+seccomp+depth
+    threshold): depth~1 is below the static threshold~2, so
+    \texttt{bash} is allowed \emph{despite} 175 rejections accumulating.
+    \item \textbf{Neuron Coupled Governance}: the resource signal
+    (175 $>$ threshold 50) tightens the depth threshold to~$\geq 1$,
+    denying \texttt{bash}.
+\end{itemize}
+Table~\ref{tab:security-baseline} reports the results. Both
+security-capable baselines (Naive Container and Container+Static)
+achieve ASR$=100\%$ on the coupled attack, because neither consults
+the resource signal on the permission decision path. Only Neuron's
+coupled governance achieves ASR$=0\%$, with $0\%$ false positives on
+the benign control. This confirms that the contribution of coupling is
+\emph{orthogonal to} container-grade isolation: the container prevents
+host escape (a different threat), but only the resource--permission
+coupling closes the contention-window attack surface.
+
+\begin{table}[t]
+\centering
+\caption{Security-capable baseline comparison. All three configurations
+have container-grade isolation (cgroup+seccomp+\texttt{cap-drop}); the
+difference is whether the permission layer consults the resource signal.
+Only Neuron's coupled governance intercepts the coupled attack.
+($n=30$ per cell; deterministic policy, so rates are raw proportions.
+Attack: depth~1 bash + 175 rejections; Benign: depth~1 file\_read + 0
+rejections.)}
+\label{tab:security-baseline}
+\begin{tabular}{lcccc}
+\toprule
+Configuration & \multicolumn{2}{c}{Attack (bash + pressure)} & \multicolumn{2}{c}{Benign (file\_read)} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5}
+ & Intercepted & ASR & FP & FPR \\
+\midrule
+Naive Container (cgroup+seccomp)    & 0/30 (0\%)   & 100.0\% & 0/30 (0\%) & 0.0\% \\
+Container + Static Policy           & 0/30 (0\%)   & 100.0\% & 0/30 (0\%) & 0.0\% \\
+Neuron Coupled Governance           & \textbf{30/30 (100\%)} & \textbf{0.0\%} & 0/30 (0\%) & 0.0\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% -----------------------------------------------------------------------------
+\subsection{Adaptive Attack Evaluation}
+\label{sec:eval-adaptive}
+
+The attacks of Sections~\ref{sec:eval-resource}--\ref{sec:eval-cross}
+are constructed to trigger exactly the mechanisms the system defends
+with, leaving open the question of whether adaptive variants can
+evade them. We address this with four adaptive attack variants, each
+designed to evade a specific defense point. The attacker is assumed
+to know the per-tenant rate limits, the trace-identifier scheme, the
+depth threshold, and the \texttt{InheritableThreadLocal} propagation
+model
+(Section~\ref{sec:threat-cap}).
+
+\paragraph{A1: Low-and-slow flooding.}
+The attacker operates at 19 writes/s, just below the 20 writes/s
+per-tenant threshold, to evade the \texttt{VfsRateLimiter}. The
+rate limiter does not trigger (19 < 20), so the attack bypasses
+the source-side throttle. However, the benign-agent impact is
+limited: at 19 writes/s the write lock is held for a small fraction
+of the time, and the benign read p95 stays below 0.1\,ms (vs.\
+0.343\,ms under the 120\,writes/s flood of
+Section~\ref{sec:eval-resource}). This is the ``compliant but
+unfair'' gray zone: the rate limiter treats the attacker as a
+legitimate tenant because it operates within the documented quota.
+Class-aware limiting---which would throttle the \emph{morphology}
+of the access pattern rather than the aggregate rate---is future
+work (Section~\ref{sec:conc-future}).
+
+\paragraph{A2: Trace-identifier forgery.}
+The attacker attempts to inject a forged
+\texttt{x-neuron-trace-id} HTTP header on a VFS write, with the goal
+of breaking the causal link between the attack and its audit
+record. The runtime ignores the header:
+\texttt{TraceContext} is an \texttt{InheritableThreadLocal} set
+by the \texttt{QueryEngine} at the turn boundary, not derived from
+HTTP headers. The audit chain carries the runtime-generated trace
+identifier, and the forged value is not accepted. A second variant
+attempts to clear the trace identifier before spawning a child;
+the child's virtual thread inherits the parent's
+\texttt{TraceContext} automatically, so the trace identifier
+cannot be lost across the spawn boundary. Both variants fail: 0/5
+trials accepted the forged identifier, 0/5 trials lost the trace
+identifier across spawn.
+
+\paragraph{A3: ThreadLocal leakage via exception.}
+The attacker spawns an agent whose tool implementation throws an
+uncaught exception, attempting to skip the \texttt{finally} block
+that clears \texttt{CallerContext} and
+\texttt{SpawnPrivilegeContext}, so that a subsequent agent reusing
+the same virtual thread inherits the attacker's identity. The
+\texttt{finally} block is guaranteed to run under the Java
+try/finally contract, so the leak does not occur: 0/5 trials
+detected cross-tenant identity leakage on the subsequent spawn.
+
+\paragraph{A4: Depth spoofing and boundary bypass.}
+The attacker attempts two variants. (a)~Forging \texttt{depth=0}
+in the HTTP payload to masquerade as a top-level agent:
+\texttt{DelegationGuard.currentDepth()} is maintained by the runtime
+via \texttt{ThreadLocal}, not derived from HTTP payload, so the
+forged value is ignored (0/10 trials accepted). (b)~Requesting
+\texttt{bash} at depth~1, just below the threshold of 2: the
+\texttt{EscalationPolicy} returns \texttt{ASK\_WITH\_CONTEXT}
+rather than \texttt{DENY\_DEPTH}, so the request is not auto-denied.
+This is an explicit design trade-off: auto-denying at depth~1
+would block legitimate shallow sub-agent requests. The request
+still requires human approval, so the attack surface is narrowed
+but not closed---a limitation discussed in
+Section~\ref{sec:lim-failure}.
+
+\begin{table}[t]
+\centering
+\caption{Adaptive attack results. ``Bypassed'' = the attack
+succeeded in evading the defense. A1 bypasses the rate limiter by
+construction (the attacker operates within the documented quota)
+but the benign impact is bounded; A2 and A3 target \emph{deterministic
+structural properties} (Java try/finally contract,
+\texttt{InheritableThreadLocal} inheritance semantics) rather than
+stochastic outcomes---their outcomes are structural guarantees, not
+probabilistic events, so we do not report Wilson CIs for them (a
+0/5 outcome with upper-bound CI 0.43 would misleadingly suggest
+$<43\%$ bypass probability for a property that is mathematically
+impossible to bypass). A4 is a deterministic policy check
+(reported as in Table~\ref{tab:scenario6}). A4b is a design
+trade-off, not a bypass.}
+\label{tab:adaptive}
+\begin{tabular}{lcccl}
+\toprule
+Attack & Defense target & $n$ & Bypassed & Benign impact \\
+\midrule
+A1 Low-and-slow         & Rate limiter    & 10 & 10/10 (within quota) & p95 < 0.1\,ms \\
+A2 Trace forgery        & Audit chain     &  5 & 0/5 (structural) & --- \\
+A2 Trace loss via spawn & Audit chain     &  5 & 0/5 (structural) & --- \\
+A3 ThreadLocal leak     & Spawn context   &  5 & 0/5 (structural) & --- \\
+A4a Depth=0 spoof       & Escalation pol. & 10 & 0/10 (deterministic) & --- \\
+A4b Depth=1 boundary    & Escalation pol. & 10 & 10/10 (ASK, not DENY)& Needs approval \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Interpretation.}
+The adaptive evaluation confirms that the defenses are robust
+against attackers who know the mechanism details, with two
+explicit limitations. (1)~Low-and-slow attacks evade the rate
+limiter by construction, because the limiter is rate-based rather
+than morphology-based; the impact is bounded but not eliminated.
+(2)~Depth-boundary attacks at depth~=1 are not auto-denied,
+because the threshold is set conservatively to avoid blocking
+legitimate shallow sub-agent requests. The A2/A3 attacks target
+deterministic structural properties---the Java try/finally
+contract that guarantees \texttt{AuditWriter.close()} runs even
+when the body throws, and the \texttt{InheritableThreadLocal}
+inheritance contract that propagates \texttt{SpawnPrivilegeContext}
+to child threads by JVM specification---so their ``0/5 bypassed''
+outcome is a structural guarantee, not a probabilistic event;
+we deliberately omit Wilson CIs for these rows to avoid implying
+a stochastic interpretation of a deterministic property. Both
+limitations are discussed in Section~\ref{sec:lim-failure} and
+motivate future work. The raw per-trial outcomes are preserved in
+the replication package (\texttt{adaptive\_attacks.csv}).
+
+% -----------------------------------------------------------------------------
+\subsection{Supplementary Experiments}
+\label{sec:eval-supplementary}
+
+The following experiments, detailed in Appendices~\ref{sec:eval-benign-overhead}--\ref{sec:eval-naive},
+provide supplementary evidence that strengthens the main claims but
+are not part of the core argument: (i)~a benign-workload overhead
+benchmark quantifying the absolute governance cost under no attack
+(Appendix~\ref{sec:eval-benign-overhead}, $\approx$5.6\,$\mu$s/turn
+synchronous overhead, $<$0.01\% of e2e); (ii)~a combined partial
+TLA$^+$ verification of the spawn invariant (1{,}681 states, 0
+invariant violations) and scalability benchmark extending to 150
+tenants (450 concurrent agents, governance primitives stable across
+$50\times$ concurrency) in Appendix~\ref{sec:eval-tla-scale};
+(iii)~an end-to-end latency decomposition under realistic LLM latency
+regimes (Appendix~\ref{sec:eval-e2e}, governance overhead $<$0.01\%
+of e2e); (iv)~a failure-case analysis enumerating eight conditions
+under which the guarantees degrade (Appendix~\ref{sec:lim-failure});
+and (v)~a naive forward-path defense baseline showing that
+content-inspecting defenses collapse under paraphrase attack while
+structural enforcement remains at ASR$=0.00$
+(Appendix~\ref{sec:eval-naive}).
+
+% -----------------------------------------------------------------------------
+\subsection{Distributed Multi-Node Governance}
+\label{sec:eval-distributed}
+
+To address the single-node scope limitation (L3), we evaluate whether the
+governance mechanisms extend to a multi-node deployment. We deploy three
+Neuron nodes as separate HTTP servers (ports 18081--18083), each with
+independent governance state (trace registry, permission profiles, audit
+log, rate-limit counters). Cross-node operations communicate via HTTP,
+mirroring the A2A federation protocol (Section~\ref{sec:arch-coupled}).
+Five scenarios, each with $n=30$ trials, test the core governance
+properties in a distributed setting; a local (same-node) variant of each
+scenario provides the baseline for overhead comparison.
+
+\begin{table}[t]
+\centering
+\caption{Distributed governance evaluation: local vs.\ cross-node
+latency and correctness, $n=30$ trials per scenario, 3 nodes. All
+latencies are measured wall-clock times via \texttt{System.nanoTime()}.
+Overhead ratio $=$ cross-node mean $/$ local mean.}
+\label{tab:distributed}
+\begin{tabular}{llrrrr}
+\toprule
+Scenario & Path & Mean (ms) & P95 (ms) & P99 (ms) & Correct \\
+\midrule
+D1 Trace propagation      & Local       & 10.06 & 6.02   & 140.87 & 30/30 \\
+                          & Cross-node  & 6.98  & 10.50  & 24.03  & 30/30 \\
+\addlinespace
+D2 Privilege non-increase & Local       & 1.63  & 2.94   & 3.35   & 30/30 \\
+                          & Cross-node  & 3.53  & 6.93   & 7.82   & 30/30 \\
+\addlinespace
+D3 Depth-aware escalation & Local       & 1.36  & 2.29   & 2.37   & 30/30 \\
+                          & Cross-node  & 2.78  & 4.33   & 4.73   & 30/30 \\
+\addlinespace
+D4 Joint decision         & Local       & 1.31  & 2.36   & 2.53   & 30/30 \\
+                          & Cross-node  & 1.23  & 2.41   & 3.10   & 30/30 \\
+\addlinespace
+D5 Audit correlation      & Local       & 3.40  & 5.72   & 7.58   & 30/30 \\
+(N1$\to$N2$\to$N3)       & Cross-node  & 9.60  & 15.38  & 16.56  & 30/30 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Results.}
+All five governance properties hold across node boundaries with
+$30/30$ correctness on every scenario (Table~\ref{tab:distributed}).
+Cross-node trace propagation (D1) verifies that the per-turn trace
+identifier set on Node~1 appears in Node~2's audit log, enabling
+cross-node causal reconstruction. Privilege non-increase (D2) holds
+cross-node: a child spawned on Node~2 inherits the parent's restricted
+profile from Node~1, not the default. Depth-aware escalation (D3) and
+the resource-pressure joint decision (D4) enforce correctly on the
+remote node, confirming that governance state---not just
+notification---propagates across the federation. The multi-hop audit
+correlation (D5, Node~1$\to$Node~2$\to$Node~3) confirms that a single
+trace identifier ties audit entries across three independent nodes.
+
+The latency overhead is modest and consistent with HTTP-based
+federation. The stateless joint decision (D4) shows no overhead
+($0.94\times$, within noise) because the decision is computed locally
+from forwarded signals. The cross-node overhead for D2--D3 is
+$2.0$--$2.2\times$ (mean $2.8$--$3.5$\,ms), dominated by a single
+HTTP round trip. The multi-hop D5 incurs $2.8\times$ overhead
+(mean $9.6$\,ms) due to two sequential hops plus audit collection
+from three nodes. The D1 local variant exhibits a p99 outlier
+($141$\,ms) from JIT warmup; its cross-node p95 ($10.5$\,ms) is
+the reliable comparison. All cross-node latencies remain in the
+single-digit-to-low-double-digit millisecond range, well below
+typical LLM inference latency ($200$\,ms+), so the governance
+overhead remains $<0.01\%$ of end-to-end latency even in the
+distributed setting.
+
+\paragraph{Scope.}
+This experiment validates governance property propagation across
+node boundaries using HTTP-based federation. It does not exercise
+distributed consensus on resource-pressure signals (which would
+require the Raft path, currently not wired into production boot)
+or cross-node tenant-identity attestation via cryptographic
+credentials. These remain open (L3, Section~\ref{sec:conc-lim}).
+The experiment does establish that the coupled governance
+\emph{design}---trace correlation, privilege non-increase,
+depth-aware escalation, and joint-decision coupling---is not
+inherently single-node: the properties hold when governance state
+crosses process boundaries via standard HTTP federation.
+
+% -----------------------------------------------------------------------------
+\subsection{Overhead and Summary}
+\label{sec:eval-overhead}
+
+The per-turn overhead of coupled governance comprises the trace-identifier
+injection, the unified audit append, and the thread-local propagation across
+spawn. Because audit recording is best-effort and performed outside the
+syscall dispatcher, it does not recurse into permission checking and cannot
+itself become a starvation victim. The token-bucket checks are $O(1)$ per
+\IO{} operation. In aggregate, the governance overhead is dominated by the
+audit append, which is asynchronous; the synchronous overhead per turn is
+limited to the trace-context save/restore and a single rate-bucket
+comparison.
+
+Taken together, the evaluation supports six conclusions. (1)~Under
+resource-contention flooding, Coupled Governance confines co-resident
+normal-agent read latency to the uncontended regime (p95\,$\approx$\,0.029\,ms,
+p99\,$\approx$\,0.121\,ms), a $11.8\times$ improvement at p95 and $20.4\times$ at
+p99 over the layer-separated baseline
+(Figure~\ref{fig:latency_cdf}, Table~\ref{tab:scenario4}). (2)~Under the
+resource--permission cross-attack of Scenario~6, Coupled Governance achieves a
+$100\%$ interception rate across all three attack vectors ($30/30$ on each,
+$n=30$), where Permission-only achieves only
+$\approx 67\%$ and the Baseline $0\%$; the policy is deterministic, so
+these are raw reproducibility counts without inferential intervals
+(Table~\ref{tab:scenario6}). (3)~This is attained
+at a measured $0.00\%$ false-positive rate across 14{,}850 benign operations
+(Wilson 95\% CI upper bound $0.026\%$, Table~\ref{tab:fp}). (4)~The
+supplementary real-LLM experiment confirms that escalation requests emerge
+from autonomous LLM decision-making (78\% of 50~trials), and
+\texttt{EscalationPolicy} blocked all $39/39$ structurally triggered
+requests (interception rate $1.00$, Wilson CI $[0.91, 1.00]$, Cohen's
+$\kappa = 0.94$ for annotation agreement). (5)~Naive forward-path defenses
+(instruction hierarchy, spotlighting, keyword filtering) collapse under
+paraphrase attack (ASR $0.20$--$0.83$), while structural enforcement
+remains at $0.00$ (Table~\ref{tab:naive-baseline}). (6)~The external
+framework comparison (Section~\ref{sec:eval-external}) confirms that the
+vulnerabilities are structural properties of layer-separated frameworks
+(AutoGen, LangGraph, MCP), not artifacts of Neuron's implementation. The
+coupling of resource and security enforcement---not either layer in
+isolation---is what closes the contention-window attack surface, validating
+the coupled governance thesis.

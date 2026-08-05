@@ -1,0 +1,116 @@
+%% main.tex — Recovery-Channel Injection (JSS submission)
+%% Elsevier elsarticle template
+\documentclass[review,3p,authoryear]{elsarticle}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Packages
+%% ─────────────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage{balance}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,calc,fit,shapes.geometric,backgrounds}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Hyperref setup
+%% ─────────────────────────────────────────────────────────────
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    citecolor=black,
+    urlcolor=blue,
+    pdftitle={Recovery-Channel Injection: An Overlooked Attack Surface in Self-Healing LLM Agent Systems},
+    pdfauthor={Anonymous},
+    pdfsubject={Software Security, LLM Agents, Operating Systems},
+    pdfkeywords={prompt injection; recovery channel; self-healing; LLM agents; privilege escalation}
+}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Listings setup for Java code
+%% ─────────────────────────────────────────────────────────────
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    captionpos=b,
+    columns=fullflexible,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    numberstyle=\tiny\color{gray},
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    frame=single,
+    rulecolor=\color{black!30},
+    language=Java
+}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Custom macros
+%% ─────────────────────────────────────────────────────────────
+\newcommand{\system}{Recova}
+\newcommand{\rci}{Recovery-Channel Injection}
+\newcommand{\trustorigin}{\textsc{TrustOrigin}}
+\newcommand{\reauthgate}{\textsc{Reauthorization Gate}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Title & Authors
+%% ─────────────────────────────────────────────────────────────
+
+\begin{document}
+
+\begin{frontmatter}
+
+    \title{\rci: An Overlooked Attack Surface in Self-Healing LLM Agent Systems}
+
+    %% Author block — anonymized for review
+    \author{Anonymous Author}
+    \address{Anonymous Affiliation}
+
+    \input{abstract}
+
+    \begin{keyword}
+        Prompt injection \sep
+        LLM agent security \sep
+        Self-healing systems \sep
+        Privilege escalation \sep
+        Recovery channel \sep
+        Operating systems
+    \end{keyword}
+\end{frontmatter}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Main body
+%% ─────────────────────────────────────────────────────────────
+\input{introduction}
+\input{related_work}
+\input{threat_model}
+\input{defense_mechanism}
+\input{evaluation}
+\input{conclusion}
+\input{ethics}
+
+%% ─────────────────────────────────────────────────────────────
+%%  References
+%% ─────────────────────────────────────────────────────────────
+\bibliographystyle{elsarticle-harv}
+\bibliography{references}
+
+\end{document}

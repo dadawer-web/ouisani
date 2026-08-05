@@ -1,0 +1,513 @@
+% =============================================================================
+%  Section 3 — System Architecture
+% =============================================================================
+\section{Neuron System Architecture}
+\label{sec:arch}
+
+This section presents the architecture of Neuron, a multi-tenant LLM agent
+governance runtime designed around the principle of \emph{coupled
+resource--security governance}. The architecture comprises four design
+layers---a unified process abstraction (Section~\ref{sec:arch-abstraction}),
+resource cgroups (Section~\ref{sec:arch-cgroup}), execution sandboxes
+(Section~\ref{sec:arch-sandbox}), and a unified LLM gateway
+(Section~\ref{sec:arch-gateway})---bound together by the coupled security
+enforcement loop (Section~\ref{sec:arch-coupled}), which is the central
+contribution of this work. We adopt the terminology of classical operating
+systems---process, syscall, cgroup, OOM killer, seccomp, capability---to make
+the analogies precise and the overhead analysis tractable. As stated in
+Section~\ref{sec:intro}, this is a \emph{functional} analogy: the trust
+boundary is the JVM/container, not a hardware ring. Neuron runs in a single
+JVM process, and its governance state (\texttt{PermissionProfile},
+\texttt{AuditChain}, \texttt{SpawnPrivilegeContext}) shares the same address
+space as agent code, with \texttt{InheritableThreadLocal} providing
+language-level isolation rather than hardware-enforced ring separation. The
+only hardware-enforced boundary is the \texttt{DockerSandboxProvider} path
+(Section~\ref{sec:arch-sandbox}), which places destructive tool execution in
+a disposable container with dropped capabilities and a seccomp profile; this
+path is probed against seven known escape techniques in F8
+(Section~\ref{sec:lim-failure}). Defending against JVM escape itself is out
+of scope and is the responsibility of the JVM and container runtimes; the
+threat model (Section~\ref{sec:threat}) assumes the JVM boundary holds, as
+any in-process governance design must.
+
+% -----------------------------------------------------------------------------
+\subsection{Unified Abstraction: The Agent as an OS Process}
+\label{sec:arch-abstraction}
+
+The foundation of Neuron is a single abstraction that recurses through every
+subsystem: an \emph{agent is an OS process}. A conventional process binds a
+program counter, a file-descriptor table, and a scheduling priority to an
+execution context; a Neuron agent process binds a \emph{turn}---an atomic
+interaction comprising a prompt, a sequence of tool invocations, and an
+LLM-mediated control flow---to a runtime-managed execution context. Within this
+abstraction, the LLM token plays the role of the CPU cycle: it is the
+indivisible unit of resource consumption that the scheduler accounts for, that
+the cgroup caps, and that the OOM killer defends against.
+
+\paragraph{Inter-process communication.}
+Agents never invoke one another directly. Instead, all cross-agent
+communication is mediated by a runtime-level \emph{EventBus}, a publish/subscribe
+substrate analogous to Linux's netlink and udev event mechanisms. The EventBus
+serves two classes of consumers: external SSE clients attached through a runtime
+stream endpoint, and internal subscribers registered as
+\texttt{Consumer<String>} callbacks. Internal subscriber dispatch is
+performed on \emph{virtual threads} spawned per handler, so a slow subscriber
+cannot block the publisher or starve co-resident subscribers---the
+fan-out is non-blocking by construction. This design choice has a direct
+governance consequence: an unchecked broadcast can trigger unbounded virtual
+thread fan-out, a resource pressure vector that motivates the rate-limiting
+interceptor introduced in Section~\ref{sec:arch-coupled}.
+
+\paragraph{Caller identity as a runtime primitive.}
+Every in-runtime resource decision must answer ``who is issuing this call?''
+Neuron answers this through \texttt{CallerContext}, a thread-local that mirrors
+Linux's \texttt{current} macro. It carries the caller's agent identifier and
+tenant identifier, and is implemented as an
+\texttt{InheritableThreadLocal} so that virtual threads---including those
+spawned by \texttt{AgentTool}, Neuron's \texttt{fork()+exec()} equivalent for
+sub-agent creation---automatically inherit the parent's identity. The
+\texttt{CallerContext} is set by the \texttt{QueryEngine} (the turn scheduler)
+immediately before tool execution and cleared in a \texttt{finally} block to
+prevent thread-pool leakage. Runtime daemons that do not set a
+\texttt{CallerContext} are exempt from per-tenant accounting, mirroring the
+privileged-agent exemption in classical syscall filters.
+
+\paragraph{Dispatch modes.}
+The EventBus exposes two complementary dispatch modes. The broadcast mode
+treats all subscribers as equal and concurrent. A second
+\emph{responsibility-chain} dispatcher orders handlers by priority and permits
+a high-priority handler to \emph{accept} (short-circuit) the chain, which is
+the mode used for security review and permission adjudication where ordered,
+potentially aborting decisions are required. The two modes thus separate
+\emph{notification} (best-effort, parallel) from \emph{enforcement} (ordered,
+fail-closed), a separation that the coupled enforcement loop of
+Section~\ref{sec:arch-coupled} exploits.
+
+% -----------------------------------------------------------------------------
+\subsection{Resource Cgroups: Token Quotas and the OOM Killer}
+\label{sec:arch-cgroup}
+
+Neuron treats the LLM token as the analogue of memory, and governs it with a
+hierarchical cgroup controller realized by \texttt{CgroupManager} and
+\texttt{CgroupNode}. At initialization, the manager constructs a default quota
+tree rooted at \texttt{neuron-root} (1{,}000{,}000 tokens), with children
+\texttt{agents} (500{,}000), \texttt{system} (200{,}000), and
+\texttt{tools} (300{,}000). Each tenant agent receives a per-instance cgroup
+defaulting to 50{,}000 tokens, parented under \texttt{agents}. This hierarchy
+is the direct analogue of Linux's \texttt{memory.max} cgroup tree.
+
+\paragraph{Soft and hard limits.}
+Each \texttt{CgroupNode} enforces two thresholds. The \emph{hard limit}
+(\texttt{tokenQuota}, the analogue of
+\texttt{memory.limit\_in\_bytes}) is a ceiling whose violation is fatal: when
+\texttt{consumeTokens} detects that consumption plus the requested amount would
+exceed the quota, it raises a \texttt{TokenOomException}---a \emph{token
+OOM}---which the manager translates into an \texttt{oomKill} of the offending
+agent. The
+\emph{soft limit} (default 80\% of the quota, the analogue of
+\texttt{memory.soft\_limit\_in\_bytes}) is non-fatal: its violation raises a
+\texttt{TokenSoftOomException} that triggers \emph{semantic folding} via the
+\texttt{SomWindowController}, a reclamation mechanism that compacts the agent's
+context to reclaim tokens rather than killing the process. This two-tier design
+provides \emph{fault tolerance} under transient pressure---the runtime first
+attempts graceful reclamation and resorts to termination only when reclamation
+cannot restore headroom.
+
+\paragraph{Transactional propagation.}
+Consumption propagates up the tree in a two-phase-commit style: a child records
+its consumption locally, then delegates to its parent; if the parent raises an
+OOM condition, the child \emph{rolls back} its local accounting before
+re-propagating the exception. This prevents the partial-bookkeeping races that
+would otherwise allow a child to believe it has spent tokens that its parent
+never granted. A dedicated \texttt{preCheckAndReserve} gateway integrates this
+check into the syscall dispatch path \emph{before} the LLM is invoked, so that
+an over-quota agent is denied the call rather than permitted to consume and
+killed after the fact---an enforcement ordering that reduces wasted
+expenditure.
+
+\paragraph{Privilege and control.}
+Two control knobs mirror Linux's \texttt{oom\_control} and scheduling
+privileges. \texttt{disableOomKill} exempts a critical agent (for example, the
+init daemon) from termination, degrading its OOM to a logged event. Conversely,
+agents running at \texttt{REALTIME} priority bypass all cgroup limits, the
+analogue of a runtime-privileged path. Every cgroup decision---hard kill, soft
+reclamation, consumption---is written to the unified audit chain described in
+Section~\ref{sec:arch-coupled} under the \texttt{CGROUP} layer tag, so that resource
+events are causally linkable to the security events that accompany them.
+
+% -----------------------------------------------------------------------------
+\subsection{Execution Sandbox: WASM and Container Isolation}
+\label{sec:arch-sandbox}
+
+Tool execution in Neuron is confined by a \texttt{SandboxProvider} abstraction
+that realizes the Ring~3 user-mode execution environment. Two providers
+implement the interface, offering complementary isolation granularity.
+
+\paragraph{In-process WASM isolation.}
+\texttt{GraalWasmSandbox} executes compiled WebAssembly within the host JVM
+using the GraalVM polyglot engine, with \texttt{wasm.MaxMemoryPages} capped at
+1024 pages to impose a hard memory ceiling. Sandboxed code cannot reach host
+resources directly; instead, it issues \emph{semantic syscalls}
+(\texttt{\_\_neuron\_syscall} imports) that are bound to runtime-mediated host
+functions, so every privileged operation traverses the
+Ring~3$\rightarrow$Ring~0 boundary and is subject to the permission
+interceptor. Execution is wrapped in a fault-tolerance envelope:
+signal interception drains \texttt{SIGTERM}/\texttt{SIGINT} before entry, and
+any \texttt{PolyglotException} or uncaught exception invokes
+\texttt{handleSandboxFault}, which destroys the sandbox instance and raises a
+\texttt{SIGSEGV}-equivalent fault to the agent. This \emph{fault-and-isolate}
+discipline ensures that a misbehaving computation is contained without
+corrupting the host, at the overhead cost of one sandbox instance per
+execution.
+
+\paragraph{Out-of-process container isolation.}
+\texttt{DockerSandboxProvider} executes untrusted code in a disposable Docker
+container for workloads requiring stronger isolation or a full language
+runtime. Each invocation writes the script to a unique
+\texttt{Files.createTempFile} path---avoiding the race conditions and
+cross-invocation leakage that fixed paths would introduce---and mounts it
+read-only into a container launched with a hardened parameter set: network
+disabled (\texttt{--network none}, air-gapped), memory capped at 256\,MB
+(\texttt{-m} with matching swap), CPU limited to half a core
+(\texttt{--cpus=0.5}), process count capped (\texttt{--pids-limit 64},
+defeating fork bombs), a read-only root filesystem (\texttt{--read-only}),
+and a \texttt{tmpfs} \texttt{/tmp} mounted \texttt{noexec}. Three
+security options provide defense in depth: \texttt{--cap-drop ALL} strips all
+Linux capabilities, \texttt{--security-opt no-new-privileges} forbids
+\texttt{setuid}-based escalation by child processes, and
+\texttt{--security-opt seccomp=<profile>} applies a blacklist that blocks
+container-escape syscalls such as \texttt{unshare}, \texttt{pivot\_root},
+\texttt{mount}, and \texttt{ptrace}. The seccomp profile is lazily materialized
+from a packaged resource to a host temp file under double-checked locking and
+registered for cleanup on JVM exit. The provider thus composes
+capability-drop, privilege-disabling, and syscall-filtering into a single
+fail-closed execution boundary.
+
+% -----------------------------------------------------------------------------
+\subsection{Unified LLM Gateway and Adaptive Model Routing}
+\label{sec:arch-gateway}
+
+The governance layers above assume a single point at which LLM consumption
+enters the runtime. Neuron consolidates this point as a \emph{unified LLM
+gateway} that all tenants and frameworks traverse, eliminating the
+per-tenant or per-framework SDK that layer-separated designs must otherwise
+maintain. The gateway routes each request through an \emph{adaptive model
+router}: a lightweight, low-latency model---cheap to invoke and suitable for
+high-frequency calls---serves as the front-end classifier for the
+\texttt{ReviewGate} and as a permission-auditing screener, while
+compute-intensive generation is delegated to a frontier LLM. Routing is
+decided by the system-overhead signal observed at the gateway, so that under
+resource pressure a larger share of traffic is deflected to the lightweight
+model, reducing marginal token expenditure precisely when the cgroup is near
+its soft limit.
+
+This end-to-end routing is more than a cost optimization: it is the
+\emph{source-side} complement to the cgroup. Because every request traverses
+a single gateway, the router enforces a \emph{central rate limit} on token
+consumption before any generation begins, so that a runaway tenant is
+throttled at the entry point rather than chased after the fact by the OOM
+killer. The gateway's per-request rate limit and the cgroup's per-turn quota
+thus operate as two scales of the same mechanism---one per request, one per
+turn---both stamped with the per-turn trace identifier and both written to
+the unified audit chain. This echoes the cgroup principle at the LLM
+boundary: the token is governed as a first-class resource from the moment it
+is requested, not only after it is spent.
+
+% -----------------------------------------------------------------------------
+\subsection{Coupled Security Enforcement under Resource Pressure}
+\label{sec:arch-coupled}
+
+We now present the central mechanism of this work. In a layer-separated
+runtime, the resource, isolation, and permission layers each enforce their own
+policy against disjoint audit trails; under resource pressure, the security
+layer is either starved outright or loses the causal context needed to detect
+that a privileged operation is being attempted inside a contention window
+(Section~\ref{sec:bg-lim}). Neuron closes this gap with a \emph{coupled enforcement
+loop} in which resource pressure does not merely trigger a resource response
+but directly \emph{escalates the interception level} or \emph{circuit-breaks
+\IO} at the security boundary, with every coupled decision sharing a single
+trace identifier.
+
+\paragraph{The audit substrate: a unified audit chain.}
+The substrate that makes cross-layer correlation possible is the
+\texttt{UnifiedAuditLog}, a fourth, cross-layer sink that aggregates
+decisions from all governance layers---\texttt{CGROUP}, \texttt{SANDBOX},
+\texttt{PERMISSION}, and a resource-rate-limiting layer
+\texttt{RATELIMIT}---into a single JSONL ledger under one schema. Each entry
+carries a \texttt{traceId} injected by \texttt{TraceContext} at the turn
+boundary via an \texttt{InheritableThreadLocal} (with save/restore semantics
+to support nested turns and prevent thread-pool leakage). Because the trace
+identifier is inherited by the virtual threads that execute sub-agents and
+subscriber callbacks, every governance decision across the entire turn---an
+OOM kill, a sandbox fault, a permission denial, a rate-limit drop---lands in
+the same causal frame. The ledger can be replayed by \texttt{traceId} to
+reconstruct the cross-layer response timeline of a single attack.
+\emph{We emphasize that the trace identifier provides audit correlation, not
+online enforcement:} it makes the coupling \emph{auditable} (the causal chain
+from resource pressure to security response can be reconstructed for any
+turn), but it does not, by itself, change any permission verdict. The online
+coupling---in which a resource-layer signal tightens the permission decision
+in real time---is realized by the joint-decision mechanism described later in
+this section. Recording is best-effort and \texttt{FileChannel}-appended
+outside the syscall dispatcher, so the audit path never recurses into
+permission checking and cannot itself become a starvation victim.
+
+\paragraph{\IO{} circuit-breaking at the resource boundary.}
+The first coupling response to pressure is to circuit-break \IO{} \emph{before}
+it reaches the permission layer. Two token-bucket interceptors, modeled on
+Linux traffic control and the runtime's \texttt{RateLimitSyscallFilter}, gate
+the shared substrates at their entry points. \texttt{EventBusRateLimiter}
+attaches to \texttt{EventBus.broadcast} and enforces a dual-dimension
+bucket---per-agent (default 50/s, burst 60) and per-tenant---so that no single
+agent or tenant can monopolize the SSE fan-out or the virtual-thread pool.
+When the bucket is exhausted, the broadcast is silently dropped (broadcast is
+fire-and-forget, so raising would block the caller) and the denial is
+double-written to the audit chain and the semantic ETW. \texttt{VfsRateLimiter}
+gates VFS operations with \emph{differentiated} limits: writes and mounts are
+heavily throttled (20/s, burst 25) because they consume locks and disk \IO{},
+while reads are lightly throttled (200/s, burst 240) because they take shared
+locks. A write that exceeds its quota raises a \texttt{SecurityException} that
+the agent observes as a hard failure, forcing it to back off or abandon the
+operation. Both interceptors exempt \texttt{sys.*} channels, runtime daemons,
+and privileged agents, confining throttling to tenant-driven \IO{}. The
+consequence is that a resource-contention campaign is damped \emph{at the
+source} rather than policed after damage---the residual pressure converges to
+zero, as the evaluation in Section~\ref{sec:eval} demonstrates.
+
+\paragraph{Auto-escalation of the interception level.}
+The second coupling response is to \emph{raise} the security enforcement level
+when pressure signals accumulate, rather than evaluating permission at a fixed
+strictness. Three escalation pathways realize this.
+
+First, the \texttt{ToolCircuitBreaker} monitors per-agent, per-tool failure
+counts. When an agent registers five consecutive failures against the same
+tool---a signature of either a runaway loop or an attacker probing a
+misconfigured path---the breaker \emph{trips} and revokes that agent's access
+to the tool for a 60-second cooldown, escalating the effective permission from
+\emph{allow} to \emph{deny} without reconsulting the declarative policy. After
+the cooldown the breaker enters a half-open state, admitting a single probe
+request to test whether the underlying fault has cleared; success resets the
+breaker, while failure re-trips it. The trip event is broadcast on the
+\texttt{sys.telemetry.events} channel and surfaced through the hook system,
+closing the loop back to the audit chain.
+
+Second, the soft-OOM signal from the cgroup layer escalates resource handling
+from \emph{consume} to \emph{reclaim}: rather than admitting further
+consumption and risking a hard kill, the runtime triggers semantic folding to
+recover tokens, and only re-attempts the reservation if reclamation succeeds.
+This is fault-tolerant back-pressure---the resource layer communicates pressure
+to the execution layer, which responds by reducing its own demand.
+
+Third, and most specific to the LIM attack surface, a depth-aware
+\texttt{EscalationPolicy} escalates the permission verdict from \emph{ask} to
+\emph{auto-deny} for destructive tools originating from deeply nested
+sub-agents\label{sec:arch-lim}. When the \texttt{QueryEngine} reaches an
+\texttt{ASK} decision, it gathers the caller's position in the spawn tree
+(depth and parent chain from the \texttt{DelegationGuard}) and consults the
+\texttt{EscalationPolicy}: if the depth meets or exceeds the configured
+threshold (default 2) and the requested tool is destructive
+(\texttt{bash}, \texttt{shell}, \texttt{security\_scan}), the verdict becomes
+\texttt{DENY\_DEPTH}---the request is denied without consulting a human
+approver, defeating the social-engineering pathway in which a deeply nested
+sub-agent phrases an escalation in natural language. The denial is recorded
+through the triple-write path (semantic ETW, unified audit log, and permission
+denial ledger) together with the spawn-tree context, so that the escalation
+attempt is auditable end-to-end. For non-destructive requests, or for
+top-level calls at depth zero, the policy degrades gracefully to
+\texttt{ASK\_WITH\_CONTEXT}, preserving the existing approval contract and
+ensuring zero regression for headless workloads.
+
+\paragraph{Resource-pressure-aware joint decision.}
+The static \texttt{EscalationPolicy} above is a pure function of
+(depth, tool name) and does not consult resource state. To realize
+\emph{online} cross-layer coupling---where a resource-layer signal
+actually changes the permission verdict in real time---we extend the
+policy with a joint-decision mode in
+\texttt{ResourcePressureAwareEscalationPolicy}. When the resource
+layer's cumulative rate-limit rejection count (maintained by the
+\texttt{VfsRateLimiter} and \texttt{EventBusRateLimiter} on the
+per-turn trace) exceeds a configured \texttt{PRESSURE\_THRESHOLD}
+(default 50, indicating sustained attacker pressure), the permission
+layer dynamically tightens its strictness from depth~$\geq 2$ to
+depth~$\geq 1$ for destructive tools. Concretely, a depth~1 sub-agent
+requesting \texttt{bash} receives \texttt{ASK\_WITH\_CONTEXT} under
+normal resource conditions but \texttt{DENY\_DEPTH} once resource
+pressure exceeds the threshold---the resource signal \emph{changes}
+the permission verdict. This is the mechanism that distinguishes
+\emph{audit correlation} (the trace identifier's role, which is
+post-hoc) from \emph{online enforcement} (the joint decision's role,
+which is real-time). The threshold and tightening step are
+heuristically calibrated and their sensitivity is ablated in
+Section~\ref{sec:eval-joint}; we do not claim the rule generalizes to
+all attack morphologies (L7, Section~\ref{sec:conc-lim}).
+
+\paragraph{Spawn-time privilege non-increase.}
+Coupling is also enforced \emph{across the spawn boundary}, closing the
+attack surface in which a downgraded parent produces an upgraded child. An
+\texttt{SpawnPrivilegeContext}, itself an \texttt{InheritableThreadLocal}
+carrying the parent's effective \texttt{PermissionProfile}, is published by the
+\texttt{QueryEngine} before tool execution and inherited automatically by the
+virtual thread that \texttt{AgentTool} spawns. The child \texttt{QueryEngine}
+applies the inherited profile on construction, so that a parent restricted by a
+\texttt{*:deny} rule cannot produce a child with default privileges: spawn is
+guaranteed to be privilege-non-increasing, the LIM analogue of a
+\texttt{NoNewPrivs} flag. Combined with tenant-identity propagation through
+the \texttt{CallerContext} and a hard \texttt{checkTenantOwnership}
+pre-check that cannot be bypassed by permissive modes, the spawn boundary
+becomes a security-preserving, tenant-isolating interface rather than an
+escalation opportunity.
+
+\paragraph{Summary of the loop.}
+In aggregate, the coupled enforcement loop operates as follows. A resource
+pressure signal---soft OOM, rate-limit exhaustion, or a failure
+cascade---is observed by the resource layer. Rather than treating it as a
+local resource event, Neuron translates it into a security response:
+\IO{} is circuit-broken at the substrate boundary, the interception level is
+escalated from allow to deny (via the tool circuit breaker or the depth-aware
+escalation policy), and the spawn boundary is guarded to prevent privilege
+non-increase from being violated under the cover of contention. Every
+decision along this loop shares the per-turn \texttt{traceId} and is written
+to the \texttt{UnifiedAuditLog}, enabling the cross-layer causal
+reconstruction that layer-separated designs cannot provide. The coupled
+governance claim is validated in Section~\ref{sec:eval}.
+
+% -----------------------------------------------------------------------------
+\subsection{Invariant Argument for Spawn-Time Privilege Non-Increase}
+\label{sec:arch-invariant}
+
+The security property of Section~\ref{sec:arch-lim}---that a child agent's
+privileges are always a subset of its parent's---is the LIM analogue of
+the \texttt{NoNewPrivs} flag in Linux. We provide a non-formal but
+rigorous argument that this invariant holds across all code paths,
+including the exceptional and concurrent cases. The argument proceeds
+by enumerating the operations that could potentially violate the
+invariant, showing that each is structurally blocked.
+
+\paragraph{Notation and invariant.}
+Let $\mathit{prof}(a)$ denote the effective \texttt{PermissionProfile}
+of agent $a$ at the moment it begins executing a turn, and let
+$\mathit{prof}_{\mathrm{default}}$ denote the permissive default
+profile assigned by \texttt{PermissionProfile.empty()}. The
+\emph{spawn-time privilege non-increase} invariant is:
+\[
+  \forall a_{\mathrm{child}}.\ \mathit{prof}(a_{\mathrm{child}})
+  \sqsubseteq \mathit{prof}(a_{\mathrm{parent}}),
+\]
+where $\sqsubseteq$ is the profile subsumption order (a profile $p$
+subsumes $q$ iff every permission granted by $q$ is also granted by
+$p$). The complementary failure mode is that the child receives
+$\mathit{prof}_{\mathrm{default}}$ when the parent is restricted,
+which would violate the invariant because
+$\mathit{prof}_{\mathrm{default}} \not\sqsubseteq
+\mathit{prof}_{\mathrm{parent}}$ for any restricted parent.
+
+\paragraph{Code-path enumeration.}
+There are exactly four ways a child \texttt{QueryEngine} could
+obtain its initial profile; we show that none can violate the
+invariant.
+
+\begin{enumerate}
+    \item \textbf{Inherit from \texttt{SpawnPrivilegeContext}.} The
+    \texttt{AgentTool} spawns the child on a virtual thread; the
+    child's \texttt{QueryEngine} constructor reads
+    \texttt{SpawnPrivilegeContext.current()}, which was
+    \texttt{set} by the parent's \texttt{QueryEngine} before
+    tool execution and is inherited automatically by the
+    virtual thread. The child thus receives
+    $\mathit{prof}(a_{\mathrm{parent}})$, satisfying the invariant
+    with equality.
+
+    \item \textbf{Fall back to default when context is \texttt{null}.}
+    If \texttt{SpawnPrivilegeContext.current()} returns \texttt{null},
+    the child falls back to $\mathit{prof}_{\mathrm{default}}$.
+    This path is reachable \emph{only} when no parent has set the
+    context, i.e.\ for runtime daemons and headless tests; it is
+    unreachable for tenant-driven spawns because the parent
+    \texttt{QueryEngine} always sets the context before invoking
+    \texttt{AgentTool}.
+
+    \item \textbf{Exception during spawn.} If the spawn raises an
+    exception after the context is set but before the child
+    constructor reads it, the child is never constructed and the
+    invariant holds vacuously. If the exception occurs after the
+    child reads the context, the child aborts with the inherited
+    profile, again satisfying the invariant.
+
+    \item \textbf{Concurrent spawn from multiple parents.}
+    \texttt{InheritableThreadLocal} provides per-thread isolation,
+    so two parents spawning children concurrently do not interfere:
+    each child inherits its own parent's profile. There is no shared
+    mutable state on the spawn path.
+\end{enumerate}
+
+\paragraph{Pseudocode of the invariant-preserving spawn path.}
+The structural argument above is realized by the following pseudocode,
+which mirrors the Java implementation of \texttt{QueryEngine} and
+\texttt{AgentTool}:
+
+\begin{verbatim}
+// Parent QueryEngine, before tool execution:
+function executeTurn(turn):
+    SpawnPrivilegeContext.set(self.effectiveProfile)
+    try:
+        result = turn.run()
+    finally:
+        SpawnPrivilegeContext.clear()   // force-clear on all paths
+    return result
+
+// AgentTool, spawning a child:
+function spawnChild(prompt):
+    // SpawnPrivilegeContext.current() is inherited by the
+    // virtual thread that runs the child QueryEngine.
+    childThread = Thread.startVirtualThread(() -> {
+        child = new QueryEngine(prompt)
+        child.run()
+    })
+    return childThread
+
+// Child QueryEngine constructor:
+constructor(prompt):
+    inherited = SpawnPrivilegeContext.current()
+    if inherited is not null:
+        self.effectiveProfile = inherited          // invariant: == parent
+    else:
+        self.effectiveProfile = Profile.empty()    // daemon/headless path
+    // invariant holds: prof(child) <= prof(parent)
+\end{verbatim}
+
+\paragraph{Why the invariant holds.}
+The argument rests on three structural properties of the
+implementation:
+
+\begin{itemize}
+    \item \textbf{Single assignment.} The child's
+    \texttt{effectiveProfile} is set exactly once, in the
+    constructor, from \texttt{SpawnPrivilegeContext.current()}.
+    There is no subsequent code path that can replace it with a
+    wider profile.
+
+    \item \textbf{Try/finally guarantee.} The parent's
+    \texttt{set}/\texttt{clear} pair is wrapped in
+    \texttt{try}/\texttt{finally}, so the context is cleared
+    even if the tool throws. This prevents thread-pool reuse
+    from leaking a stale profile to an unrelated agent on the
+    next turn---the only path that could violate the invariant
+    across turns.
+
+    \item \textbf{Inheritance by construction.}
+    \texttt{InheritableThreadLocal} propagates the parent's
+    value to the child virtual thread at construction time; the
+    child cannot opt out, and no API exists for the child to
+    \emph{replace} the inherited value with a wider one. The
+    child can only \texttt{set} a narrower profile for its own
+    sub-spawns, preserving the invariant down the spawn tree.
+\end{itemize}
+
+The combination of these properties ensures that the invariant
+holds for every reachable state of the system, including the
+exceptional and concurrent cases that an adversary might
+attempt to exploit. A full formal verification in the style of
+seL4~\cite{klein2009sel4} is left as future work; the argument
+here is sufficient to show that no engineering code path
+violates the property, which is the standard expected of
+runtime-enforced invariants that are not formally verified.

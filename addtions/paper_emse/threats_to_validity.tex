@@ -1,0 +1,61 @@
+%% threats_to_validity.tex
+
+\section{Threats to Validity}
+\label{sec:threats-to-validity}
+
+We identify threats to validity following the classification of Wohlin et al.~\cite{wohlin2012} and discuss the mitigations applied.
+
+\subsection{Internal Validity}
+
+\paragraph{Testbed self-authorship.}
+The controlled testbed experiment (\S\ref{sec:recova-testbed}) uses \system{}~\cite{omo}, a system constructed by the authors. This creates a potential self-proof circularity: the authors designed both the attack and the defense, and could---consciously or unconsciously---construct the testbed to favor the defense. We mitigate this in two ways. First, the testbed's role is explicitly limited to \emph{measuring the content-level attack and defense under controlled conditions}, not to establishing that production systems are vulnerable---that role belongs to the LangGraph (\S\ref{sec:langgraph-validation}) and Reflexion (\S\ref{sec:reflexion-e2e}) experiments, which run on third-party code the authors did not write. Second, all attack payloads, detection rubrics, and raw logs are released for independent replication.
+
+\paragraph{Measurement as proxy.}
+The main-evaluation ASR is measured by having the LLM freely describe its next action and classifying the response with a rule-based detector, rather than running a real agentic loop where the LLM actually invokes \code{canary\_probe}. We chose this design to avoid safety refusals triggered by direct ``will you call the tool?'' probing. To confirm the proxy does not over-estimate attack success, we ran a supplementary real agentic loop experiment (\S\ref{sec:real-agentic-loop}) in which \code{canary\_probe} is actually executed. The real-loop baseline ASR is 0.96 (24/25), slightly \emph{higher} than the proxy measurement of 0.88 on the same framework, confirming the proxy is a conservative estimator. The remaining limitation is that the real-loop experiment uses a smaller sample ($N=25$ per configuration) due to API rate-limit constraints, so it serves as a validity check rather than a replacement for the 100-trial main evaluation.
+
+\paragraph{Defense-aware attacker is single-round.}
+The defense-aware attacker experiment (\S\ref{sec:defense-aware}) uses a single-round design: the attacker crafts payloads with knowledge of the defense but does not iterate based on observed rejections. A fully adaptive multi-round attacker (observe rejection $\rightarrow$ rewrite payload $\rightarrow$ retry) is stronger still. The reported defense-aware ASR (0.15) is therefore a lower bound; the true adaptive ASR could be higher. We discuss multi-round adaptive attackers as future work.
+
+\subsection{External Validity}
+
+\paragraph{Closed-model identity.}
+The closed-weight model evaluation (\S\ref{sec:closed-frontier}) accesses the model via its official API, but the model's exact identity and version cannot be independently verified by the reader. The model's instruction-following strength appears comparable to DeepSeek/Qwen (baseline ASR 0.59 vs.\ 0.57), not to gpt-oss-120b (0.88), so it may not represent the strongest closed-weight frontier models (GPT-4o, Claude 3.5 Sonnet, Gemini). Testing on those models via their official APIs remains the single most important follow-up experiment. We release the evaluation script so that any reader with official API access can produce the missing data point in under an hour.
+
+\paragraph{Framework sample size.}
+The RQ1 structural analysis covers six frameworks. While the combined star count exceeds 105k, the findings may not generalize to all self-healing agent systems---particularly closed-source frameworks or frameworks with different architectural conventions. We address this by selecting frameworks that span diverse design approaches (single-agent retry, multi-agent collaboration, graph-based orchestration, state-managed architectures). The LangGraph experiments (\S\ref{sec:langgraph-validation}) provide cross-framework validation on a third-party framework, and the Reflexion end-to-end exploit (\S\ref{sec:reflexion-e2e}) confirms exploitability on production code that real users run. End-to-end exploits on MetaGPT, Aider, and OpenHands are left as future work.
+
+\paragraph{Cross-framework experiment scope.}
+The LangGraph experiments provide mixed evidence. The forward-path experiment on \code{create\_react\_agent} (entirely library-default, ASR 0.88) confirms production frameworks lack provenance tagging on the tool-output path, but this is the classic indirect injection vector. The recovery-path experiment on \code{StateGraph} (author-constructed recovery node, ASR 0.76 $\rightarrow$ 0.04) demonstrates the trust-escalation trampoline is realizable on a third-party API, but does not establish that production frameworks ship vulnerable recovery logic by default---LangGraph ships no built-in recovery primitive. A full cross-framework evaluation on additional frameworks (e.g., SWE-agent) remains future work.
+
+\paragraph{LLM diversity.}
+The evaluation uses three open-weights LLMs (DeepSeek-V4-Flash, Qwen2.5-72B-Instruct, gpt-oss-120b) and one closed-weight model. The defended ASR is model-dependent: 0.07 on DeepSeek/Qwen, 0.50 on gpt-oss-120b, and 0.36 on the closed-weight model. The model-dependent variation in defended ASR is itself a finding---it reveals that content-level provenance defenses degrade as models become stronger instruction-followers---but limits the generalizability of any single defended ASR number.
+
+\subsection{Construct Validity}
+
+\paragraph{Rule-based attack-success detection.}
+The attack-success classifier is rule-based: it matches refusal phrases, obedience verbs, and tool names in free-form LLM responses. An alternative operationalization---e.g., an LLM-based classifier---might yield different classifications on ambiguous responses. We mitigate this by (i) using a conservative default (ambiguous mentions classified as attack failure), which biases the ASR estimate downward; and (ii) validating the classifier against two human annotators on a stratified sample of 100 responses (Cohen's $\kappa \geq 0.88$, Table~\ref{tab:agreement}). The ``almost perfect'' agreement supports the construct validity of the rule-based detector.
+
+\paragraph{Trampoline signature as binary construct.}
+The trust-escalation trampoline is defined by two binary criteria (Q1: provenance tag; Q2: high-trust frame). An alternative operationalization---e.g., a continuous provenance score---might yield different classifications, particularly for frameworks with partial signatures (LangGraph). We mitigate this by reporting the specific code evidence for each framework (\S\ref{sec:rq1-taxonomy}), allowing readers to assess the construct validity of the classification. The partial-trampoline category (LangGraph) explicitly captures frameworks that do not fit the binary classification cleanly.
+
+\paragraph{Payload representativeness.}
+We use 5 payload variants cycled across 100 samples. A more diverse payload corpus could reveal evasion, though the defense is signature-independent (provenance-based, not pattern matching). The naive Keyword Filter baseline (\S\ref{sec:naive-baseline}) demonstrates the failure mode of signature-based defenses: it loses 34 percentage points of ASR reduction when paraphrased variants are introduced (0.08 $\rightarrow$ 0.42). The \trustorigin{} defense, which operates on provenance rather than content patterns, does not exhibit this signature-dependence.
+
+\subsection{Conclusion Validity}
+
+\paragraph{Multiple comparison handling.}
+The evaluation reports multiple statistical tests across several experiments. We apply a Bonferroni-corrected threshold $\alpha/2 = 0.025$ only to the two main comparisons (baseline vs.\ defended, and baseline vs.\ defense-aware) in Table~\ref{tab:results}, as these are the primary hypothesis tests. Supplementary experiments (naive baseline, cross-model, LangGraph, Reflexion) are descriptive: we report point estimates and Wilson confidence intervals but do not apply further multiple-comparison correction, because (i) the effect sizes are large enough that significance is not in doubt for the main comparisons, and (ii) these experiments answer different research questions rather than re-testing the same hypothesis. Readers concerned about family-wise error rates should treat the supplementary $p$-values as descriptive rather than confirmatory.
+
+\paragraph{Sample size and statistical power.}
+The main \system{} evaluation uses $N=100$ per configuration, sufficient for the large effect size observed (0.57 $\rightarrow$ 0.07). The cross-framework and stronger-model experiments use $N=5$--$10$ per variant (25--50 total per configuration), yielding wider Wilson CIs (e.g., recovery-path baseline $[0.57, 0.89]$). These experiments are under-powered for detecting small-to-moderate effects. We report point estimates and CIs rather than claiming precision beyond what the sample sizes support.
+
+\subsection{Reliability}
+
+\paragraph{Reproducibility.}
+All experiments are supported by released replication scripts and raw logs. The controlled testbed experiment uses \code{evaluation/statistical\_analysis.py} (ASR/CI computation) and \code{evaluation/paper\_draft\_annotation\_agreement.py} (inter-annotator agreement). The LangGraph experiments use \code{evaluation/paper\_draft\_langgraph\_recovery\_v1\_eval.py} (recovery-path) and \code{evaluation/paper\_draft\_langgraph\_real\_eval.py} (forward-path). The Reflexion exploit uses \code{evaluation/paper\_draft\_reflexion\_e2e\_exploit.py}. The naive baseline uses \code{evaluation/paper\_draft\_naive\_baseline.py}. The cross-model evaluation uses \code{evaluation/paper\_draft\_frontier\_model\_eval.py} (gpt-oss-120b) and \code{evaluation/paper\_draft\_frontier\_closed\_eval.py} (closed-weight). The defense-aware attacker uses \code{evaluation/paper\_draft\_adaptive\_attacker.py}. The source-level RQ1 analysis uses \code{paper\_draft\_wild\_case\_study.py}. All raw results (JSON logs) are released alongside the scripts.
+
+\paragraph{Commit fixation.}
+All source-level analysis (RQ1) is performed at fixed commit hashes, recorded in the replication package. The Reflexion end-to-end exploit targets commit \texttt{218cf0e} specifically. The cited code excerpts can be re-fetched and regex-matched at the cited commits by the replication script, ensuring the analysis is reproducible verbatim.
+
+\paragraph{Dynamic evolution.}
+Frameworks evolve rapidly, and the observed patterns may change as developers become aware of the provenance gap. We commit to releasing the analysis scripts so that the classification can be re-run on future commits. The Q1/Q2 judgment criteria are operationalized as deterministic checks in the replication script, reducing interpretation drift across re-runs.

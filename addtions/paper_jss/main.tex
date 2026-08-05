@@ -1,0 +1,117 @@
+%% main.tex — Privilege Containment in Self-Healing LLM Agent Operating Systems (JSS submission)
+%% Elsevier elsarticle template
+\documentclass[review,3p,authoryear]{elsarticle}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Packages
+%% ─────────────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage{balance}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,calc,fit,shapes.geometric,backgrounds}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Hyperref setup
+%% ─────────────────────────────────────────────────────────────
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    citecolor=black,
+    urlcolor=blue,
+    pdftitle={Privilege Containment Design Patterns for Self-Healing LLM Agent Operating Systems},
+    pdfauthor={Anonymous},
+    pdfsubject={Software Architecture, Operating Systems, LLM Agents, Privilege Containment},
+    pdfkeywords={design patterns; privilege containment; self-healing; LLM agent operating systems; CWE-862; confused deputy; exception handler privilege invariant}
+}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Listings setup for Java code
+%% ─────────────────────────────────────────────────────────────
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    captionpos=b,
+    columns=fullflexible,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    numberstyle=\tiny\color{gray},
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    frame=single,
+    rulecolor=\color{black!30},
+    language=Java
+}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Custom macros
+%% ─────────────────────────────────────────────────────────────
+\newcommand{\system}{Recova}
+\newcommand{\reauthgate}{\textsc{Reauthorization Gate}}
+\newcommand{\privinv}{Privilege-Downgrade Invariant}
+\newcommand{\code}[1]{\texttt{#1}}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Title & Authors
+%% ─────────────────────────────────────────────────────────────
+
+\begin{document}
+
+\begin{frontmatter}
+
+    \title{Privilege Containment Design Patterns for Self-Healing LLM Agent Operating Systems}
+
+    %% Author block — anonymized for review
+    \author{Anonymous Author}
+    \address{Anonymous Affiliation}
+
+    \input{abstract}
+
+    \begin{keyword}
+        Design patterns \sep
+        Privilege containment \sep
+        Self-healing LLM agents \sep
+        Operating-system principles \sep
+        CWE-862 \sep
+        Confused deputy \sep
+        Exception handler privilege invariant
+    \end{keyword}
+\end{frontmatter}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Main body
+%% ─────────────────────────────────────────────────────────────
+\input{introduction}
+\input{related_work}
+\input{threat_model}
+\input{defense_mechanism}
+\input{evaluation}
+\input{discussion}
+\input{conclusion}
+\input{ethics}
+
+%% ─────────────────────────────────────────────────────────────
+%%  References
+%% ─────────────────────────────────────────────────────────────
+\bibliographystyle{elsarticle-harv}
+\bibliography{references}
+
+\end{document}

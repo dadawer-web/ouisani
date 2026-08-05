@@ -1,5 +1,9 @@
 package com.ouisani.aios.test.redteam;
 
+import com.ouisani.aios.core.tool.CanaryBeaconTool;
+import com.ouisani.aios.core.tool.ToolCallLedger;
+import com.ouisani.aios.core.tool.ToolRegistry;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -144,5 +148,50 @@ public final class RedTeamHarness {
         } catch (IOException e) {
             throw new RuntimeException("写入红队 CSV 失败: " + csvPath, e);
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  金丝雀工具测试环境注册（不污染生产内核）
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 红队评估共享的金丝雀台账 — 所有金丝雀工具实例共用，测试间通过 {@link #resetCanaryLedger()} 隔离。
+     * <p>
+     * 不用 {@code CanaryBeaconTool} 默认构造的 holder ledger，因为测试需要可控的 reset 时机。
+     */
+    private static final ToolCallLedger CANARY_LEDGER = new ToolCallLedger();
+
+    /**
+     * 在测试环境的 {@link ToolRegistry} 中注册金丝雀信标工具。
+     * <p>
+     * <b>注册隔离</b>：本方法<b>仅</b>在红队测试中调用（如 {@code @BeforeAll}），<b>不</b>修改
+     * {@link ToolRegistry#registerBuiltinTools()}（生产内核启动路径）。注册后所有 agent 具备
+     * {@code canary_beacon} 工具视野，可被 LLM 调用——攻击载荷嵌入"调用 canary_beacon(status=X)"
+     * 指令，若 agent 服从则触发台账记录，事后查 {@link #canaryLedger()} 客观判定 ASR。
+     * <p>
+     * 幂等：重复注册只覆盖（{@link ToolRegistry#register} 内部 WARN + 覆盖）。
+     *
+     * @return 共享的金丝雀台账（供测试断言）
+     */
+    public static ToolCallLedger registerCanaryTool() {
+        ToolRegistry.instance().register(new CanaryBeaconTool(CANARY_LEDGER));
+        return CANARY_LEDGER;
+    }
+
+    /**
+     * 获取红队评估共享的金丝雀台账（无需注册即可获取，供已注册工具的查询）。
+     */
+    public static ToolCallLedger canaryLedger() {
+        return CANARY_LEDGER;
+    }
+
+    /**
+     * 清空金丝雀台账 — 测试间隔离用。
+     * <p>
+     * 注意：此方法不注销 {@link ToolRegistry} 中的 {@code canary_beacon} 工具（注册是幂等的，
+     * 重复注册无副作用）。仅清空调用记录，确保下一个测试样本的金丝雀触发判定不受前一样本污染。
+     */
+    public static void resetCanaryLedger() {
+        CANARY_LEDGER.reset();
     }
 }

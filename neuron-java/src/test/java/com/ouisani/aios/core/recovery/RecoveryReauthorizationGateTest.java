@@ -51,25 +51,37 @@ class RecoveryReauthorizationGateTest {
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  关卡关闭（默认） — 保论文1 字节稳定
+    //  关卡关闭（默认） — 普通结果保字节稳定；副作用结果强制校验
     //════════════════════════════════════════════════════════════════
 
     @Test
-    void gate_disabled_skips_even_for_escalation() {
-        // 关卡关闭（默认）→ 即便 suggested_role=admin（越权），也应 skip 放行
-        RecoveryResult result = RecoveryResult.okRequiringReauthorization("mutation", null);
+    void gate_disabled_skips_non_reauth_results() {
+        // 关卡关闭 + 普通结果（requiresReauthorization=false）→ skip 放行（保字节稳定）
+        RecoveryResult result = RecoveryResult.ok("normal recovery");
         RecoveryContext ctx = contextWith(CURRENT_ROLE, "admin");
         RecoveryReauthorizationGate.ReauthResult r = RecoveryReauthorizationGate.check(result, ctx, pc);
-        assertTrue(r.allowed(), "关卡关闭应放行");
+        assertTrue(r.allowed(), "普通结果应放行");
         assertEquals("SKIP", r.category(), "应返回 SKIP 类别");
     }
 
     @Test
-    void gate_disabled_does_not_block() {
+    void gate_disabled_still_blocks_reauth_escalation() {
+        // 关卡关闭 + 副作用结果（requiresReauthorization=true）+ 越权 → 强制校验拦截
+        // 重构后契约：防越权是硬约束，不受 opt-in 开关控制
         RecoveryResult result = RecoveryResult.okRequiringReauthorization("mutation", null);
         RecoveryContext ctx = contextWith(CURRENT_ROLE, "admin");
+        RecoveryReauthorizationGate.ReauthResult r = RecoveryReauthorizationGate.check(result, ctx, pc);
+        assertFalse(r.allowed(), "副作用结果强制校验：越权角色应被拦截，即便 gate 关闭");
+        assertEquals("UNKNOWN_ROLE", r.category(), "admin 不在白名单 → UNKNOWN_ROLE");
+    }
+
+    @Test
+    void gate_disabled_does_not_block_non_reauth() {
+        // 关卡关闭 + 普通结果 → shouldBlock 返回 false（保字节稳定）
+        RecoveryResult result = RecoveryResult.ok("normal recovery");
+        RecoveryContext ctx = contextWith(CURRENT_ROLE, "admin");
         assertFalse(RecoveryReauthorizationGate.shouldBlock(result, ctx, pc),
-                "关卡关闭不应拦截");
+                "关卡关闭 + 普通结果不应拦截");
     }
 
     // ════════════════════════════════════════════════════════════════

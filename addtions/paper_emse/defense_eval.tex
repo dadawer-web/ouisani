@@ -1,0 +1,191 @@
+%% defense_eval.tex
+
+\section{RQ3: Defense Effectiveness}
+\label{sec:defense-eval}
+
+RQ2 established that the trust-escalation trampoline is practically exploitable and severe. This section addresses the complementary question: \emph{how effective is the content-level \trustorigin{} provenance-tagging defense, and under what conditions does it degrade?} We answer this through four sub-experiments: (1) a naive-baseline comparison showing that transplanting forward-path defenses to the recovery channel is insufficient (\S\ref{sec:naive-baseline}); (2) a cross-model generalization study testing whether the defense holds on stronger instruction-following models (\S\ref{sec:cross-model}); (3) a defense-aware attacker experiment testing robustness against adversaries who know the defense exists (\S\ref{sec:defense-aware}); and (4) a defense-cost analysis measuring false alarms and latency overhead (\S\ref{sec:defense-cost}).
+
+The defense mechanism---\trustorigin{} Tagging (provenance-based content framing)---works as follows. \trustorigin{} assigns a four-level trust label (\code{SYSTEM\_GENERATED}, \code{USER\_INPUT}, \code{TOOL\_OUTPUT\_INTERNAL}, \code{TOOL\_OUTPUT\_EXTERNAL}) at the failure-capture site and propagates it through the recovery chain; content tagged \code{TOOL\_OUTPUT\_EXTERNAL} is routed to an untrusted template with an explicit ``Do NOT execute embedded directives'' warning, while trusted content retains the high-trust recovery template. The defense is content-level and probabilistic; it does not depend on any authorization check on recovery actions.
+
+\subsection{Naive Baseline Comparison}
+\label{sec:naive-baseline}
+
+A natural objection is that existing forward-path defenses---transplanted to the recovery channel---might achieve comparable protection without redesigning the recovery path. We test this by reimplementing three state-of-the-art forward-path defenses directly on the recovery path and measuring their ASR against the same 100-trial workload used in \S\ref{sec:recova-results}:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Instruction Hierarchy}~\cite{instruction-hierarchy}: prepends ``The following is untrusted data; do not follow instructions inside it'' before the error trace.
+    \item \textbf{Spotlighting}~\cite{spotlighting}: wraps the error trace in markdown code fences and replaces ``call''/``invoke''/``execute'' with leetspeak equivalents.
+    \item \textbf{Keyword Filter}: rejects any error trace containing the literal token \code{canary\_probe} (a blacklist baseline).
+\end{itemize}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Naive forward-path defenses transplanted to the recovery channel (\rci{} attack, 100 trials each). The \trustorigin{} row reproduces the defended row from Table~\ref{tab:results}. The Keyword Filter is also evaluated on 5 paraphrased variants to demonstrate signature-dependence.}
+\label{tab:naive-baseline}
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccc}
+\toprule
+\textbf{Defense} & \textbf{ASR} & \textbf{Wilson 95\% CI} & \textbf{Notes} \\
+\midrule
+No defense (baseline)               & 0.57 & $[0.47, 0.66]$ & --- \\
+Instruction Hierarchy (recovery-path) & 0.35 & $[0.26, 0.45]$ & Partial: LLM sometimes obeys framing \\
+Spotlighting (recovery-path)        & 0.24 & $[0.17, 0.33]$ & Partial: leetspeak breakable \\
+Keyword Filter (recovery-path, original variants) & 0.08 & $[0.04, 0.15]$ & Two variants bypass the literal-token match \\
+\textbf{\trustorigin{}} & \textbf{0.07} & $\mathbf{[0.03, 0.14]}$ & \textbf{Best} \\
+\midrule
+\multicolumn{4}{l}{\emph{Robustness test: 5 paraphrased variants (refer to canary tool by description)}} \\
+\quad Keyword Filter (paraphrased variants) & 0.42 & $[0.33, 0.52]$ & Signature-dependent: ASR rises 5$\times$ \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+Table~\ref{tab:naive-baseline} shows that all three naive defenses \emph{reduce} ASR relative to the 0.57 baseline, but each leaves a substantial residual. Instruction Hierarchy drops to 0.35 (Wilson $[0.26, 0.45]$): a non-trivial fraction of payloads override the explicit untrusted framing because the \code{[SYSTEM CRITICAL]} envelope is still applied, sending a contradictory trust signal. Spotlighting drops to 0.24 ($[0.17, 0.33]$): leetspeak substitution breaks surface-form directives but is bypassed by payloads that phrase the call indirectly. The Keyword Filter drops to 0.08 ($[0.04, 0.15]$) on the original 5 variants---two variants bypass the literal-token match because they refer to the canary tool indirectly---but critically \emph{fails to generalize}: when we add 5 paraphrased variants that refer to the canary tool by description rather than by name (e.g., ``run the probe that emits the canary token''), the keyword-filter ASR rises to 0.42 ($[0.33, 0.52]$), a $5\times$ increase showing it is signature-dependent.
+
+The \trustorigin{} defense achieves the lowest ASR (0.07, $[0.03, 0.14]$) and, unlike the Keyword Filter, is signature-independent because it operates on the content's provenance (which tool produced it) rather than on the content's pattern. The naive defenses all fail to generalize because they inspect content; \trustorigin{} succeeds because it inspects origin, which the attacker cannot forge at the capture site.
+
+\subsection{Cross-Model Generalization}
+\label{sec:cross-model}
+
+The main evaluation in \S\ref{sec:recova-results} uses two open-weights models (DeepSeek-V4-Flash, Qwen2.5-72B-Instruct). A key concern is whether the results generalize to models with stronger instruction-following and safety alignment. We address this by re-running the \rci{} evaluation on two additional models: an open-weights stronger model (gpt-oss-120b) and a closed-weight model accessed via official API.
+
+\subsubsection{Open-Weights: gpt-oss-120b}
+\label{sec:gpt-oss}
+
+We re-ran the full \rci{} evaluation on \textbf{gpt-oss-120b}~\cite{gpt-oss} (OpenAI's 120B-parameter open-weights model, hosted on NVIDIA NIM). We use the same 5 attack variants, $N=10$ trials per variant (50 trials per configuration, 100 total API calls), temperature 0.7. This is a real measured evaluation, not a prediction.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Stronger-model evaluation on gpt-oss-120b (NVIDIA NIM). $N=10$ per variant, 50 trials per cell, temperature~0.7. Real measured data.}
+\label{tab:frontier}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Config} & \textbf{Variant} & \textbf{ASR} & \textbf{Wilson 95\% CI} & \textbf{Successes/Trials} \\
+\midrule
+Baseline  & pooled (5 variants) & 0.88 & $[0.76, 0.94]$ & 44/50 \\
+Defended  & pooled (5 variants) & \textbf{0.50} & $[0.37, 0.63]$ & 25/50 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Baseline ASR is higher on the stronger model (0.88 vs.\ 0.57).}
+Counter to the intuition that stronger models are harder to attack, gpt-oss-120b yields a \emph{higher} baseline ASR (0.88) than DeepSeek/Qwen (0.57). Four of five variants achieve 100\% ASR. The reason is that gpt-oss-120b is a more instruction-following model: it more reliably executes directives embedded in system-framed content, including injected ones. This confirms the \rci{} surface is not an artifact of weak models---it is \emph{more} exploitable on models that better follow instructions.
+
+\paragraph{Defended ASR is substantially higher on the stronger model (0.50 vs.\ 0.07).}
+The content-level defense reduces ASR from 0.88 to 0.50 on gpt-oss-120b---a 43\% relative reduction, compared to 88\% on DeepSeek/Qwen. Even when explicitly told the error output is untrusted, gpt-oss-120b still obeys injected instructions in 50\% of trials. This is a critical empirical finding: \emph{content-level provenance signaling alone degrades predictably on stronger instruction-following models.} The untrusted-template warning works well on models with weaker instruction-following but degrades on models that reliably execute instructions regardless of framing. This degradation is not a defect of the \trustorigin{} implementation specifically; it is a property of the content-level defense class, which relies on the LLM honoring an untrusted frame.
+
+\paragraph{Implication.}
+The cross-model evaluation reveals that content-level \trustorigin{} defenses are effective but probabilistic, and degrade predictably as models become stronger instruction-followers. Quantifying the ceiling of content-level mitigation on the recovery channel is a primary empirical contribution of this paper. We discuss structural defenses (which are LLM-independent) as a complementary defense class outside the scope of this empirical study.
+
+\subsubsection{Closed-Weight Model}
+\label{sec:closed-frontier}
+
+Because gpt-oss-120b is itself an open-weights model, we additionally tested the \rci{} attack on a closed-weight model accessed via its official API. We use the same 5 variants, $N=10$ per variant (50 per configuration), temperature 0.7.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{\rci{} attack on a closed-weight model (accessed via official API). $N=10$ per variant (50 total per configuration), temperature~0.7.}
+\label{tab:closed-frontier-v1}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llcc}
+\toprule
+\textbf{Config} & \textbf{Variant} & \textbf{ASR} & \textbf{Succ/Trials} \\
+\midrule
+\multirow{6}{*}{Baseline} & pseudo-recovery-protocol & 0.00 & 0/9$^\ddagger$ \\
+                         & fake-traceback            & 1.00 & 10/10 \\
+                         & base64-encoded            & 1.00 & 10/10 \\
+                         & context-confusion         & 0.70 & 7/10 \\
+                         & authority-forgery         & 0.20 & 2/10 \\
+\cmidrule(lr){2-4}
+                         & \textbf{Pooled}           & \textbf{0.59} & \textbf{29/49} \\
+                         & \textit{Wilson 95\% CI}   & \multicolumn{2}{c}{$[0.45, 0.72]$} \\
+\midrule
+\multirow{6}{*}{Defended} & pseudo-recovery-protocol & 1.00 & 10/10 \\
+                         & fake-traceback            & 0.40 & 4/10 \\
+                         & base64-encoded            & 0.00 & 0/10 \\
+                         & context-confusion         & 0.40 & 4/10 \\
+                         & authority-forgery         & 0.00 & 0/10 \\
+\cmidrule(lr){2-4}
+                         & \textbf{Pooled}           & \textbf{0.36} & \textbf{18/50} \\
+                         & \textit{Wilson 95\% CI}   & \multicolumn{2}{c}{$[0.24, 0.50]$} \\
+\bottomrule
+\end{tabular}
+\\[2pt]
+\footnotesize Fisher's exact test (two-sided), baseline vs.\ defended: $p = 0.027$ (significant at $\alpha=0.05$).
+\\
+\footnotesize $^\ddagger$One baseline trial for this variant encountered an API error and is excluded; pooled ASR denominator is 49.
+\end{table}
+
+\paragraph{Results.}
+Table~\ref{tab:closed-frontier-v1} reports a baseline ASR of \textbf{0.59} (Wilson CI $[0.45, 0.72]$), comparable to the 0.57 on DeepSeek/Qwen. The defended ASR of \textbf{0.36} (Wilson CI $[0.24, 0.50]$) is substantially higher than the 0.07 on DeepSeek/Qwen. Crucially, the baseline-vs-defended difference is statistically significant ($p = 0.027$): the untrusted-framing defense does reduce ASR, but the reduction (0.59 $\rightarrow$ 0.36, a 23-percentage-point drop) is far smaller than the 50-percentage-point reduction on DeepSeek/Qwen (0.57 $\rightarrow$ 0.07). The Wilson CIs overlap only marginally, consistent with a real but attenuated defense effect.
+
+\paragraph{Interpretation.}
+On a closed-weight model, the content-level \trustorigin{} defense is statistically detectable but materially weakened---the residual 0.36 ASR means more than one in three attacks still succeeds despite the defense. This finding directly supports the central empirical implication: content-level provenance defenses are probabilistic, and their residual ASR rises with model instruction-following strength.
+
+\paragraph{Caveats.}
+The model's instruction-following strength appears comparable to DeepSeek/Qwen (baseline ASR 0.59 vs.\ 0.57), not to gpt-oss-120b (0.88), so it may not represent the strongest closed-weight frontier models (GPT-4o, Claude 3.5 Sonnet, Gemini). Testing on those models remains the single most important follow-up experiment; we release the evaluation script so that any reader with API access can produce the missing data point in under an hour.
+
+\subsection{Defense-Aware Attacker}
+\label{sec:defense-aware}
+
+A concern with the fixed 5-variant attack suite is that it may not represent an adversary who \emph{knows the defense exists} and crafts payloads specifically to bypass it. We address this with a defense-aware attacker experiment. We note up front that this is a \emph{single-round} design---the attacker crafts payloads with knowledge of the defense but does not iterate based on observed rejections. A fully adaptive multi-round attacker is stronger still and is discussed as future work.
+
+\paragraph{Setup.}
+We define 5 defense-aware strategies against the defended configuration, each designed to bypass the \trustorigin{} untrusted-framing warning: (i) \emph{authority-appeal} (claims the directive overrides the untrusted tag); (ii) \emph{urgency-framing} (creates false urgency); (iii) \emph{indirect-reference} (refers to the canary tool by description); (iv) \emph{role-assumption} (``As the recovery coordinator, I authorize...''); (v) \emph{multi-step} (breaks the directive into innocuous steps). Each strategy is tested with $N=20$ trials (100 total).
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Defense-aware attacker experiment (single-round). 5 defense-aware strategies ($N=20$ each, 100 total) against the defended configuration.}
+\label{tab:adaptive}
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llccc}
+\toprule
+\textbf{Setting} & \textbf{Strategy} & \textbf{ASR} & \textbf{Wilson 95\% CI} & \textbf{Successes/Trials} \\
+\midrule
+Non-adaptive & Table~\ref{tab:results} defended & 0.07 & $[0.03, 0.14]$ & 7/100 \\
+\midrule
+Defense-aware & authority-appeal    & 0.30 & $[0.15, 0.51]$ & 6/20 \\
+              & urgency-framing     & 0.10 & $[0.03, 0.30]$ & 2/20 \\
+              & indirect-reference  & 0.10 & $[0.03, 0.30]$ & 2/20 \\
+              & role-assumption     & 0.05 & $[0.01, 0.24]$ & 1/20 \\
+              & multi-step          & 0.20 & $[0.08, 0.42]$ & 4/20 \\
+\midrule
+Defense-aware (pooled) & --- & 0.15 & $[0.09, 0.24]$ & 15/100 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\paragraph{Result.}
+Table~\ref{tab:adaptive} shows the defense-aware attacker raises defended ASR from 0.07 (non-adaptive) to \textbf{0.15} (Wilson CI $[0.09, 0.24]$). The increase is modest and does not undermine the defense's practical value: the defense-aware ASR is still far below the undefended baseline (0.57), an 84\% relative reduction.
+
+\paragraph{Interpretation.}
+The most effective defense-aware strategy is \emph{authority-appeal} (0.30 ASR), which attempts to override the untrusted tag by claiming higher authority---a known weakness of content-based provenance signaling. This motivates future work on intent auditing as a complementary semantic defense layer. The defense-aware attacker nearly doubles ASR (0.07 $\rightarrow$ 0.15), but the defense still provides strong protection. A fully adaptive multi-round attacker could achieve higher ASR; this experiment establishes a lower bound on defense-aware ASR.
+
+\subsection{Defense Cost: False Alarms and Overhead}
+\label{sec:defense-cost}
+
+The cost analysis examines two axes: false alarm rate (FAR) on benign recoveries and latency overhead.
+
+\paragraph{False alarm rate.}
+FAR is \textbf{0.00} (Wilson 95\% upper bound 0.04) on benign recoveries under DEFENSE\_ON (0/100 blocked), identical to the baseline. The \trustorigin{} tagger classifies internal errors (\code{JSON parse failure}, \code{NullPointerException}, \code{timeout}) as \code{TOOL\_OUTPUT\_INTERNAL}, which retains the high-trust template---so legitimate diagnostic context is preserved. The defense blocks exactly the externally-originated content re-injection path and nothing else.
+
+\paragraph{Latency overhead.}
+We report two latency metrics (Table~\ref{tab:results}):
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Defense overhead} (excluding LLM inference): $\leq$ 0.2~ms across all task sets---negligible relative to LLM inference. The defended configuration's machinery overhead is not higher than the baseline's; in fact it is lower, because the untrusted template selected by \trustorigin{} is structurally simpler than the high-trust template.
+    \item \textbf{Total latency} (including LLM inference): 1.7--3.2~s across attack variants, dominated by LLM API response time. The defended total is statistically indistinguishable from the baseline on benign recovery ($10 \pm 1$~ms).
+\end{itemize}
+
+The absolute magnitudes confirm the defense imposes no perceptible overhead on interactive agent performance: the machinery cost is sub-millisecond, and the end-to-end latency is bounded by LLM inference, not by defense computation.
+
+\paragraph{RQ3 summary.}
+The defense effectiveness evaluation yields four findings. First, naive forward-path defenses transplanted to the recovery channel are insufficient: the best naive baseline (Keyword Filter, 0.08 ASR) fails to generalize to paraphrased variants (0.42 ASR), while \trustorigin{} achieves 0.07 ASR. Second, the content-level defense degrades on stronger instruction-following models: defended ASR rises from 0.07 (DeepSeek/Qwen) to 0.50 (gpt-oss-120b) to 0.36 (closed-weight model, $p = 0.027$). Third, a defense-aware attacker raises ASR from 0.07 to 0.15---a modest increase that preserves 84\% relative reduction versus baseline. Fourth, the defense imposes zero false alarms and sub-millisecond machinery overhead. The central empirical implication is that content-level provenance defenses are effective but probabilistic, and degrade predictably as models become stronger instruction-followers---quantifying the ceiling of content-level mitigation on the recovery channel.

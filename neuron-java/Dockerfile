@@ -47,4 +47,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8080/ || exit 1
 
 # Launch AIOS Kernel
-ENTRYPOINT ["sh", "-c", "java ${JAVA_OPTS} -cp /opt/aios/aios-java.jar com.ouisani.aios.user.cli.TestFullSystemBoot"]
+ENTRYPOINT ["sh", "-c", "java ${JAVA_OPTS} -cp /opt/aios/aios-java.jar com.ouisani.aios.user.cli.AiosShell"]

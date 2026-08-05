@@ -1,0 +1,37 @@
+%% cover_letter_jss.tex
+%% Compile separately: pdflatex cover_letter_jss.tex
+
+\documentclass[11pt]{letter}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+
+\begin{document}
+
+\begin{letter}{Editor-in-Chief\\
+Journal of Systems and Software}
+
+\opening{Dear Editor,}
+
+\textbf{Subject: Submission of manuscript ``Enforcing the Privilege-Downgrade Invariant on the Recovery Path of Self-Healing LLM Agent Systems: A Reauthorization Gate Design Pattern''}
+
+We are pleased to submit the above-referenced manuscript for consideration by the \emph{Journal of Systems and Software}.
+
+\textbf{Summary.}
+This paper studies an architectural authorization flaw in self-healing LLM agent systems---automated recovery pipelines that capture execution failures and ask a diagnostic LLM to propose remedial actions. We identify a recurring anti-pattern, the \emph{unchecked recovery sink}, in which a recovery strategy executes a privileged side effect (such as replacing an agent role or mutating the agent topology) without re-checking the authorization that gates the forward execution path. We trace this anti-pattern to the classical \emph{confused deputy} problem (Hardy 1988) and to CWE-862 (Missing Authorization), and we propose a single OS-principled design pattern---the \emph{Reauthorization Gate}---that ports the kernel exception-handler privilege invariant to the LLM agent recovery path. The gate enforces that no recovery action may exceed the privilege of the failed execution it remedies, and concentrates privilege re-verification at a single choke point through which all side-effecting recovery actions must flow.
+
+\textbf{Contribution type.}
+This is a software architecture and design contribution. The paper focuses on: (i)~formalizing the recovery-path authorization boundary as an architectural concept and identifying its root cause in the confused-deputy tradition; (ii)~proposing a reusable design pattern with OS analogies (privilege containment at the exception-handler boundary, capability-based gating) and a reference implementation; and (iii)~providing a concise validation that the pattern is implementable with zero false alarms and sub-millisecond overhead, and that its defended attack success rate is 0.00 by construction (the whitelist invariant rejects out-of-set roles deterministically, independently of the LLM).
+
+\textbf{Fit with JSS.}
+The manuscript fits JSS's scope in software architecture, design patterns, and system design: it identifies an architectural anti-pattern in an emerging system class (self-healing LLM agents), proposes a reusable design pattern grounded in classical OS principles (the privilege-downgrade invariant enforced at a centralized reauthorization gate), and validates its implementability. The contribution is structural rather than empirical: the defense guarantee is by construction (an authorization-set check), not a probabilistic measurement, and the paper's scope is the pattern and its reference implementation rather than a multi-framework empirical study.
+
+We confirm that this manuscript has not been published and is not under consideration elsewhere. We look forward to the editors' and reviewers' feedback.
+
+\closing{Sincerely,\\[1em]
+Anonymous Author(s)\\
+(for double-blind review)}
+
+\end{letter}
+
+\end{document}

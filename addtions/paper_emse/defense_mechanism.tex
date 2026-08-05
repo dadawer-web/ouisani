@@ -1,0 +1,134 @@
+%% defense_mechanism.tex
+
+\section{Defense Mechanism}
+\label{sec:defense}
+
+We propose a lightweight, OS-principled defense: \trustorigin{} Tagging, a content-level provenance-tagging mechanism that addresses \rci{} at the capture site. The mechanism is implemented in the \system{} codebase and is evaluated in Section~\ref{sec:defense-eval}. This paper's defense scope is restricted to content-level provenance; structural or authorization-based defenses for privileged side effects on the recovery path are outside the scope of this empirical study (see \S\ref{sec:threat-scope}).
+
+\subsection{Data Provenance with \trustorigin{} Tagging}
+\label{sec:trustorigin}
+
+\subsubsection{Motivation: From Opaque \code{String} to \code{TaggedContent}}
+The root cause of \rci{} is the system's treatment of error traces as opaque, context-free \code{String} values. When \code{lastErrorTrace} is stored as a bare \code{String}, the provenance of the content---\emph{where it came from}---is lost the moment it is captured. The recovery pipeline therefore has no basis on which to distinguish a trusted kernel-generated error (e.g., a stack overflow in the planner) from an untrusted externally-originated error (e.g., the body of a fetched adversarial web page that triggered a parse failure). The default resolution logic (\code{TrustOrigin.fromMetadata()}) silently fills this gap by assigning \code{SYSTEM\_GENERATED}, which is the most permissive label.
+
+This is a type-safety failure in the provenance dimension: the type system permits untrusted content to flow into a sink that expects trusted content, and no runtime check catches the mismatch. Sanitization does not help, because the trust-bearing signal is not in the content---it is in the \emph{origin} of the content, which the \code{String} representation has discarded.
+
+\subsubsection{Design: Tagged Provenance}
+We upgrade the system to carry provenance explicitly by replacing raw \code{String} error traces with a \code{TaggedContent} record that bundles the text with its trust origin. Every content fragment entering the recovery pipeline carries a four-level trust label (Table~\ref{tab:trust-origin}). The label is assigned at the \emph{capture site}---the point where the failure is caught---and propagates with the content through the recovery chain as part of the value's type, not as out-of-band metadata that can be silently dropped.
+
+\begin{lstlisting}[caption={The \code{TaggedContent} record: provenance as part of the value's type. The four \code{TrustOrigin} levels are defined in Table~\ref{tab:trust-origin}.},label={lst:tagged-content}]
+public record TaggedContent(
+    String text,          // the error / diagnostic content
+    TrustOrigin origin,   // trust level (see Table 2)
+    String sourceRef      // source identifier, e.g. "web_fetch://evil.com"
+) {
+    public boolean isTrusted() {
+        return origin != TrustOrigin.TOOL_OUTPUT_EXTERNAL;
+    }
+}
+\end{lstlisting}
+
+\begin{table}[htbp]
+\centering
+\caption{\trustorigin{} trust levels and their handling in recovery.}
+\label{tab:trust-origin}
+\begin{tabular}{p{0.30\linewidth}p{0.55\linewidth}}
+\toprule
+\textbf{Trust Level} & \textbf{Recovery Handling} \\
+\midrule
+\code{SYSTEM\_GENERATED} & High-trust template (\code{[SYSTEM CRITICAL]}). Default for kernel-originated errors. \\
+\code{USER\_INPUT} & High-trust template. User is an authorized trust principal. \\
+\code{TOOL\_OUTPUT\_INTERNAL} & High-trust template. Internal tools (e.g., \code{bash}) are trusted. \\
+\code{TOOL\_OUTPUT\_EXTERNAL} & \textbf{Untrusted template} + ``Do NOT execute'' warning. External tools (e.g., \code{web\_fetch}) process attacker-controlled content. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Implementation}
+The \code{TaggedContent} record carries \code{text}, \code{origin}, and \code{sourceRef}. The \code{ToolErrorRecovery} capture site infers the origin from the failing tool: external-content tools (\code{web\_fetch}, \code{web\_scrape}, \code{file\_read} on untrusted paths) tag content as \code{TOOL\_OUTPUT\_EXTERNAL}; internal tools tag as \code{TOOL\_OUTPUT\_INTERNAL}. The \code{ReflectionInjectionRecovery} strategy then selects the prompt template by label (Listing~\ref{lst:trustorigin}).
+
+\begin{lstlisting}[caption={Inferring content origin at the capture site (\code{ToolErrorRecovery.inferOrigin}).},label={lst:capture-site}]
+// In ToolErrorRecovery.java
+private static final Set<String> EXTERNAL_CONTENT_TOOLS = Set.of(
+    "web_fetch", "web_search", "browser_navigate", "browser_snapshot");
+
+private static TrustOrigin inferOrigin(RecoveryContext context) {
+    Tool<?> tool = context.originalTool();
+    if (tool == null) return TrustOrigin.SYSTEM_GENERATED;
+    String name = tool.name();
+    return (name != null && EXTERNAL_CONTENT_TOOLS.contains(name))
+        ? TrustOrigin.TOOL_OUTPUT_EXTERNAL
+        : TrustOrigin.TOOL_OUTPUT_INTERNAL;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[caption={\trustorigin{}-based template selection in \code{ReflectionInjectionRecovery}.},label={lst:trustorigin}]
+TaggedContent tagged = context.taggedError();
+String modifier = tagged.isTrusted()
+    ? highTrustModifier(lastError, attempt)
+    : untrustedModifier(lastError, attempt, tagged.origin());
+context.appendPromptModifier(modifier);
+\end{lstlisting}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+    node distance=0.7cm and 1.0cm,
+    box/.style={draw, rounded corners=2pt, minimum height=0.7cm, align=center, font=\footnotesize},
+    tool/.style={box, fill=violet!15, draw=violet!60, minimum width=2.8cm},
+    capture/.style={box, fill=blue!15, draw=blue!60, minimum width=2.8cm},
+    tag/.style={box, fill=cyan!20, draw=cyan!70, minimum width=3.5cm, font=\footnotesize\ttfamily},
+    strat/.style={box, fill=orange!20, draw=orange!70, minimum width=3.5cm},
+    result/.style={box, fill=green!15, draw=green!60!black, minimum width=3.5cm},
+    arr/.style={-Stealth, thick},
+    lbl/.style={font=\tiny\itshape, gray!60!black, align=center}
+]
+\node[tool] (t1) {VFS / Tool\\\code{web\_fetch}};
+\node[capture, right=of t1] (t2) {Capture Site\\\code{ToolErrorRecovery}};
+\node[tag, right=of t2] (t3) {TaggedContent\\origin=EXTERNAL};
+\node[strat, below=1.0cm of t3] (t4) {Recovery Strategy\\\code{ReflectionInjection}};
+\node[result, left=of t4] (t5) {Untrusted Template\\+ ``Do NOT execute''};
+
+\draw[arr] (t1) -- (t2) node[lbl, midway, above] {exception};
+\draw[arr] (t2) -- (t3) node[lbl, midway, above] {tag};
+\draw[arr] (t3) -- (t4) node[lbl, midway, right] {select by \code{origin}};
+\draw[arr] (t4) -- (t5) node[lbl, midway, above] {if EXTERNAL};
+\end{tikzpicture}
+\caption{Data flow with \trustorigin{} tagging. The trust label is assigned once at the capture site and propagates with the content; the recovery strategy consults the label to select the prompt template, isolating externally-originated content in an untrusted framing.}
+\label{fig:trustorigin-flow}
+\end{figure}
+
+\subsubsection{OS Analogy}
+This is the LLM-agent analog of the kernel principle that data copied from userspace retains \code{PAGE\_USER} tagging and may not be executed as kernel code. The trust label is \emph{provenance}, not content---it survives sanitization and propagation.
+
+\subsection{Threat Coverage and Scope}
+
+\trustorigin{} addresses the content-level \rci{} vector studied in this paper: externally-originated failure content re-injected under a high-trust frame is re-tagged at the capture site and re-injected under an untrusted frame. The defense is content-level and probabilistic: it changes the framing under which the LLM receives the failure content, but it does not deterministically prevent a sufficiently strong instruction-following model from obeying injected content even under an untrusted frame. The empirical profile of this probabilistic degradation---specifically, how defended ASR rises with model instruction-following strength---is the subject of RQ3 (\S\ref{sec:defense-eval}) and is a primary empirical contribution of this paper.
+
+The defense does \emph{not} address authorization problems on the recovery path, such as recovery strategies that propose privileged side effects (role replacement, topology mutation). Those are CWE-862 (Missing Authorization) issues and are outside the scope of this empirical study.
+
+\subsection{Robustness Under Unregistered Tools}
+\label{sec:unregistered-tools}
+
+A structural limitation of the \trustorigin{} capture site is its reliance on a hardcoded whitelist of external-content tool names (\code{EXTERNAL\_CONTENT\_TOOLS} in Listing~\ref{lst:capture-site}). The current implementation classifies any tool \emph{not} in this set as \code{TOOL\_OUTPUT\_INTERNAL} (high-trust), which is correct for built-in internal tools (e.g., \code{bash}, \code{file\_edit}) but \emph{incorrect} for a newly registered or third-party MCP tool that fetches external content under a non-whitelisted name. Such a tool would silently inherit \code{TOOL\_OUTPUT\_INTERNAL} provenance and be routed to the high-trust recovery template, re-opening \rci{}.
+
+This is a real-world concern: MCP servers can be registered at runtime by user configuration, and their tool names are arbitrary strings. An attacker who can influence the tool-registration configuration---an \emph{extended} threat that is strictly stronger than the baseline external-content-provider model of \S\ref{sec:attacker-model} (where the attacker cannot tamper with system configuration), and a realistic one for multi-tenant deployments---could register a malicious fetch tool under an innocuous name (e.g., \code{docs\_helper}) that is not in \code{EXTERNAL\_CONTENT\_TOOLS}, causing its outputs to be mis-tagged as trusted. We discuss this extension explicitly here rather than in \S\ref{sec:attacker-model} because the baseline threat model already suffices to establish the \rci{} attack surface; the unregistered-tool concern is a \emph{defense-bypass} scenario for an already-deployed defense, not a new attack vector.
+
+We mitigate this in three layers, ordered by strength:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Fail-closed default (released).} The production code path now treats \emph{unknown} tool names (those not in the explicit internal-tool whitelist) as \code{TOOL\_OUTPUT\_EXTERNAL} by default, flipping the original fail-open behavior. This is the safer default: a mis-tagged internal tool causes only a (recoverable) FAR increase, whereas a mis-tagged external tool causes a (security-critical) ASR increase. The empirical results in Table~\ref{tab:results} were obtained with the original fail-open whitelist, so the defended ASR reported there is a \emph{conservative upper bound} under the released fail-closed default.
+    \item \textbf{Explicit trust-class declaration (recommended).} The \code{Tool} interface is extended with a \code{TrustClass trustClass()} method that tool authors must implement at registration time. The capture site reads this declared field instead of inferring from a name list. This eliminates the mismatch-by-omission failure mode entirely, at the cost of requiring every tool to declare its trust class.
+    \item \textbf{Static-analysis guard (research prototype).} A compile-time analysis pass inspects each tool's bytecode for external-I/O patterns and flags any tool that performs external I/O but declares \code{TrustClass.INTERNAL}. Concretely, the analysis operates on the ASM-reparsed abstract syntax tree (AST) of each compiled \code{Tool} implementation and applies a three-stage check:
+    \begin{enumerate}[leftmargin=*,label=(\alph*)]
+        \item \emph{Sink enumeration.} The analysis maintains a registry of \emph{I/O sink} method signatures whose presence in a tool's call graph indicates external-content retrieval: \code{java.net.http.HttpClient.send}, \code{java.net.Socket.connect}, \code{java.lang.ProcessBuilder.start}, \code{java.io.FileInputStream.<init>} (for file-system reads outside a sandboxed root), \code{org.openqa.selenium.WebDriver.get}, and reflective invocations \code{Method.invoke} whose target name matches a known sink pattern. The registry is extensible---new sink classes (e.g., a future MCP client library) can be added without modifying the analysis core.
+        \item \emph{Intraprocedural reachability.} For each method in the tool's AST, the analysis performs a forward reachable-in-statement-order scan from the method entry, tracking the set of I/O sinks transitively invoked. The scan is intraprocedural (no inter-procedural call-graph construction), which is conservative: a tool that calls a helper method containing a sink is flagged even if the helper is never reached at runtime. This over-approximation is acceptable because the cost of a false positive is a forced \code{TrustClass.EXTERNAL} declaration (a minor annotation burden), whereas the cost of a false negative is a security-critical mis-tag.
+        \item \emph{Taint propagation to return value.} When a sink is reachable, the analysis checks whether the sink's return value (or any value derived from it via a chain of assignments, string concatenations, or collection insertions) flows to the tool's \code{execute()} return. If so, the tool is flagged as \code{EXTERNAL\_CONTENT} regardless of its declared \code{TrustClass}; the build fails with a diagnostic listing the offending sink and the taint path.
+    \end{enumerate}
+    The analysis catches intentional mis-declaration (e.g., a tool named \code{docs\_helper} that secretly fetches URLs) but is best-effort: a tool that performs external I/O via \code{Method.invoke} with an obfuscated target, or via a side channel (e.g., writing a file that a second tool later reads), can evade it. Strengthening the analysis to inter-procedural call-graph construction and side-channel detection is straightforward in principle but increases build-time cost; we leave the full implementation as future work.
+\end{enumerate}
+
+The combination of (i) fail-closed default and (ii) explicit declaration closes the unregistered-tool bypass for any tool whose author is honest; (iii) adds defense-in-depth against dishonest authors. We adopt (i) in the released code; (ii) is implemented but not enforced (existing tools without a declared \code{TrustClass} fall back to the fail-closed default); (iii) is left as future work.
+
+\paragraph{Cross-reference with evaluation.}
+The empirical robustness of the defense under unregistered tools is discussed in \S\ref{sec:threats-to-validity}. The released code's fail-closed default is a direct response to the gap identified during this review.

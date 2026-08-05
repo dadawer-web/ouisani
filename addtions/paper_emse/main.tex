@@ -1,0 +1,123 @@
+%% main.tex — Trust Assumptions in Self-Healing LLM Agent Frameworks (EMSE submission)
+%% Elsevier elsarticle template
+\documentclass[review,3p,authoryear]{elsarticle}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Packages
+%% ─────────────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage{balance}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,calc,fit,shapes.geometric,backgrounds}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Hyperref setup
+%% ─────────────────────────────────────────────────────────────
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    citecolor=black,
+    urlcolor=blue,
+    pdftitle={Recovery-Channel Prompt Injection in Self-Healing LLM Agent Frameworks: A Multi-Case Study and Controlled Empirical Evaluation},
+    pdfauthor={Anonymous},
+    pdfsubject={Empirical Software Engineering, LLM Agents, Self-Healing Systems, Prompt Injection},
+    pdfkeywords={empirical software engineering; LLM agents; self-healing; error recovery; recovery-channel prompt injection; trust boundaries; grounded theory; multiple-case study}
+}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Listings setup for Python code
+%% ─────────────────────────────────────────────────────────────
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    captionpos=b,
+    columns=fullflexible,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    numberstyle=\tiny\color{gray},
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2,
+    frame=single,
+    rulecolor=\color{black!30},
+    language=Python
+}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Custom macros
+%% ─────────────────────────────────────────────────────────────
+\newcommand{\system}{Recova}
+\newcommand{\rci}{Recovery-Channel Prompt Injection}
+\newcommand{\trustorigin}{\textsc{TrustOrigin}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Title & Authors
+%% ─────────────────────────────────────────────────────────────
+
+\begin{document}
+
+\begin{frontmatter}
+
+    \title{Recovery-Channel Prompt Injection in Self-Healing LLM Agent Frameworks: A Multi-Case Study and Controlled Empirical Evaluation}
+
+    %% Author block — anonymized for review
+    \author{Anonymous Author}
+    \address{Anonymous Affiliation}
+
+    \input{abstract}
+
+    \begin{keyword}
+        Empirical software engineering \sep
+        LLM agents \sep
+        Self-healing \sep
+        Error recovery \sep
+        Recovery-channel prompt injection \sep
+        Trust boundaries \sep
+        Grounded theory \sep
+        Multiple-case study
+    \end{keyword}
+\end{frontmatter}
+
+%% ─────────────────────────────────────────────────────────────
+%%  Main body
+%% ─────────────────────────────────────────────────────────────
+\input{introduction}
+\input{background}
+\input{threat_model}    %% Threat model, attack chain, scope
+\input{related_work}
+\input{methodology}
+\input{results}         %% RQ1: Prevalence (structural code analysis + taxonomy)
+\input{severity}        %% RQ2: Exploitability and Severity
+\input{defense_mechanism}  %% Defense design (TrustOrigin Tagging)
+\input{defense_eval}    %% RQ3: Defense Effectiveness
+\input{discussion}
+\input{threats_to_validity}
+\input{conclusion}
+\input{ethics}
+
+%% ─────────────────────────────────────────────────────────────
+%%  References
+%% ─────────────────────────────────────────────────────────────
+\bibliographystyle{elsarticle-harv}
+\bibliography{references}
+
+\end{document}

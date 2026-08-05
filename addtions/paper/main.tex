@@ -1,0 +1,104 @@
+% =============================================================================
+%  Neuron: 多租户大语言模型智能体内核下的资源—安全联合治理
+%  (Coupled Resource-Security Governance for Multi-Tenant Agent Runtimes)
+%
+%  目标期刊：Journal of Systems Architecture (JSA, CCF-B)
+%  模板：Springer LNCS 风格（可按 JSA 模板替换 documentclass）
+% =============================================================================
+\documentclass[10pt,letterpaper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\geometry{margin=1in}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\graphicspath{{figures/}{../figures/}}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{amsmath,amssymb}
+
+% itemize 项目符号：用 math bullet (CMSY 矢量) 替代默认 textbullet (OT1→tcrm 位图回退)。
+% 不加此行时，\textbullet 在 OT1 编码下回退到 tcrm1000.600pk 位图字体，渲染为巨大黑块。
+\renewcommand{\labelitemi}{$\bullet$}
+
+% I/O 宏：用 Helvetica 字体使大写 I 与数字 1 明确区分。
+% CMR/CMTI/CMSS 的 I 均为竖线形态，在各种字号下都被用户误读为 1（4 轮迭代验证）。
+% Helvetica (NimbusSan) 的 I 带全宽水平横杠（顶+底），与 1（斜旗顶）形态完全不同，彻底消除混淆。
+\newcommand{\IO}{\texorpdfstring{{\fontfamily{phv}\selectfont I/O}}{I/O}}
+
+\title{Neuron: Coupled Resource--Security Governance for\\Multi-Tenant LLM Agent Runtimes}
+% 中文原标题：多租户大语言模型智能体内核下的资源—安全联合治理
+\author{Anonymous Authors}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\textbf{Scope and trust boundary.} This paper presents a \emph{runtime-level
+middleware} for multi-tenant large language model (LLM) agent governance.
+We adopt OS-kernel terminology (cgroup, syscall, OOM killer) strictly as a
+\emph{functional analogy} for the logical role of each primitive; the
+trust boundary is the JVM/container, not a hardware ring. The enforcement
+mechanisms are language-level constructs---\texttt{InheritableThreadLocal}
+propagation, token-bucket rate limiting, depth-threshold policies, and a
+shared per-turn trace identifier---not a new operating-system kernel in
+the seL4 sense. The contribution is the governance \emph{design} and its
+coupling properties, not kernel-enforced isolation.
+
+\textbf{Problem.} The deployment of multi-tenant LLM agent platforms
+exposes a class of \emph{coupled resource--security failures} that
+layer-separated isolation cannot prevent: under resource contention, the
+security module is itself starved, and during the contention window that
+precedes a hard failure, privileged operations slip through a permission
+layer with no causal link to the ongoing attack. The root cause is that
+resource control, execution isolation, and access control maintain
+disjoint audit trails, and LLM-integrated machine agents further widen
+the surface through runtime sub-agent spawning and natural-language
+privilege escalation.
+
+\textbf{Approach.} We present \textbf{Neuron}, a multi-tenant LLM agent
+governance runtime built on \emph{coupled governance}. Two distinct
+mechanisms realize the coupling: a per-turn \emph{trace identifier}
+provides audit correlation across the resource, sandbox, and permission
+layers, while a \emph{cross-layer joint-decision mechanism} lets a
+resource-layer signal (cumulative rate-limit rejection count) tighten
+the permission verdict in real time. Neuron further enforces
+spawn-time privilege non-increase and depth-aware escalation, closing
+the LIM-specific attack surface. \emph{The threat model assumes the
+attacker can already issue a malicious escalation request;} Neuron does
+not inspect prompt content and does not defend against prompt injection
+(the upstream cause of such requests). The contribution is
+\emph{enforcement} (once a request arrives, the runtime guarantees
+interception), not end-to-end prevention.
+
+\textbf{Evidence.} Three experiments substantiate the central claim.
+(1)~A permission-layer starvation experiment shows decision correctness
+degrades under resource pressure without coupling, and is preserved at
+$100\%$ with coupled governance. (2)~A cross-layer joint-decision
+experiment shows the resource signal changing the permission verdict in
+real time. (3)~An external-framework comparison replays the same
+probes on AutoGen, LangGraph, and MCP, confirming the structural gap is
+not an artifact of our codebase. Across all scenarios, coupled
+governance drives the attack success rate to $0\%$. We explicitly
+enumerate the conditions under which the guarantees degrade or fail.
+\end{abstract}
+
+% ── 章节导入 ──────────────────────────────────────────────────────────────────
+\input{sections/01-introduction}
+\input{sections/02-background_and_motivation}
+\input{sections/02b-threat_model}
+\input{sections/03-system_architecture}
+\input{sections/04-evaluation}
+\input{sections/05-related_work}
+\input{sections/06-conclusion}
+\input{sections/07-ethics}
+
+% ── 附录 ────────────────────────────────────────────────────────────────────
+\input{sections/08-appendix}
+
+% ── 参考文献 ──────────────────────────────────────────────────────────────────
+\bibliographystyle{plain}
+\bibliography{refs}
+
+\end{document}
