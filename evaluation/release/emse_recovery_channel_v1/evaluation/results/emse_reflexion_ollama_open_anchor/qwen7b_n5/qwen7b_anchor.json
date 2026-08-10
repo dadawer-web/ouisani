@@ -3,6 +3,7 @@
   "framework": "Reflexion",
   "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
   "model": "qwen:7b",
+  "ollama_digest": "2091ee8c8d8f27f790c298265b1353da099a276e6c612e3b4864e72f1993cc33",
   "ollama_metadata": {
     "model": "qwen:7b",
     "base_url": "http://127.0.0.1:11434/v1",
