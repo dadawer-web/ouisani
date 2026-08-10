@@ -1,10 +1,10 @@
 %% cover_letter_emse.tex
 %% Compile separately: pdflatex cover_letter_emse.tex
 
-\documentclass[10pt]{letter}
+\documentclass[9pt]{letter}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage[margin=0.8in]{geometry}
+\usepackage[margin=0.65in]{geometry}
 
 \begin{document}
 
@@ -17,7 +17,8 @@ Empirical Software Engineering}
 \textbf{``Recovery-Channel Prompt Injection in Self-Healing LLM Agent Frameworks''}
 
 We are pleased to submit the above-referenced manuscript for consideration by
-\emph{Empirical Software Engineering}.
+\emph{Empirical Software Engineering}, specifically the special issue
+\emph{Agentic Software Engineering: The Rise of AI Teammates}.
 
 \textbf{Summary.}
 This paper studies recovery-channel prompt injection: externally originated
@@ -34,33 +35,36 @@ success from 0.776 to 0.548 with zero matched benign false positives.  The
 paper's design implication is to pair provenance
 handling with structural authorization checks at recovery sinks.
 
+The manuscript directly fits three themes of the special issue.  It studies
+\emph{Failure Patterns and Risks} through a cross-framework taxonomy of
+recovery-path trust gaps and security vulnerabilities; \emph{Architectures for
+Agents} through the source-level analysis of retry, tool-error, and recovery
+transport paths; and \emph{Testing and Evaluation} through native-framework
+execution, matched benign controls, and framework/model/payload-stratified
+measurements.
+
 We do not claim a new underlying language-model failure mode.  The contribution
-is a software-engineering characterization of a distinct framework transport
-path and trust boundary: externally influenced failure content is captured,
-reframed, and re-injected by recovery infrastructure.  The unit of analysis is
-the fixed-revision recovery implementation, and the results are reported for
-maintainers and designers of agent frameworks.
+is an empirical software-engineering characterization of a distinct framework
+transport path and trust boundary: externally influenced failure content is
+captured, reframed, and re-injected by recovery infrastructure.  The unit of
+analysis is the fixed-revision agent recovery implementation, and the results
+are reported for maintainers and designers of agent frameworks rather than as a
+new model-level attack technique.
 
-\textbf{Contribution type.}
-This is an empirical software-engineering contribution.  The source analysis
-is reported as systematic multiple-case source-code analysis with qualitative
-coding, not as a complete Grounded Theory study.  Quantitative results retain
-framework/model/payload strata, matched benign controls, Wilson confidence
-intervals, Fisher exact tests where appropriate, raw logs, and an explicit
-power analysis.  Provider aliases and endpoint metadata are disclosed; the
-provider does not expose immutable checkpoint revisions, so exact snapshot
-reproducibility is stated as a limitation rather than implied.
+The study is an empirical software-engineering contribution: systematic
+multiple-case source analysis with qualitative coding, fixed framework/model/
+payload strata, matched controls, raw logs, and explicit uncertainty reporting.
+Provider aliases and endpoint metadata are disclosed, while the lack of
+immutable hosted checkpoints is stated as a reproducibility limitation.
 
-\textbf{Fit with EMSE.}
-The manuscript addresses a software-engineering design assumption in recovery
-paths of real open-source agent frameworks and evaluates that assumption with
-reproducible source evidence and controlled execution traces.  The replication
-package preserves canonical manifests, raw logs, endpoint verification, model
-provenance, and the numerical audit used to generate the tables.  A fixed local
-Qwen2-family \texttt{qwen:7b} run is included as an open-model sensitivity
-anchor (100 valid trials); it is reported as exploratory evidence and does not
-replace the provider-alias matrix or imply an immutable snapshot for the hosted
-endpoints.
+\textbf{Fit with the special issue and EMSE.}
+The replication package preserves canonical manifests, raw logs, endpoint
+verification, model provenance, and the numerical audit used for the tables.
+A fixed local Qwen2-family \texttt{qwen:7b} run is included as an exploratory
+open-model sensitivity anchor (100 valid trials). The native Reflexion
+TrustOrigin contrast is the primary mitigation result; defense-aware and
+legitimate-recovery screens are supplementary, while structural
+reauthorization is a design implication rather than a separate empirical RQ.
 
 We confirm that this manuscript has not been published and is not under
 consideration elsewhere.  We look forward to the editors' and reviewers'
