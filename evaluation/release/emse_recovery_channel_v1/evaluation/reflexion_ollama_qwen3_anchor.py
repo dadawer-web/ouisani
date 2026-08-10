@@ -11,6 +11,7 @@ are not used.
 from __future__ import annotations
 
 import csv
+import argparse
 import contextlib
 import hashlib
 import io
@@ -152,14 +153,25 @@ def ollama_metadata() -> dict[str, Any]:
 
 
 def main() -> int:
-    n = int(os.environ.get("OLLAMA_TRIALS_PER_PAYLOAD", "20"))
-    workers = max(1, int(os.environ.get("OLLAMA_CONCURRENCY", "1")))
-    out = Path(os.environ.get("OLLAMA_OUTPUT_DIR", str(ROOT / "evaluation" / "results" / "emse_reflexion_qwen3_ollama_anchor"))).resolve()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", default=os.environ.get("OLLAMA_MODEL", "qwen3:8b"))
+    parser.add_argument("--base-url", default=os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"))
+    parser.add_argument("--trials-per-payload", type=int, default=int(os.environ.get("OLLAMA_TRIALS_PER_PAYLOAD", "20")))
+    parser.add_argument("--concurrency", type=int, default=int(os.environ.get("OLLAMA_CONCURRENCY", "1")))
+    parser.add_argument("--output-dir", default=os.environ.get("OLLAMA_OUTPUT_DIR", str(ROOT / "evaluation" / "results" / "emse_reflexion_qwen3_ollama_anchor")))
+    parser.add_argument("--no-resume", action="store_true", help="do not reuse successful rows from an existing raw log")
+    args = parser.parse_args()
+    global OLLAMA_MODEL, OLLAMA_BASE
+    OLLAMA_MODEL = args.model
+    OLLAMA_BASE = args.base_url.rstrip("/")
+    n = args.trials_per_payload
+    workers = max(1, args.concurrency)
+    out = Path(args.output_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
     raw_path = out / "qwen3_anchor.raw.jsonl"
     summary_path = out / "qwen3_anchor.json"
     checkpoint_path = out / "qwen3_anchor.checkpoint.jsonl"
-    resume = os.environ.get("OLLAMA_RESUME", "1") == "1"
+    resume = (os.environ.get("OLLAMA_RESUME", "1") == "1") and not args.no_resume
     completed: dict[str, dict[str, Any]] = {}
     if resume and raw_path.exists():
         for line in raw_path.read_text(encoding="utf-8").splitlines():
