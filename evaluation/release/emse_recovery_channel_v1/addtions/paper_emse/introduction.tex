@@ -1,0 +1,72 @@
+%% introduction.tex -- submission version
+
+\section{Introduction}
+\label{sec:introduction}
+
+LLM agents increasingly rely on self-healing mechanisms: after a failed tool
+call, test, or generated program, an orchestrator captures diagnostic content
+and asks the model to try again. This improves robustness, but it also creates
+a trust boundary. The diagnostic payload may contain external content---for
+example, a fetched page, a file, a test fixture, or tool output---that an
+attacker can influence. If the recovery path re-injects that payload in a
+recovery frame that asks the model to act on it, the failure channel becomes a
+prompt-injection path distinct from the normal forward input path. We call this
+class recovery-channel prompt injection (\rci{}).
+
+The security question is therefore not only whether a model follows an
+injected directive. It is whether the framework preserves the origin and
+authority of content while transporting it from an execution failure into the
+next LLM turn. A provenance marker can indicate that content is external, but
+the marker remains a probabilistic control: it changes model context without
+enforcing an authorization decision at the action sink. Recovery actions that
+change roles, tools, or topology therefore require a separate structural
+authorization check, which we formulate as a design implication.
+
+\paragraph{Research questions.}
+We study three empirical questions and one design implication:
+
+\begin{description}[leftmargin=*]
+    \item[\textbf{RQ1 (Source-level pattern).}] How do self-healing frameworks represent the provenance and authority of failure content on recovery paths?
+    \item[\textbf{RQ2 (Exploitability).}] Can the resulting trust gap be exploited through native recovery/error flows, and how does it compare with matched benign recovery?
+    \item[\textbf{RQ3 (Mitigation boundary).}] How do provenance, role, and recovery-position changes affect attack success, and what is the observed limit of a defense-aware recovery screen?
+    \item[\textbf{Design implication.}] Which recovery actions require structural reauthorization in addition to content-level handling?
+\end{description}
+
+\paragraph{Study design.}
+RQ1 uses systematic multiple-case source-code analysis with qualitative coding
+over six open-source frameworks fixed at recorded revisions. RQ2 uses a
+canonical Reflexion matrix and native AutoGen and Aider executions, each paired
+with benign controls. RQ3 uses the native Reflexion TrustOrigin port as its
+primary provenance contrast, with message-level role/position screens, a
+five-class defense-aware screen, and a legitimate-recovery task screen retained
+as bounded supplementary checks. The topology-mutation/\reauthgate{} material
+is retained as a design implication; it is not presented as a fourth,
+independently completed empirical evaluation.
+
+\paragraph{Software-engineering positioning.}
+We do not claim a new underlying language-model failure mode. The contribution
+is the identification and empirical characterization of a distinct
+software-framework transport path and trust boundary: externally influenced
+failure content is captured, reframed, and re-injected by recovery
+infrastructure. This is a software-engineering study because its unit of
+analysis is the recovery implementation, its cases are fixed framework
+revisions, and its outputs are maintainer-facing design and testing guidance.
+
+\paragraph{Contributions.}
+The study makes four bounded contributions. First, it provides a recovery-path
+trust-boundary taxonomy and a reproducible source-audit ledger. Second, it
+measures native-framework recovery-path behavior across Reflexion, AutoGen, and
+Aider, with framework/model/payload stratification and matched benign controls.
+Third, it quantifies the native provenance treatment and the limits of
+supplementary defense screens without overstating small or underpowered
+contrasts. Fourth, it specifies structural
+reauthorization as a complementary, LLM-independent control for privileged
+recovery side effects.
+
+The canonical Reflexion matrix spans ASR \ReflexionMinASR{}--\ReflexionMaxASR{}
+across five model aliases, while its \ReflexionBenignTrials{} matched benign
+trials contain no classified attack. The provider catalog and local artifacts
+are disclosed in the provenance manifest. Because the provider exposes aliases
+but not an alias-to-checkpoint mapping, the study reports provider-catalog
+provenance rather than immutable provider snapshots; all claims are restricted
+to the recorded artifacts and protocol labels.

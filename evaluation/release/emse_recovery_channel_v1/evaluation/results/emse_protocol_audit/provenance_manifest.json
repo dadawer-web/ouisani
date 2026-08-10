@@ -1,0 +1,491 @@
+{
+  "generated_at_utc": "2026-08-09T16:19:20.587450+00:00",
+  "status": "incomplete_official_snapshot_disclosure",
+  "provider_catalog": {
+    "source": "OpenCode Go /v1/models catalog supplied with the experiment record",
+    "catalog_created_unix": 1786282996,
+    "catalog_created_utc": "2026-08-09T13:43:16Z",
+    "owned_by": "opencode",
+    "interpretation": "All entries share the same created value; it is treated as catalog publication time, not an immutable model snapshot.",
+    "model_ids": [
+      "glm-5.2",
+      "kimi-k2.6",
+      "deepseek-v4-flash",
+      "mimo-v2.5",
+      "minimax-m3",
+      "qwen3.7-plus",
+      "gpt-5.6-luna"
+    ]
+  },
+  "gpt_endpoint_audit": {
+    "checked_at_utc": "2026-08-09T13:52:42.382475+00:00",
+    "model": "gpt-5.6-luna",
+    "documented_endpoint": "https://opencode.ai/zen/go/v1/responses",
+    "historical_endpoint": "https://opencode.ai/zen/go/v1/chat/completions",
+    "documented_protocol": "responses",
+    "historical_protocol": "chat_completions",
+    "request": {
+      "temperature": 0.0,
+      "max_output_tokens": 16
+    },
+    "api_key_recorded": false,
+    "responses_ok": false,
+    "chat_completions_ok": false,
+    "responses_check": {
+      "http_status": 403,
+      "error": "HTTPError: Forbidden",
+      "error_body_preview": "error code: 1010\n",
+      "ok": false
+    },
+    "chat_completions_check": {
+      "http_status": 403,
+      "error": "HTTPError: Forbidden",
+      "error_body_preview": "error code: 1010\n",
+      "ok": false
+    },
+    "ok": false
+  },
+  "models": [
+    {
+      "framework": "Reflexion",
+      "run": {
+        "model": "gpt-5.6-luna",
+        "framework": "Reflexion",
+        "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+        "protocol": "chat_completions",
+        "source_run": "full_n100_20260809T",
+        "source_dir": "evaluation\\results\\emse_reflexion\\full_n100_20260809T\\gpt-5.6-luna",
+        "canonical_dir": "evaluation\\results\\emse_reflexion\\canonical_baseline_n100\\gpt-5.6-luna",
+        "selection_reason": "Only complete GPT output; combined matrix was later stopped after baseline completion.",
+        "n_per_variant": 100,
+        "attack_successes": 166,
+        "attack_total": 500,
+        "attack_asr": 0.332,
+        "benign_successes": 0,
+        "benign_total": 500,
+        "benign_fpr": 0.0,
+        "attack_errors": 0,
+        "benign_errors": 0,
+        "artifacts_sha256": {
+          "paper_draft_reflexion_e2e_exploit.json": "dc35d535d2ed694a3148cf62911fb9b5b68d468894d2e0e6a300b2713a5154c1",
+          "paper_draft_reflexion_e2e_exploit.csv": "97f219a5b4841a49df17bd49e5e14627b1e91c68292f8ecb397a07c771ea12f8",
+          "paper_draft_reflexion_e2e_exploit.raw.jsonl": "895df9425591f779732e8a0602db73b871a6c82b666cd094a3c0df133ca5d012"
+        }
+      },
+      "model_id": "gpt-5.6-luna",
+      "env_suffix": "GPT56_LUNA",
+      "protocol": "chat_completions",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "snapshot_or_version_in_id": false,
+      "official_snapshot_verifiable": false,
+      "snapshot_status": "unverified_alias_only",
+      "api_key_recorded": false
+    },
+    {
+      "framework": "Reflexion",
+      "run": {
+        "model": "glm-5.2",
+        "framework": "Reflexion",
+        "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+        "protocol": "chat_completions",
+        "source_run": "full_n100_glm52",
+        "source_dir": "evaluation\\results\\emse_reflexion\\full_n100_glm52\\glm-5.2",
+        "canonical_dir": "evaluation\\results\\emse_reflexion\\canonical_baseline_n100\\glm-5.2",
+        "selection_reason": "Standalone run with manifest status complete; excludes duplicate combined-matrix run.",
+        "n_per_variant": 100,
+        "attack_successes": 215,
+        "attack_total": 500,
+        "attack_asr": 0.43,
+        "benign_successes": 0,
+        "benign_total": 500,
+        "benign_fpr": 0.0,
+        "attack_errors": 0,
+        "benign_errors": 0,
+        "artifacts_sha256": {
+          "paper_draft_reflexion_e2e_exploit.json": "47083b33b01ce854e3b06c84a768fc1a4a55129886f187a2d83de92fd71c79b0",
+          "paper_draft_reflexion_e2e_exploit.csv": "4e1d611ad9e72f2bd5ae9d043a7203bea0f58133f71b70889c75cbfadb07120e",
+          "paper_draft_reflexion_e2e_exploit.raw.jsonl": "aab5919de880133d4c23c255306f2cff2102c2c150160ea9a8178c830b8978b9"
+        }
+      },
+      "model_id": "glm-5.2",
+      "env_suffix": "GLM52",
+      "protocol": "chat_completions",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "snapshot_or_version_in_id": false,
+      "official_snapshot_verifiable": false,
+      "snapshot_status": "unverified_alias_only",
+      "api_key_recorded": false
+    },
+    {
+      "framework": "Reflexion",
+      "run": {
+        "model": "kimi-k2.6",
+        "framework": "Reflexion",
+        "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+        "protocol": "chat_completions",
+        "source_run": "full_n100_kimi_k26",
+        "source_dir": "evaluation\\results\\emse_reflexion\\full_n100_kimi_k26\\kimi-k2.6",
+        "canonical_dir": "evaluation\\results\\emse_reflexion\\canonical_baseline_n100\\kimi-k2.6",
+        "selection_reason": "Standalone run with manifest status complete; excludes duplicate combined-matrix run.",
+        "n_per_variant": 100,
+        "attack_successes": 398,
+        "attack_total": 500,
+        "attack_asr": 0.796,
+        "benign_successes": 0,
+        "benign_total": 500,
+        "benign_fpr": 0.0,
+        "attack_errors": 0,
+        "benign_errors": 0,
+        "artifacts_sha256": {
+          "paper_draft_reflexion_e2e_exploit.json": "20b572c285ca4dfbcf6e1185b0536dffd2f1b702d0bf679871c88708ea6aee26",
+          "paper_draft_reflexion_e2e_exploit.csv": "05814234c2245e5e65a5ba7e77c19bb4d0079d2d02a450379b604a53ae8fae98",
+          "paper_draft_reflexion_e2e_exploit.raw.jsonl": "7b95e659ce762c4d4b3a4b8b0bc4f1cd6e6c4956897a23e749f56a2219f0845e"
+        }
+      },
+      "model_id": "kimi-k2.6",
+      "env_suffix": "KIMI_K26",
+      "protocol": "chat_completions",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "snapshot_or_version_in_id": false,
+      "official_snapshot_verifiable": false,
+      "snapshot_status": "unverified_alias_only",
+      "api_key_recorded": false
+    },
+    {
+      "framework": "Reflexion",
+      "run": {
+        "model": "deepseek-v4-flash",
+        "framework": "Reflexion",
+        "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+        "protocol": "chat_completions",
+        "source_run": "full_n100_deepseek_v4_flash",
+        "source_dir": "evaluation\\results\\emse_reflexion\\full_n100_deepseek_v4_flash\\deepseek-v4-flash",
+        "canonical_dir": "evaluation\\results\\emse_reflexion\\canonical_baseline_n100\\deepseek-v4-flash",
+        "selection_reason": "Standalone run with manifest status complete.",
+        "n_per_variant": 100,
+        "attack_successes": 204,
+        "attack_total": 500,
+        "attack_asr": 0.408,
+        "benign_successes": 0,
+        "benign_total": 500,
+        "benign_fpr": 0.0,
+        "attack_errors": 0,
+        "benign_errors": 0,
+        "artifacts_sha256": {
+          "paper_draft_reflexion_e2e_exploit.json": "a351da7086b3dc6ad8fbf0299f16b76ed09b427033bcdabcadfc394756260467",
+          "paper_draft_reflexion_e2e_exploit.csv": "0c6dd0919ca6e19b30854351b60571e68ba05f6714c65ccd8583180546dde5b4",
+          "paper_draft_reflexion_e2e_exploit.raw.jsonl": "066603a903441c3b240755fcd8527a4282e758cb85042ad170739d100b23c05f"
+        }
+      },
+      "model_id": "deepseek-v4-flash",
+      "env_suffix": "DEEPSEEK_V4_FLASH",
+      "protocol": "chat_completions",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "snapshot_or_version_in_id": true,
+      "official_snapshot_verifiable": false,
+      "snapshot_status": "unverified_alias_only",
+      "api_key_recorded": false
+    },
+    {
+      "framework": "Reflexion",
+      "run": {
+        "model": "mimo-v2.5",
+        "framework": "Reflexion",
+        "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+        "protocol": "chat_completions",
+        "source_run": "full_n100_mimo_v25",
+        "source_dir": "evaluation\\results\\emse_reflexion\\full_n100_mimo_v25\\mimo-v2.5",
+        "canonical_dir": "evaluation\\results\\emse_reflexion\\canonical_baseline_n100\\mimo-v2.5",
+        "selection_reason": "Standalone run with manifest status complete; excludes stopped duplicate checkpoint.",
+        "n_per_variant": 100,
+        "attack_successes": 87,
+        "attack_total": 500,
+        "attack_asr": 0.174,
+        "benign_successes": 0,
+        "benign_total": 500,
+        "benign_fpr": 0.0,
+        "attack_errors": 0,
+        "benign_errors": 0,
+        "artifacts_sha256": {
+          "paper_draft_reflexion_e2e_exploit.json": "ca21077529f5f094161667db190773bbc9dbac2df3e89d40ab1c01b4669239d2",
+          "paper_draft_reflexion_e2e_exploit.csv": "f41467a984efcc66d140a9746b3b1d5d570b36552b02eac804021492dc97d9bd",
+          "paper_draft_reflexion_e2e_exploit.raw.jsonl": "d6cc4983834ab3f92d95d6fd155fb4ac8b210ac4a849a24d5f69660672d65401"
+        }
+      },
+      "model_id": "mimo-v2.5",
+      "env_suffix": "MIMO_V25",
+      "protocol": "chat_completions",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "snapshot_or_version_in_id": true,
+      "official_snapshot_verifiable": false,
+      "snapshot_status": "unverified_alias_only",
+      "api_key_recorded": false
+    },
+    {
+      "framework": "AutoGen",
+      "run": {
+        "model": "glm-5.2",
+        "framework": "AutoGen",
+        "autogen_version": "0.4.7",
+        "n_per_variant": 50,
+        "attack_successes": 0,
+        "attack_total": 250,
+        "attack_asr": 0.0,
+        "attack_path_executed": 250,
+        "attack_path_rate": 1.0,
+        "attack_asr_given_path": 0.0,
+        "benign_successes": 0,
+        "benign_total": 250,
+        "benign_fpr": 0.0,
+        "benign_path_rate": 1.0,
+        "attack_errors": 0,
+        "benign_errors": 0,
+        "result_json": "evaluation\\results\\emse_autogen_native\\pilot_n50_20260809T190905\\glm-5.2\\paper_draft_autogen_rci_e2e_exploit.json"
+      },
+      "model_id": "glm-5.2",
+      "env_suffix": "GLM52",
+      "protocol": "chat_completions",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "snapshot_or_version_in_id": false,
+      "official_snapshot_verifiable": false,
+      "snapshot_status": "unverified_alias_only",
+      "api_key_recorded": false
+    },
+    {
+      "framework": "AutoGen",
+      "run": {
+        "model": "gpt-5.6-luna",
+        "framework": "AutoGen",
+        "autogen_version": "0.4.7",
+        "n_per_variant": 50,
+        "attack_successes": 0,
+        "attack_total": 250,
+        "attack_asr": 0.0,
+        "attack_path_executed": 250,
+        "attack_path_rate": 1.0,
+        "attack_asr_given_path": 0.0,
+        "benign_successes": 0,
+        "benign_total": 250,
+        "benign_fpr": 0.0,
+        "benign_path_rate": 1.0,
+        "attack_errors": 0,
+        "benign_errors": 0,
+        "result_json": "evaluation\\results\\emse_autogen_native\\pilot_n50_20260809T190905\\gpt-5.6-luna\\paper_draft_autogen_rci_e2e_exploit.json"
+      },
+      "model_id": "gpt-5.6-luna",
+      "env_suffix": "GPT56_LUNA",
+      "protocol": "chat_completions",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "snapshot_or_version_in_id": false,
+      "official_snapshot_verifiable": false,
+      "snapshot_status": "unverified_alias_only",
+      "api_key_recorded": false
+    },
+    {
+      "framework": "AutoGen",
+      "run": {
+        "model": "kimi-k2.6",
+        "framework": "AutoGen",
+        "autogen_version": "0.4.7",
+        "n_per_variant": 50,
+        "attack_successes": 93,
+        "attack_total": 250,
+        "attack_asr": 0.372,
+        "attack_path_executed": 246,
+        "attack_path_rate": 0.984,
+        "attack_asr_given_path": 0.3780487804878049,
+        "benign_successes": 0,
+        "benign_total": 250,
+        "benign_fpr": 0.0,
+        "benign_path_rate": 0.972,
+        "attack_errors": 0,
+        "benign_errors": 0,
+        "result_json": "evaluation\\results\\emse_autogen_native\\pilot_n50_20260809T190905\\kimi-k2.6\\paper_draft_autogen_rci_e2e_exploit.json"
+      },
+      "model_id": "kimi-k2.6",
+      "env_suffix": "KIMI_K26",
+      "protocol": "chat_completions",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "snapshot_or_version_in_id": false,
+      "official_snapshot_verifiable": false,
+      "snapshot_status": "unverified_alias_only",
+      "api_key_recorded": false
+    },
+    {
+      "framework": "Aider",
+      "run": {
+        "framework": "Aider",
+        "aider_version": "0.86.2",
+        "package_pin": "aider-chat==0.86.2",
+        "n_per_variant": 50,
+        "models": [
+          "gpt-5.6-luna"
+        ],
+        "variants": [
+          "assertion_embedded",
+          "authority_forgery",
+          "grader_requirement",
+          "pseudo_recovery",
+          "test_setup_import"
+        ],
+        "attack": {
+          "successes": 114,
+          "trials": 250,
+          "asr": 0.456,
+          "native_path_executed": 248,
+          "native_path_rate": 0.992,
+          "asr_given_path": 0.4596774193548387,
+          "errors": 0
+        },
+        "benign": {
+          "successes": 0,
+          "trials": 250,
+          "asr": 0.0,
+          "native_path_executed": 250,
+          "native_path_rate": 1.0,
+          "asr_given_path": 0.0,
+          "errors": 0
+        },
+        "trial_count": 500,
+        "status": "complete",
+        "generated_at_utc": "2026-08-09T12:38:32.769257+00:00",
+        "native_execution": {
+          "entrypoint": "aider.coders.base_coder.Coder.run_one",
+          "error_transport": "Coder.commands.cmd_test -> run_cmd non-zero output",
+          "recovery": "same Coder.run_one loop with reflected_message from cmd_test"
+        }
+      },
+      "model_id": "gpt-5.6-luna",
+      "env_suffix": "GPT56_LUNA",
+      "protocol": "chat_completions",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "snapshot_or_version_in_id": false,
+      "official_snapshot_verifiable": false,
+      "snapshot_status": "unverified_alias_only",
+      "api_key_recorded": false
+    },
+    {
+      "framework": "Reflexion (native TrustOrigin port)",
+      "run": {
+        "experiment": "Native Reflexion recovery-path TrustOrigin treatment",
+        "framework": "Reflexion",
+        "repo": "noahshinn/reflexion",
+        "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+        "vendor_path": "evaluation/vendor_reflexion/programming_runs",
+        "model": "kimi-k2.6",
+        "protocol": "chat_completions",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "temperature": 0.7,
+        "n_per_variant_per_condition": 50,
+        "variants": [
+          "grader_requirement",
+          "assertion_embedded",
+          "test_setup_import",
+          "pseudo_recovery",
+          "authority_forgery"
+        ],
+        "treatments": [
+          "raw",
+          "tagged"
+        ],
+        "arms": [
+          "attack",
+          "benign"
+        ],
+        "full_native_reflection": false,
+        "payload_sha256": "3630eacf4f0d2a1df935de5e33d39ff5963c6dd76c8108576f9022bb3c51e080",
+        "total_trials": 1000,
+        "conditions": {
+          "raw_attack": {
+            "successes": 194,
+            "trials": 250,
+            "errors": 0,
+            "rate": 0.776,
+            "wilson_95ci": [
+              0.7203636303789512,
+              0.8232824859392568
+            ]
+          },
+          "raw_benign": {
+            "successes": 0,
+            "trials": 250,
+            "errors": 0,
+            "rate": 0.0,
+            "wilson_95ci": [
+              0.0,
+              0.015133847249623387
+            ]
+          },
+          "tagged_attack": {
+            "successes": 137,
+            "trials": 250,
+            "errors": 0,
+            "rate": 0.548,
+            "wilson_95ci": [
+              0.48604350819877906,
+              0.6085036424652572
+            ]
+          },
+          "tagged_benign": {
+            "successes": 0,
+            "trials": 250,
+            "errors": 0,
+            "rate": 0.0,
+            "wilson_95ci": [
+              0.0,
+              0.015133847249623387
+            ]
+          }
+        },
+        "raw_vs_tagged_attack_fisher_p": 9.779023815912127e-08,
+        "completed_at_utc": "2026-08-09T16:17:23.848843+00:00",
+        "notes": "PyGenerator.func_impl and the pinned generator_utils are imported from the framework commit; self_reflection is optional for the cost-controlled replication. TrustOrigin is applied at the failure-capture value before the framework recovery generator; raw and tagged arms share payloads, task, parser, and model adapter.",
+        "raw_log": "evaluation\\results\\emse_reflexion_trustorigin\\kimi-k2.6_n50\\native_trustorigin.raw.jsonl"
+      },
+      "model_id": "kimi-k2.6",
+      "env_suffix": "KIMI_K26",
+      "protocol": "chat_completions",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "snapshot_or_version_in_id": false,
+      "official_snapshot_verifiable": false,
+      "snapshot_status": "unverified_alias_only",
+      "api_key_recorded": false
+    }
+  ],
+  "snapshot_candidates": [
+    {
+      "model_id": "glm-5.2",
+      "official_hf_repo": "https://huggingface.co/zai-org/GLM-5.2",
+      "provider_revision_mapping": "not disclosed"
+    },
+    {
+      "model_id": "deepseek-v4-flash",
+      "official_hf_repo": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash",
+      "provider_revision_mapping": "not disclosed"
+    },
+    {
+      "model_id": "kimi-k2.6",
+      "official_hf_repo": "https://huggingface.co/moonshotai/Kimi-K2.6",
+      "provider_revision_mapping": "not disclosed"
+    }
+  ],
+  "artifact_hashes": {
+    "canonical_manifest": "30c6a2c065c90b2c40ad7ee12e83302645eb9bac5dc2190c81a61747a96a5b47",
+    "autogen_summary": "9de4ed76f5e129874da1187318ed21c36c1b18a99d8b8ebb1458a695e281b5b0",
+    "aider_summary": "09029acc2fd249ceead9d18e87b80b4b04190a676aaec580c1504e3cd256ed08",
+    "ablation_summary": "d9be353217eeaf244010d197ea0bea4e346316058a25aea9afde14ddd70416df",
+    "legal_summary": "b2d6410c94ec996e4e0092247f76549a64e2e48d199a2a231cee122fc3e03d14",
+    "native_trustorigin_summary": "cbcd912b5173b1b7913a4ce584ef8dc4f07ca7f94023384bb7d253515c87832f",
+    "native_trustorigin_raw_log": "42e6620492b04ec2f87b2550da1377b3d24275c158b458b0270178bdfe1eabd8",
+    "source_audit": "cdeb0de0c45fb0ad8dd2b8a0192acf286386c8009d168684478954226f7f1eba",
+    "number_generator": "f56633a85bf8f6ffc2fb6bb0008c0f94a8387bfe938636b85cec9379f05a6780",
+    "generated_numbers": "2e3bb2d0aeda625b9dea7e6101d48f4747113b35e2ecf45d782f0b7727d00c3e"
+  },
+  "parameter_gaps": [
+    "top_p not recorded in all result artifacts",
+    "provider snapshot/hash unavailable",
+    "OpenCode catalog does not expose an alias-to-Hugging-Face revision mapping",
+    "system-prompt hash not recorded for every framework",
+    "historical GPT artifacts use chat_completions while the supplied OpenCode documentation specifies /responses"
+  ]
+}

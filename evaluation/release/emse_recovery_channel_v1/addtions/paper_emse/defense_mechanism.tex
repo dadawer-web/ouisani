@@ -1,0 +1,68 @@
+%% defense_mechanism.tex -- submission version
+
+\section{Content-Level Defense: \trustorigin{} Tagging}
+\label{sec:defense}
+
+\trustorigin{} is a content-level defense for the recovery channel. It
+preserves source information at the failure boundary, carries that information
+through the recovery pipeline, and selects an untrusted framing for content
+whose origin is external or unknown. The mechanism is complementary to
+authorization checks at an action sink; it does not make the LLM
+instruction-following decision deterministic.
+
+\subsection{Provenance as Data}
+\label{sec:trustorigin}
+
+The root failure mode is treating error traces as opaque strings. Once a
+string has lost its origin, a recovery strategy cannot distinguish a
+framework-generated exception from a web page, file, fixture, or tool return
+that happened to appear in the failure. The defense therefore carries the
+origin with the value:
+
+\begin{lstlisting}[language=Java,caption={Illustrative provenance-carrying recovery value.},label={lst:tagged-content}]
+record TaggedContent(
+    String text,
+    TrustOrigin origin,
+    String sourceRef) {}
+
+enum TrustOrigin {
+    SYSTEM_GENERATED,
+    TOOL_OUTPUT_INTERNAL,
+    TOOL_OUTPUT_EXTERNAL,
+    USER_INPUT,
+    UNKNOWN
+}
+\end{lstlisting}
+
+The label is assigned at capture time, not inferred from the text after the
+fact. Unknown tools and undeclared sources are treated as external by default.
+This fail-closed rule avoids silently granting an internal trust class to a
+new tool or plugin.
+
+\subsection{Recovery-Frame Selection}
+\label{sec:trustorigin-frame}
+
+The recovery policy uses the origin label to select one of two templates:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Verified internal diagnostic:} the model may use the
+    diagnostic as framework state, subject to ordinary task and tool policy.
+    \item \textbf{External or unknown content:} the content is explicitly
+    framed as data to inspect. It is not treated as an instruction, and any
+    requested side effect must be independently authorized.
+\end{itemize}
+
+The defense is intentionally content-level. A sufficiently instruction-following
+model may still obey an injected directive inside an untrusted frame; the
+empirical question is therefore the observed reduction under the specified
+payloads, not a deterministic security guarantee.
+
+\subsection{Threat Coverage and Scope}
+\label{sec:trustorigin-scope}
+
+\trustorigin{} addresses externally originated failure content re-injected
+under a recovery frame. It does not authorize role replacement, tool
+permission changes, topology mutation, or other privileged side effects. Those
+actions require a separate structural check at the orchestrator sink, as
+discussed in \S\ref{sec:design-patterns}. The completed defense-aware screen
+and its limitations are reported in \S\ref{sec:defense-eval}.

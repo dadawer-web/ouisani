@@ -1,0 +1,73 @@
+%% cover_letter_emse.tex
+%% Compile separately: pdflatex cover_letter_emse.tex
+
+\documentclass[10pt]{letter}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=0.8in]{geometry}
+
+\begin{document}
+
+\begin{letter}{Editor-in-Chief\\
+Empirical Software Engineering}
+
+\opening{Dear Editor,}
+
+\textbf{Subject: Submission of manuscript}\\
+\textbf{``Recovery-Channel Prompt Injection in Self-Healing LLM Agent Frameworks''}
+
+We are pleased to submit the above-referenced manuscript for consideration by
+\emph{Empirical Software Engineering}.
+
+\textbf{Summary.}
+This paper studies recovery-channel prompt injection: externally originated
+failure content is captured by a self-healing agent and re-injected into a
+subsequent LLM turn under a recovery frame that can be interpreted as
+authoritative.  We combine systematic multiple-case source-code analysis with
+native-framework experiments.  In the canonical Reflexion matrix, five model
+aliases produce attack success rates from 0.174 to 0.796 while all matched
+benign controls are zero.  Native AutoGen and Aider executions provide
+additional framework evidence, and supplementary Reflexion contrast, defense-aware,
+and legitimate-recovery screens delimit what can and cannot be inferred at the
+completed sample sizes.  A native Reflexion TrustOrigin port reduces attack
+success from 0.776 to 0.548 with zero matched benign false positives.  The
+paper's design implication is to pair provenance
+handling with structural authorization checks at recovery sinks.
+
+We do not claim a new underlying language-model failure mode.  The contribution
+is a software-engineering characterization of a distinct framework transport
+path and trust boundary: externally influenced failure content is captured,
+reframed, and re-injected by recovery infrastructure.  The unit of analysis is
+the fixed-revision recovery implementation, and the results are reported for
+maintainers and designers of agent frameworks.
+
+\textbf{Contribution type.}
+This is an empirical software-engineering contribution.  The source analysis
+is reported as systematic multiple-case source-code analysis with qualitative
+coding, not as a complete Grounded Theory study.  Quantitative results retain
+framework/model/payload strata, matched benign controls, Wilson confidence
+intervals, Fisher exact tests where appropriate, raw logs, and an explicit
+power analysis.  Provider aliases and endpoint metadata are disclosed; the
+provider does not expose immutable checkpoint revisions, so exact snapshot
+reproducibility is stated as a limitation rather than implied.
+
+\textbf{Fit with EMSE.}
+The manuscript addresses a software-engineering design assumption in recovery
+paths of real open-source agent frameworks and evaluates that assumption with
+reproducible source evidence and controlled execution traces.  The replication
+package preserves canonical manifests, raw logs, endpoint verification, model
+provenance, and the numerical audit used to generate the tables.
+
+We confirm that this manuscript has not been published and is not under
+consideration elsewhere.  We look forward to the editors' and reviewers'
+feedback.
+
+\closing{Sincerely,\\[1em]
+Mingyuan Xie (jhj208436@gmail.com)\\
+Zhengxun Wu (2276815088@qq.com)\\
+School of Information Management, Qingdao University of Technology\\
+Qingdao, Shandong, China}
+
+\end{letter}
+
+\end{document}

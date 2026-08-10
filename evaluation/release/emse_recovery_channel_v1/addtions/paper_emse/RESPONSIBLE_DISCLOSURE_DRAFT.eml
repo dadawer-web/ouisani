@@ -1,0 +1,19 @@
+To: noahrshinn@gmail.com
+Subject: Private report: externally influenced test output is re-injected on the Reflexion recovery path
+Content-Type: text/plain; charset=UTF-8
+
+Dear Reflexion maintainers,
+
+We are preparing an empirical software-engineering study of self-healing LLM agents. During an isolated review of the programming generator at commit 218cf0ef1df84b05ce379dd4a8e47f17766733a0, we observed that test-runner feedback is inserted verbatim into the next Reflexion generation prompt. The recovery generator does not preserve whether the feedback came from an internal diagnostic or an externally influenced test output.
+
+Our experiment uses synthetic canary text only, does not access user data or production credentials, and does not target a live deployment. In a local reproduction, a test output containing an instruction can influence the generated replacement function. We can provide the fixed-commit excerpt, minimal synthetic reproduction, raw execution metadata, and a proposed provenance-aware framing privately.
+
+The mitigation we are evaluating is to attach an origin label at failure capture (for example, TOOL_OUTPUT_EXTERNAL) and carry it through the recovery pipeline. External or unknown content should be framed as data to inspect, not as an instruction, while any privileged side effect should be checked independently at the action sink.
+
+Please let us know the preferred private channel and whether you would like a coordinated disclosure timeline. We will not publish maintainer-specific details or claim a maintainer acknowledgement without your confirmation.
+
+Sincerely,
+
+Mingyuan Xie and Zhengxun Wu
+
+Local audit record: repository https://github.com/noahshinn/reflexion; commit 218cf0ef1df84b05ce379dd4a8e47f17766733a0; affected path programming_runs/generators/generator_utils.py, generic_generate_func_impl, Reflexion strategy. Evidence is isolated, synthetic, and local.

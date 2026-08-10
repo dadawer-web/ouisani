@@ -1,0 +1,94 @@
+{
+  "generated_at_utc": "2026-08-09T16:19:20.611633+00:00",
+  "method": "normal approximation; two-sided alpha=0.05, target power=0.80; observed pilot proportions used only for planning",
+  "comparisons": [
+    {
+      "comparison": "AutoGen Kimi attack vs benign",
+      "estimand": "native recovery attack vs matched benign",
+      "p1": 0.372,
+      "p2": 0.0,
+      "n_per_arm_observed": 250,
+      "required_n_per_arm_80pct": 16,
+      "approx_power_at_observed_n": 1.0,
+      "interpretation": "adequate_for_observed_effect"
+    },
+    {
+      "comparison": "Aider GPT attack vs benign",
+      "estimand": "native recovery attack vs matched benign",
+      "p1": 0.456,
+      "p2": 0.0,
+      "n_per_arm_observed": 250,
+      "required_n_per_arm_80pct": 13,
+      "approx_power_at_observed_n": 1.0,
+      "interpretation": "adequate_for_observed_effect"
+    },
+    {
+      "comparison": "Reflexion provenance raw vs tagged",
+      "estimand": "same recovery path, provenance marker",
+      "p1": 0.78,
+      "p2": 0.77,
+      "n_per_arm_observed": 100,
+      "required_n_per_arm_80pct": 27372,
+      "approx_power_at_observed_n": 0.053274518045485275,
+      "interpretation": "underpowered_or_effect_is_small"
+    },
+    {
+      "comparison": "Reflexion recovery vs forward",
+      "estimand": "same payload, channel contrast",
+      "p1": 0.78,
+      "p2": 0.84,
+      "n_per_arm_observed": 100,
+      "required_n_per_arm_80pct": 670,
+      "approx_power_at_observed_n": 0.19028333932310687,
+      "interpretation": "underpowered_or_effect_is_small"
+    },
+    {
+      "comparison": "Defense undefended vs defended",
+      "estimand": "supplementary forward-defense bypass",
+      "p1": 0.93,
+      "p2": 0.86,
+      "n_per_arm_observed": 100,
+      "required_n_per_arm_80pct": 300,
+      "approx_power_at_observed_n": 0.3642333440594615,
+      "interpretation": "underpowered_or_effect_is_small"
+    },
+    {
+      "comparison": "Native Reflexion TrustOrigin raw vs tagged",
+      "estimand": "same native recovery path, provenance frame",
+      "p1": 0.776,
+      "p2": 0.548,
+      "n_per_arm_observed": 250,
+      "required_n_per_arm_80pct": 67,
+      "approx_power_at_observed_n": 0.9997946442885923,
+      "interpretation": "adequate_for_observed_effect"
+    },
+    {
+      "comparison": "Native Reflexion raw attack vs matched benign",
+      "estimand": "native recovery attack vs matched benign",
+      "p1": 0.776,
+      "p2": 0.0,
+      "n_per_arm_observed": 250,
+      "required_n_per_arm_80pct": 5,
+      "approx_power_at_observed_n": 1.0,
+      "interpretation": "adequate_for_observed_effect"
+    },
+    {
+      "comparison": "Native Reflexion tagged attack vs matched benign",
+      "estimand": "native TrustOrigin treatment vs matched benign",
+      "p1": 0.548,
+      "p2": 0.0,
+      "n_per_arm_observed": 250,
+      "required_n_per_arm_80pct": 10,
+      "approx_power_at_observed_n": 1.0,
+      "interpretation": "adequate_for_observed_effect"
+    }
+  ],
+  "legal_recovery": {
+    "observed_rate": 0.9,
+    "n_observed": 100,
+    "null_rate_for_planning": 0.8,
+    "required_n_vs_null_80pct": 108,
+    "interpretation": "screening_only"
+  },
+  "caveat": "These are prospective planning calculations, not confirmatory post-hoc claims. Primary contrasts and stopping rules must be frozen before expansion."
+}

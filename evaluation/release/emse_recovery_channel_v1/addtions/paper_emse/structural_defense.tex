@@ -1,0 +1,95 @@
+%% structural_defense.tex — RQ4: Structural Defense (Reauthorization Gate)
+%% Merged from paper_jss/defense_mechanism.tex
+
+\section{Structural Defense: The \reauthgate{} Design Pattern}
+\label{sec:structural-defense}
+
+The completed content-level screen in \S\ref{sec:defense-eval} shows a modest,
+non-significant reduction under the tested defense-aware payloads (0.930 to
+0.860; Fisher's exact $p=0.1652$).  This result is consistent with the
+fundamental limitation of content-level defenses: they change the framing
+under which the model receives failure content, but cannot deterministically
+control a model that elects to follow an injected instruction.  A
+complementary defense class is therefore useful---one whose guarantee is
+\emph{structural} rather than probabilistic, and therefore LLM-independent.
+
+This section presents the \reauthgate{}, an application of Saltzer \& Schroeder's \emph{complete mediation} principle~\cite{saltzer1975protection}---``every access must be checked against the access control mechanism''---to the agent recovery path. The pattern addresses a \emph{different} attack vector on the same recovery path: recovery strategies that propose privileged side effects (role replacement, topology mutation) without re-checking the authorization that gates the forward execution path. Whereas \trustorigin{} addresses the content-level trust-escalation trampoline (RQ1--RQ3), the \reauthgate{} addresses the authorization-level privilege-escalation sink (the CWE-862 / Confused Deputy vector formalized in \S\ref{sec:topology-mutation-attack}). The whitelist-based privilege check itself is a classical access-control primitive, not a novel mechanism; the contribution of RQ4 is the \emph{empirical identification} that the recovery path is a location where complete mediation is systematically missing (RQ1) and the \emph{validation} that the pattern can be retrofitted at a centralized choke point with negligible cost (\S\ref{sec:structural-eval}).
+
+\subsection{Motivation: Centralized vs.\ Decentralized Validation}
+\label{sec:centralize-motivation}
+
+The root cause of CWE-862 at the recovery sink is \emph{decentralized} validation of recovery actions. In the baseline design, each recovery strategy is responsible for its own permission checks. In practice this leads to two failure modes well-known in the cross-cutting concern literature~\cite{aspectj}:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Gaps.} A strategy author who forgets or mis-scopes a check leaves a silent hole, because no other component re-checks the action. The baseline vulnerability in \system{} is exactly such a gap: the \code{validate=false} flag was a deliberate experimental switch, but in a production codebase, an equivalent gap could arise from a forgotten check in a newly added strategy.
+    \item \textbf{Inconsistency.} Different strategies implement slightly different policies, so the effective privilege boundary depends on which strategy the orchestrator dispatches.
+\end{enumerate}
+
+The principled fix is to centralize the concern at a single choke point, following the OS principle that classical kernels enforce privilege invariants at well-defined boundaries (syscall entry, exception dispatch), not inside each driver or subsystem.
+
+\subsection{The \privinv{}}
+\label{sec:priv-invariant}
+
+The \reauthgate{} enforces the \privinv{}: \emph{no recovery action may exceed the privilege of the failed execution it remedies}. Formally, let $P(a)$ denote the privilege level of recovery action $a$ and $P_{\text{fail}}$ the privilege of the failed execution:
+\[
+P(a) \leq P_{\text{fail}}.
+\]
+This is the agent-systems analog of the OS exception-handler privilege rule: an exception handler executes with the privileges of the faulting context, never higher~\cite{levine2003system,bovet2005understanding}. The same principle underlies the Confused Deputy fix~\cite{hardy1988confused}: the privileged deputy may not exercise authority not granted to the caller.
+
+For role replacement, the invariant specializes to: the new role's privileges must not exceed the original role's. Combined with a role-existence whitelist---the role must be registered in the blueprint registry, not an arbitrary LLM-suggested string---the gate closes both the CWE-862 sink and the Confused Deputy vector.
+
+\subsection{Design: Declare at the Strategy, Enforce at the Orchestrator}
+\label{sec:design-decomposition}
+
+The pattern decomposes into three concrete mechanisms:
+
+\paragraph{Mechanism 1: Result-Type Extension.}
+The \code{RecoveryResult} class is extended with a boolean \code{requiresReauthorization} flag (default: \code{false}). Strategies that produce side effects set this flag to \code{true} via a factory method \code{okRequiringReauthorization(message, payload)}.
+
+\paragraph{Mechanism 2: Deferred Side Effects.}
+A side-effecting strategy does \emph{not} execute its side effect inline. Instead, it stores the side effect as a \emph{deferred callback} in the recovery context's metadata. This ensures that the side effect is held in suspension until the orchestrator has had a chance to intercept and reauthorize.
+
+\begin{lstlisting}[caption={Deferring the side effect in \code{TopologyMutationStrategy}.},label={lst:defer-side-effect}]
+// In TopologyMutationStrategy.apply()
+context.withMetadata(RecoveryOrchestrator.META_PENDING_SIDE_EFFECT,
+    (RecoveryContext ctx) -> {
+        boolean mutated = WorkflowEngine.instance()
+            .resumeNode(nodeId, report, workflowId);
+        return mutated
+            ? RecoveryResult.ok("Topology mutation applied")
+            : RecoveryResult.failed("resumeNode returned false");
+    });
+return RecoveryResult.okRequiringReauthorization(
+    "Topology mutation pending reauth: proposed " + suggestedRole, null);
+\end{lstlisting}
+
+\paragraph{Mechanism 3: Orchestrator-Level Interception.}
+The \code{RecoveryOrchestrator}'s main recovery loop intercepts every result with \code{requiresReauthorization=true} \emph{before} executing the deferred callback. The gate calls the existing \code{PermissionChecker} (the same one used on the forward path) to verify the \privinv{}. If the check fails, the side effect is blocked; if it passes, the deferred callback executes.
+
+\begin{lstlisting}[caption={\reauthgate{} in \code{RecoveryOrchestrator}.},label={lst:reauthgate}]
+// In RecoveryOrchestrator.dispatchRecovery()
+if (result.requiresReauthorization()) {
+    ReauthResult reauth = RecoveryReauthorizationGate.check(
+        result, context, resolvePermissionChecker());
+    if (!reauth.allowed()) {
+        log.warn("[ReauthGate] blocked: {}", reauth.reason());
+        return RecoveryResult.failed("denied by reauth gate: " + reauth.reason());
+    }
+    // reauth passed -> execute deferred side effect
+    Function<RecoveryContext, RecoveryResult> sideEffect =
+        context.metadata().get(META_PENDING_SIDE_EFFECT);
+    result = sideEffect.apply(context);
+}
+\end{lstlisting}
+
+This is a \emph{prevent} control, not a \emph{detect-and-alert} control: a rejected reauthorization blocks the side effect entirely, rather than merely logging it after the fact.
+
+\subsection{Two-Layer Defense-in-Depth}
+\label{sec:layered-defense}
+
+The implementation employs the pattern in two layers: (i)~\textbf{Layer 1} (\code{RoleReplacementValidator}) performs existence-whitelist and non-escalation checks \emph{before} declaring reauthorization need, short-circuiting obviously invalid proposals; (ii)~\textbf{Layer 2} (\code{RecoveryReauthorizationGate}) re-checks the invariant at the orchestrator level before executing the deferred callback. Layer~1 is a fast-fail optimization; Layer~2 is the structural guarantee that closes the gap if a strategy bypasses Layer~1.
+
+\subsection{Framework-Agnostic Specification}
+\label{sec:pattern-spec}
+
+The \reauthgate{} is specified independent of \system{}'s implementation. A framework porting the pattern needs: (i)~a recovery orchestrator that mediates every side-effecting recovery action; (ii)~a permission checker that gates the forward path; (iii)~an extensible recovery result type; (iv)~a side-effect deferral mechanism (a closure in any language). The pattern does \emph{not} require a specific agent architecture, LLM, or role model. In \system{}, the full migration touched 14 strategy classes and one orchestrator method.

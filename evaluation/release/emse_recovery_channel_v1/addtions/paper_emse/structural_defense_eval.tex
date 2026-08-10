@@ -1,0 +1,43 @@
+%% ARCHIVAL: not included in the submission PDF; no native-framework raw-log
+%% evaluation is claimed for the structural reauthorization proposal.
+
+\section{RQ4: Structural Defense as a Design Implication}
+\label{sec:structural-eval}
+
+RQ4 is retained as a supplementary design implication rather than a co-equal
+empirical storyline.  The current evidence freeze contains no independently
+auditable native-framework experiment for \reauthgate{}; consequently, this
+section does not report the earlier author-constructed point estimates or
+latency numbers as empirical results.  They should not be pooled with the
+Reflexion, AutoGen, or Aider recovery-path measurements.
+
+\paragraph{Design claim.}
+\reauthgate{} applies complete mediation~\cite{saltzer1975protection} at the
+recovery sink.  A recovery action that changes roles, tools, or topology is
+represented as a deferred side effect and must pass the same authorization
+check that guarded the failed forward action.  The intended invariant is
+\[
+  P(\text{recovery action}) \leq P(\text{failed execution}),
+\]
+where $P$ is the framework's authorization order.  A whitelist or policy
+check can enforce this invariant independently of the LLM's response.
+
+\paragraph{Why it complements TrustOrigin.}
+\trustorigin{} addresses the content-level channel: it preserves source
+provenance and downgrades externally originated failure content before the
+next LLM turn.  That control is probabilistic because the model may still
+follow an injected instruction.  \reauthgate{} addresses a different sink:
+even if the model proposes a privileged action, the orchestrator rejects it
+unless the authorization invariant holds.  The two controls therefore defend
+content trust and action authority respectively; neither should be presented
+as a substitute for the other.
+
+\paragraph{Verification requirement.}
+Before RQ4 is promoted beyond a design implication, the replication package
+must include a fixed framework commit, an executable native recovery path,
+matched attack and benign workloads, raw per-trial logs, and an independent
+check that every side effect crosses the gate.  A future multi-framework
+port (two or three frameworks) should report the deterministic by-construction
+property separately from probabilistic ASR estimates.  Until that evidence is
+available, claims about zero ASR, framework-agnosticity, or negligible
+overhead remain implementation hypotheses rather than findings of this paper.

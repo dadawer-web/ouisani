@@ -1,0 +1,7 @@
+unit_id,framework,repository,commit,source_paths,source_provenance,error_status,recovery_action_frame,trampoline_signature,notes
+Reflexion,Reflexion,https://github.com/noahshinn/reflexion,218cf0ef1df84b05ce379dd4a8e47f17766733a0,programming_runs/generators/generator_utils.py,,,,,
+MetaGPT,MetaGPT,https://github.com/FoundationAgents/MetaGPT,c036574507e7616c02512e7c8ad88dd847783afa,metagpt/actions/debug_error.py,,,,,
+Aider,Aider,https://github.com/Aider-AI/aider,253f0368b873ba30d8ee26e463718f0c03614ddf,aider/coders/editblock_coder.py,,,,,
+OpenHands,OpenHands,https://github.com/All-Hands-AI/OpenHands,41a78ca768afd21bb05e2e9c41a14b08739884f1,openhands/controller/agent_controller.py; openhands/memory/conversation_memory.py,,,,,
+AutoGen,AutoGen,https://github.com/microsoft/autogen,b04775f3dc7a5c9a437c49f97b2cb42684b5b38e,python/packages/autogen-agentchat/src/autogen_agentchat/agents/_assistant_agent.py,,,,,
+LangGraph,LangGraph,https://github.com/langchain-ai/langgraph,d56666f7fbf0d380ad84cdf0cbe5aa48ab0cc086,libs/prebuilt/langgraph/prebuilt/tool_node.py,,,,,

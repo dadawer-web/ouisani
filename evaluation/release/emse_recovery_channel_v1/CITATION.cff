@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+title: "Recovery-Channel Prompt Injection in Self-Healing LLM Agent Frameworks: Replication Package"
+message: "Please cite the accompanying Empirical Software Engineering manuscript."
+type: software
+authors:
+  - family-names: Xie
+    given-names: Mingyuan
+    email: jhj208436@gmail.com
+    affiliation: "School of Information Management, Qingdao University of Technology, Qingdao, Shandong, China"
+  - family-names: Wu
+    given-names: Zhengxun
+    email: 2276815088@qq.com
+    affiliation: "School of Information Management, Qingdao University of Technology, Qingdao, Shandong, China"
+repository-code: "https://github.com/dadawer-web/ouisani"
+license: CC-BY-4.0
+keywords:
+  - empirical software engineering
+  - LLM agents
+  - prompt injection
+  - self-healing
+  - provenance

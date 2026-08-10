@@ -1,0 +1,155 @@
+{
+  "experiment": "Six-framework recovery-path source audit",
+  "retrieval_date": "2026-08-09",
+  "unit_of_analysis": "failure-content capture, packaging, and re-injection code",
+  "source_origin_definition": "A label that distinguishes externally originated content from internally generated diagnostics; error status alone does not count as source provenance.",
+  "high_trust_frame_definition": "A recovery/action frame that instructs the model to use the failure payload for repair, or transports it in the same action-authorizing channel as successful tool results.",
+  "cases": [
+    {
+      "framework": "Reflexion",
+      "repository": "https://github.com/noahshinn/reflexion",
+      "commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+      "revision_label": "pinned commit used by the native experiment",
+      "fetched": true,
+      "required_patterns_present": true,
+      "files": [
+        {
+          "path": "programming_runs/generators/generator_utils.py",
+          "required_matches": {
+            "\\[unit test results from previous impl\\]": true,
+            "\\[previous impl\\]": true
+          }
+        }
+      ],
+      "source_origin_provenance": false,
+      "error_status_metadata": false,
+      "recovery_action_frame": true,
+      "trampoline_signature": "yes",
+      "errors": []
+    },
+    {
+      "framework": "MetaGPT",
+      "repository": "https://github.com/FoundationAgents/MetaGPT",
+      "commit": "c036574507e7616c02512e7c8ad88dd847783afa",
+      "revision_label": "v0.8.1",
+      "fetched": true,
+      "required_patterns_present": true,
+      "files": [
+        {
+          "path": "metagpt/actions/debug_error.py",
+          "required_matches": {
+            "# Console logs": true,
+            "Role: You are a Development Engineer": true
+          }
+        }
+      ],
+      "source_origin_provenance": false,
+      "error_status_metadata": false,
+      "recovery_action_frame": true,
+      "trampoline_signature": "yes",
+      "errors": []
+    },
+    {
+      "framework": "Aider",
+      "repository": "https://github.com/Aider-AI/aider",
+      "commit": "253f0368b873ba30d8ee26e463718f0c03614ddf",
+      "revision_label": "v0.86.2",
+      "fetched": true,
+      "required_patterns_present": true,
+      "files": [
+        {
+          "path": "aider/coders/editblock_coder.py",
+          "required_matches": {
+            "Just reply with fixed versions of the": true
+          }
+        }
+      ],
+      "source_origin_provenance": false,
+      "error_status_metadata": false,
+      "recovery_action_frame": true,
+      "trampoline_signature": "yes",
+      "errors": []
+    },
+    {
+      "framework": "OpenHands",
+      "repository": "https://github.com/All-Hands-AI/OpenHands",
+      "commit": "41a78ca768afd21bb05e2e9c41a14b08739884f1",
+      "revision_label": "0.48.0",
+      "fetched": true,
+      "required_patterns_present": true,
+      "files": [
+        {
+          "path": "openhands/controller/agent_controller.py",
+          "required_matches": {
+            "ErrorObservation": true,
+            "state\\.history": true
+          }
+        },
+        {
+          "path": "openhands/memory/conversation_memory.py",
+          "required_matches": {
+            "ErrorObservation": true,
+            "\\[Error occurred in processing last action\\]": true
+          }
+        }
+      ],
+      "source_origin_provenance": false,
+      "error_status_metadata": true,
+      "recovery_action_frame": false,
+      "trampoline_signature": "no",
+      "errors": []
+    },
+    {
+      "framework": "AutoGen",
+      "repository": "https://github.com/microsoft/autogen",
+      "commit": "b04775f3dc7a5c9a437c49f97b2cb42684b5b38e",
+      "revision_label": "python-v0.4.7",
+      "fetched": true,
+      "required_patterns_present": true,
+      "files": [
+        {
+          "path": "python/packages/autogen-agentchat/src/autogen_agentchat/agents/_assistant_agent.py",
+          "required_matches": {
+            "FunctionExecutionResult\\(content=f[\\\"']Error: \\{e\\}": true,
+            "is_error=True": true,
+            "FunctionExecutionResultMessage\\(content=exec_results\\)": true
+          }
+        }
+      ],
+      "source_origin_provenance": false,
+      "error_status_metadata": true,
+      "recovery_action_frame": true,
+      "trampoline_signature": "yes",
+      "errors": []
+    },
+    {
+      "framework": "LangGraph",
+      "repository": "https://github.com/langchain-ai/langgraph",
+      "commit": "d56666f7fbf0d380ad84cdf0cbe5aa48ab0cc086",
+      "revision_label": "repository HEAD fixed at retrieval",
+      "fetched": true,
+      "required_patterns_present": true,
+      "files": [
+        {
+          "path": "libs/prebuilt/langgraph/prebuilt/tool_node.py",
+          "required_matches": {
+            "status=\\\"error\\\"": true,
+            "ToolMessage": true
+          }
+        }
+      ],
+      "source_origin_provenance": false,
+      "error_status_metadata": true,
+      "recovery_action_frame": false,
+      "trampoline_signature": "no",
+      "errors": []
+    }
+  ],
+  "summary": {
+    "cases": 6,
+    "verified": 6,
+    "source_origin_provenance_present": 0,
+    "error_status_only": 3,
+    "trampoline_signature_yes": 4
+  }
+}

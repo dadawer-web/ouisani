@@ -1,0 +1,190 @@
+%% methodology.tex -- submission version
+
+\section{Research Methodology}
+\label{sec:methodology}
+
+We combine systematic multiple-case source-code analysis with qualitative
+coding, native-framework execution, and bounded mechanism screens. The design
+follows case-study guidance for empirical software engineering
+~\cite{runeson2009} and the reporting principles of Wohlin et al.~\cite{wohlin2012}.
+The unit of analysis is the recovery path: failure capture, packaging, and
+transport into a subsequent LLM turn.
+
+\subsection{Research Design}
+\label{sec:method-design}
+
+The study has three empirical phases and one design implication:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{RQ1 -- source-level pattern.} We inspect six open-source frameworks at fixed revisions and code how failure origin, error status, and recovery framing are represented.
+    \item \textbf{RQ2 -- native exploitability.} We run the canonical Reflexion matrix and native AutoGen and Aider recovery/error loops. Every attack arm has a matched benign control.
+    \item \textbf{RQ3 -- mitigation boundary.} We run a native Reflexion TrustOrigin port as the primary provenance contrast, with a Reflexion message-level contrast screen, a defense-aware screen, and a legitimate-recovery screen as bounded supplementary checks. All secondary screens are reported with their sample-size limitations.
+    \item \textbf{Design implication -- structural reauthorization.} We specify \reauthgate{} as a complementary authorization control for recovery actions that change roles, tools, or topology. No unauditable structural-defense point estimate is used as an empirical result.
+\end{enumerate}
+
+\subsection{Framework Selection and Fixed Revisions}
+\label{sec:method-selection}
+
+The candidate pool was assembled on 2026-08-09 from open-source agent
+frameworks cited in the agent and self-healing literature and from the
+publicly visible repositories of widely used coding and multi-agent systems.
+We retained projects meeting all four criteria: (i) source code available, (ii)
+an explicit retry, reflection, debug, or tool-error path, (iii) active
+development at the retrieval date, and (iv) sufficient adoption to provide a
+meaningful software-engineering case. Research methods without a general
+framework recovery implementation (Self-Refine and CRITIC) were excluded.
+The resulting six-case sample is purposive and maximum-variation; it is not a
+population prevalence sample.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Framework cases, fixed revisions, and recovery-path evidence sources.}
+\label{tab:framework-revisions}
+\begin{tabular}{p{2.0cm}p{2.0cm}p{5.0cm}}
+\toprule
+\textbf{Framework} & \textbf{Revision} & \textbf{Inspected source path} \\
+\midrule
+Reflexion & \texttt{218cf0e} & \texttt{generator\_utils.py} \\
+MetaGPT & \texttt{v0.8.1} / \texttt{c0365745} & \texttt{debug\_error.py} \\
+Aider & \texttt{v0.86.2} / \texttt{253f0368} & \texttt{editblock\_coder.py} \\
+OpenHands & \texttt{0.48.0} / \texttt{41a78ca8} & \texttt{agent\_controller.py}; \texttt{conversation\_memory.py} \\
+AutoGen & \texttt{v0.4.7} / \texttt{b04775f3} & \texttt{\_assistant\_agent.py} \\
+LangGraph & \texttt{d56666f7} & \texttt{tool\_node.py} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The source-audit script records the full 40-character commits, retrieval date,
+file paths, required code predicates, and per-case results in
+\texttt{source\_audit.json}. The
+repository revision for LangGraph is fixed by its HEAD commit because the
+source analysis targets a library behavior rather than the author-constructed
+recovery node used in an earlier supplementary experiment.
+
+\subsection{Qualitative Codebook and Procedure}
+\label{sec:method-taxonomy}
+
+We use systematic multiple-case source-code analysis with qualitative coding.
+The codebook is intentionally operational rather than a claim of complete
+Grounded Theory: it does not rely on theoretical sampling, saturation, or a
+population estimate. The primary coder traced each failure path from capture
+to the next model call, recorded the fixed source excerpt, and applied the
+following predicates:
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Qualitative codebook for recovery-path source analysis.}
+\label{tab:codebook}
+\begin{tabular}{p{2.5cm}p{4.5cm}p{5.0cm}}
+\toprule
+\textbf{Code} & \textbf{Operational definition} & \textbf{Decision rule} \\
+\midrule
+Source provenance & A field or type distinguishes externally originated content from internally generated diagnostics. & Yes only when the distinction survives into the recovery representation; an error flag alone is not source provenance. \\
+Error status & Metadata indicates that execution failed, such as \texttt{is\_error} or \texttt{status="error"}. & Record separately; status does not identify the origin of the error content. \\
+Recovery-action frame & The recovery message instructs the model to use the failure payload for repair, or transports it in the same action-authorizing channel as successful tool results. & Yes for a dedicated retry/reflection frame or same-role tool-result transport; no for a status marker without an action frame. \\
+Trampoline signature & Source provenance is absent and a recovery-action frame is present. & Boolean conjunction of the preceding two predicates. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The audit includes negative and boundary cases. OpenHands has explicit
+\texttt{ErrorObservation} status text but no source-origin label or dedicated
+high-trust recovery frame. LangGraph's \texttt{ToolMessage} with
+\texttt{status=error}
+similarly records error status, while returned error-like strings can remain
+successful tool messages. AutoGen preserves an internal \texttt{is\_error}
+field, but the model-facing result message does not carry a source-origin
+distinction. These cases prevent error-status metadata
+from being incorrectly counted as provenance protection.
+
+\subsection{Model, Endpoint, and Snapshot Provenance}
+\label{sec:method-provenance}
+
+The experiments use model aliases exposed by the OpenCode Go catalog. The
+catalog records aliases, \texttt{owned\_by=opencode}, and a common
+\texttt{created} value. Since every entry shares that value, we treat it as
+catalog publication time rather than a checkpoint identifier. The provenance
+manifest records the model alias, endpoint, protocol, temperature when
+available, run date, raw-log path, billing/local-log reference, and artifact
+hash.
+
+The supplied service documentation specifies \texttt{/responses} for GPT-5.6
+Luna, \texttt{/chat/completions} for GLM, Kimi, DeepSeek, and MiMo, and
+\texttt{/messages} for MiniMax and Qwen. Historical GPT artifacts were
+generated through \texttt{/chat/completions}. A current one-request probe
+received HTTP 403 with edge code 1010 from both the documented and historical
+routes, so the historical artifacts are not relabeled and the probe is not
+interpreted as a protocol-equivalence test. Public Hugging Face repositories
+are recorded as snapshot candidates where available, but no provider
+alias-to-revision mapping is exposed; API results are therefore
+provider-catalog evaluations rather than immutable-checkpoint evaluations.
+
+\subsection{Native-Framework Experiments}
+\label{sec:method-validation}
+
+\paragraph{Reflexion.}
+The canonical matrix executes the shipped retry path at commit
+\texttt{218cf0e}. It uses five payload variants, five model aliases, 100
+trials per payload and arm, and a fixed temperature of 0.7. The attack
+artifact is the parsed generated code; success requires the canary behavior
+\texttt{canary\_probe}. The matched benign arm uses the same recovery
+structure without the injected directive.
+
+To directly test provenance handling on a shipped recovery implementation, we
+also ran a supplementary native Reflexion port at the same commit. Kimi K2.6
+was evaluated with the five canonical payloads, 50 trials per payload, arm,
+and treatment. The raw treatment preserves the captured feedback string; the
+TrustOrigin treatment labels the test-runner output as external/untrusted
+before passing it to the framework's native recovery generator. Each treatment
+has a matched benign arm. The port invokes the pinned
+\texttt{PyGenerator.func\_impl} and parser; the self-reflection text is held
+fixed to isolate the capture-to-recovery contrast and to match the canonical
+one-completion budget.
+
+\paragraph{AutoGen.}
+AutoGen \texttt{python-v0.4.7} is executed through its native
+\texttt{AssistantAgent}, \texttt{FunctionTool}, tool-error event, and
+subsequent recovery turn. Three models use 50 trials per payload and arm,
+temperature 0.7, and the same attack/benign payload definitions as Reflexion.
+The native path rate is reported separately from attack success.
+
+\paragraph{Aider.}
+Aider \texttt{v0.86.2} is executed through
+\texttt{aider.coders.base\_coder.Coder.run\_one}, its native non-zero
+\texttt{cmd\_test} output, and the same Coder recovery loop. The run uses 50
+trials per payload and arm, the pinned \texttt{aider-chat==0.86.2} package,
+and Aider's recorded default temperature behavior. Native transcript evidence
+confirms that the test failure is inserted before the recovery turn.
+
+\subsection{Mechanism and Utility Screens}
+\label{sec:method-screens}
+
+The Reflexion contrast screen uses Kimi K2.6, five payloads, and 20 trials per
+payload, arm, and cell. It varies channel (forward/recovery), provenance
+(raw/tagged), message role, and position. The defense-aware screen uses
+GPT-5.6 Luna, five payload classes, and 20 trials per class/configuration.
+The legitimate-recovery screen uses 100 deterministic tasks across seven
+failure categories, with a quality-passing repair as the success criterion and
+an injected-directive classifier as the false-positive check.
+
+\subsection{Statistical Reporting}
+\label{sec:method-stats}
+
+Attack success rates are reported by framework, model, payload, and arm, with
+Wilson 95\% confidence intervals. Matched binary comparisons use two-sided
+Fisher exact tests when a comparison is pre-specified. The contrast, defense-aware,
+and legitimate-recovery screens are explicitly descriptive or exploratory at
+their completed sample sizes. The power-analysis artifact is planning
+information, not post-hoc confirmation. All numerical tables in the main
+paper are generated from the frozen JSON artifacts by
+\texttt{evaluation/generate\_emse\_paper\_numbers.py}.
+
+\subsection{Ethical and Reproducibility Controls}
+\label{sec:method-ethics}
+
+All payloads are synthetic and target canary behavior in isolated environments.
+Credentials are excluded from logs and manifests. The source audit, canonical
+manifests, raw trial logs, endpoint probe, snapshot audit, power analysis, and
+number-generation script are retained in the replication package.

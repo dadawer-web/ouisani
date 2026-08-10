@@ -1,0 +1,73 @@
+%% ethics.tex -- submission version
+
+\section{Ethics Statement}
+\label{sec:ethics}
+
+\subsection{Responsible Vulnerability Handling}
+
+This study evaluates a recovery-channel prompt-injection pattern using
+synthetic payloads and canary behavior.  The load-bearing results are obtained
+in isolated test environments from fixed framework commits; they do not
+target live user data, production credentials, or third-party services beyond
+the model calls needed for the experiment.
+
+\paragraph{Maintainer communication.}
+The Reflexion, AutoGen, and Aider observations are reported with different
+evidence labels.  Reflexion has a native end-to-end recovery-path result;
+AutoGen and Aider have native-framework runs with matched benign controls but
+smaller cells; source-only observations for the remaining cases are not
+presented as confirmed vulnerabilities.  Before public release, maintainers
+will receive the relevant fixed-commit excerpts, reproduction instructions,
+and the provenance-tagging recommendation.  Communication status and links
+will be added to the replication package when available; no unverified
+acknowledgement is claimed in this manuscript.
+
+\subsection{Responsible Release}
+
+The released artifacts contain synthetic payloads that exercise the
+provenance property of the recovery path, the canary detector, raw trial
+summaries, and the corresponding remediation guidance.  They do not include
+model-specific jailbreaks, user data, secrets, or instructions for attacking
+unrelated deployments.  API keys are excluded from scripts, logs, manifests,
+and the paper source.
+
+\paragraph{Model-provider use.}
+The experiments use provider-mediated model aliases under the provider's
+published service terms.  The provenance manifest records endpoint, protocol,
+run date, model alias, billing/local-log references, and the fact that exact
+backend snapshots are not exposed.  The endpoint verification probe was
+stopped after the provider edge returned HTTP 403/1010 on both the documented
+and historical GPT routes; no repeated probing or quota-avoidance behavior was
+used.
+
+\paragraph{Broader impact.}
+Recovery loops are intended to improve reliability, but they can also move
+untrusted content into a context that the model treats as authoritative.  We
+hope the evidence encourages explicit provenance tracking and authorization
+checks at recovery sinks.  Because content-level defenses remain probabilistic
+and the structural gate is retained only as a design implication in this
+freeze, the paper avoids presenting either control as a universal solution.
+
+\section{Statements and Declarations}
+\label{sec:statements}
+
+\subsection{Competing Interests}
+The authors declare that they have no competing interests.
+
+\subsection{Funding}
+This study received no targeted external funding.
+
+\subsection{Data Availability}
+The accompanying replication package contains the derived trial records,
+canonical manifests, source-audit outputs, endpoint verification, snapshot
+audit, power analysis, and the scripts that generate the numerical tables.
+Provider response bodies and credentials are not redistributed: the former
+are subject to provider retention and access terms, and the latter are never
+included in the package. The package instead preserves local-log references,
+artifact hashes, protocol metadata, and the derived records needed to verify
+the reported counts.
+
+\subsection{Use of Artificial Intelligence Tools}
+An AI assistant was used during drafting, code organization, and language
+editing. The authors reviewed the experiments, analyses, and final manuscript,
+remain accountable for all claims, and approved the submitted version.

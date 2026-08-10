@@ -1,0 +1,122 @@
+%% threats_to_validity.tex -- submission version
+
+\section{Threats to Validity}
+\label{sec:threats-to-validity}
+
+We organize the limitations following the internal, external, construct,
+conclusion, and reliability categories of Wohlin et al.~\cite{wohlin2012}.
+The evidence hierarchy is explicit: native-framework executions are the
+load-bearing RQ2 evidence; author-constructed recovery nodes and the
+structural reauthorization proposal are supplementary.
+
+\subsection{Internal Validity}
+
+\paragraph{Native execution and matched controls.}
+The canonical Reflexion matrix executes the framework's retry path at a fixed
+commit and pairs every attack arm with a matched benign arm.  AutoGen 0.4.7
+and Aider 0.86.2 likewise execute their native error/recovery flows and retain
+path-completion indicators.  These controls reduce the risk that ordinary
+code generation or tool use is misclassified as an attack, but they do not
+remove model stochasticity or provider-side variation.
+
+\paragraph{Author-constructed screens.}
+The provenance/role/position contrast screen and the defense-aware screen use
+an author-constructed recovery node.  They are mechanism and screening
+experiments, not evidence that a named framework ships the exact vulnerable
+node.  The defense-aware contrast is \DefenseUndefendedASR{} versus
+\DefenseDefendedASR{} with Fisher's exact $p=\DefenseFisherP{}$; it is
+therefore not presented as a statistically established
+defense effect.  LangGraph recovery-node results are treated in the same way
+because LangGraph does not ship that recovery primitive by default.
+
+\paragraph{Measurement proxy.}
+Attack success is classified from the framework artifact or model response
+using a conservative, rule-based canary detector.  A response that merely
+mentions a tool without expressing the canary behavior is not counted as a
+success.  The native Aider and Reflexion logs provide a stronger ecological
+check than a prompt-only reconstruction, while the remaining screens should
+be interpreted as behavioral proxies rather than measurements of real-world
+side effects.
+
+\subsection{External Validity}
+
+\paragraph{Framework sample.}
+The source analysis covers six open-source frameworks selected for visible
+retry, reflection, or error-recovery code.  This purposive sample supports a
+comparative qualitative claim, not a prevalence estimate for all agent
+frameworks.  Closed-source systems and frameworks with different recovery
+architectures may behave differently.
+
+\paragraph{Model and provider variation.}
+The canonical matrix contains five provider aliases and shows substantial
+heterogeneity (ASR \ReflexionMinASR{}--\ReflexionMaxASR{}).  AutoGen and Aider use smaller $n=50$ per
+payload/arm cells, and the defense-aware and legitimate-recovery experiments
+are screening samples.  The results should therefore be reported by
+framework, model, and payload, rather than as one pooled model-independent
+rate.
+
+\paragraph{Snapshot disclosure.}
+The OpenCode Go catalog records aliases, ownership, and one common
+\code{created} timestamp.  Because that timestamp is identical across the
+catalog entries, we interpret it as catalog publication time, not an
+immutable checkpoint identifier.  The service documentation specifies
+\code{/responses} for GPT-5.6 Luna, whereas the historical GPT artifacts were
+created through \code{/chat/completions}.  A current one-request probe was
+blocked with HTTP 403/edge code 1010 on both routes, so it cannot establish
+protocol equivalence.  Billing records, endpoint metadata, and local raw logs
+prove that calls were made, but cannot prove the exact backend checkpoint.
+Three public Hugging Face repositories are recorded as snapshot candidates,
+but no provider alias-to-revision mapping is disclosed.  Exact snapshot
+reproducibility is consequently an explicit limitation.
+
+\subsection{Construct Validity}
+
+\paragraph{Trampoline construct.}
+The trust-escalation trampoline is operationalized as the conjunction of two
+source-level criteria: absence of a provenance distinction and application of
+a high-trust recovery frame.  Partial cases are retained rather than forced
+into the binary label.  The code excerpts, fixed commits, written rubric, and
+deterministic checks are preserved.  This is a single-coder qualitative
+analysis; independent re-coding and formal disagreement adjudication remain
+limitations rather than completed claims.
+
+\paragraph{Payload coverage.}
+Five payload variants are used in the canonical Reflexion matrix and native
+framework runs.  They cover the same semantic directive with different
+surface forms, but cannot represent the full space of adaptive or multilingual
+attacks.  The defense-aware screen is single-round; a multi-round attacker
+that learns from rejections could achieve a different rate.
+
+\paragraph{Legitimate recovery.}
+The legitimate-recovery screen contains \LegalRecoveryTasks{} deterministic
+tasks across seven failure categories, with \LegalRecoverySuccesses{}
+quality-passing recoveries and zero false positives.  It is reported as
+screening evidence only.  The accompanying power analysis is prospective
+planning information, not post-hoc confirmation.
+
+\subsection{Conclusion Validity}
+
+All reported intervals are Wilson 95\% intervals, and matched binary
+comparisons use two-sided Fisher exact tests.  The contrast and defense-aware
+screens are explicitly exploratory or descriptive where power is insufficient.
+The power-analysis artifact records that the small provenance contrast and
+the observed defense contrast would require substantially larger samples for
+confirmatory inference.  We therefore avoid claims that provenance tagging
+or the completed defense screen has a proven population-level effect.
+
+\subsection{Reliability}
+
+The replication package retains raw per-trial logs, canonical manifests,
+endpoint metadata, artifact hashes, the GPT endpoint probe, the model-snapshot
+audit, the power analysis, the provenance manifest, the source-code audit, and
+the number-generation script.  Credentials are not written to these
+artifacts.  All numerical tables in this submission are generated from the
+JSON logs; any older draft section that cannot be traced to those logs is
+excluded from the quantitative claims.
+
+\paragraph{Structural-defense scope.}
+The \reauthgate{} section specifies a useful authorization invariant, but this
+paper does not evaluate a native-framework port with raw logs.  Claims of zero
+ASR, framework-agnosticity, or negligible overhead are therefore design
+hypotheses and future-work requirements, not findings used to support the main
+RQ2/RQ3 conclusions.

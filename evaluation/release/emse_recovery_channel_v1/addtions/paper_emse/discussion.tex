@@ -1,0 +1,52 @@
+%% discussion.tex -- current evidence freeze
+
+\section{Discussion}
+\label{sec:discussion}
+
+The current evidence supports a focused architectural interpretation: a recovery path is a trust boundary whenever it transports failure content into a subsequent LLM turn. The native Reflexion, AutoGen, and Aider results show that the behavior is not tied to one message-format reconstruction, while the large model variation shows why framework/model/payload strata are necessary. The native Reflexion TrustOrigin port is the primary provenance result; the other screens delimit its scope.
+
+\subsection{Design Implications}
+\label{sec:design-patterns}
+
+\paragraph{Capture provenance at the failure boundary.}
+Frameworks should label content at the point where exceptions, tool returns, test output, or external files are captured. The label must survive packaging and re-injection so that the recovery policy can distinguish internally generated diagnostics from external-origin content.
+
+\paragraph{Frame unknown content as untrusted.}
+Recovery prompts should not place unverified failure content inside a system-like or role-authority frame. Unknown provenance should fail closed and be presented as data to inspect, not as an instruction to execute.
+
+\paragraph{Reauthorize privileged recovery actions.}
+Content-level handling is not sufficient for actions that change roles, tools, or topology. Such actions should pass through a centralized reauthorization gate that checks the failed execution's authority and the recovery action's requested privilege.
+
+This is a design implication rather than a completed RQ4 experiment in the
+present study. The proposed invariant is
+$P(\text{recovery action}) \leq P(\text{failed execution})$; implementing it at
+the orchestrator sink provides an LLM-independent authorization decision. A
+future native-framework port should verify the invariant with fixed commits,
+matched benign tasks, and raw traces.
+
+\subsection{Recommendations for Framework Developers}
+\label{sec:recommendations}
+
+Developers should (i) preserve error-origin metadata, (ii) separate tool errors from successful tool returns, (iii) reserve high-trust framing for verified internal diagnostics, (iv) include matched benign recovery tests in security evaluations, and (v) publish model/protocol metadata whenever LLM-backed results are reported.
+
+\subsection{Structural and Content-level Controls}
+\label{sec:structural-vs-content}
+
+The two defense classes address different failure modes. Provenance and untrusted framing reduce the probability that an LLM obeys an injected directive, but their effectiveness is model- and payload-dependent. Structural reauthorization prevents a privileged recovery side effect even when the model produces an unsafe recommendation. The latter is therefore a complement, not a replacement, for content-level handling.
+
+\subsection{Limitations}
+\label{sec:limitations}
+
+The native AutoGen, Aider, and TrustOrigin port use 50 trials per payload/arm
+or treatment, the contrast screen uses 20 trials per payload (100 pooled trials
+per cell), and the defense-aware and legitimate-recovery screens are
+supplementary. The TrustOrigin port uses one model and holds the self-reflection
+text fixed, so it strengthens native path evidence without establishing general
+defense efficacy. The provider exposes aliases but not immutable
+checkpoint revisions; the GPT historical artifacts use a different protocol
+from the route specified in the current service documentation, and the
+current endpoint probes were blocked by HTTP 403/1010. These limitations
+constrain exact replication and confirmatory inference. The study consequently
+treats contrast, defense-aware, and legitimate-recovery results as screening
+evidence and avoids generalizing them beyond the recorded
+framework/model/payload strata.

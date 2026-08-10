@@ -1,0 +1,317 @@
+{
+  "status": "staging",
+  "files": [
+    {
+      "path": "addtions/paper_emse/current_results.md",
+      "status": "present",
+      "sha256": "86a96cde10c9220c40d7842cf409a49950baeca8f51822ad335262caa24ba2df",
+      "bytes": 7318
+    },
+    {
+      "path": "addtions/paper_emse/RESPONSIBLE_DISCLOSURE_DRAFT.md",
+      "status": "present",
+      "sha256": "be2734fdbf354655f304ddafe9bb75140e030a7ea9a5461c0d92c50c2ab6ef51",
+      "bytes": 2529
+    },
+    {
+      "path": "addtions/paper_emse/RESPONSIBLE_DISCLOSURE_DRAFT.eml",
+      "status": "present",
+      "sha256": "bccd1cef17d53c2b418856ab4d44550b3f1d9c469078467d99dcf171f205a3e6",
+      "bytes": 1911
+    },
+    {
+      "path": "addtions/paper_emse/generated_results.tex",
+      "status": "present",
+      "sha256": "9277a127b6657d4fdd400095c03150fbf59075f98da2ac0f72c9414921a4f5c0",
+      "bytes": 2308
+    },
+    {
+      "path": "addtions/paper_emse/generated_reflexion_rows.tex",
+      "status": "present",
+      "sha256": "c4d5f75403c95434407213b43968a71e2c0255e7992b317b3eeab20c9bdaa350",
+      "bytes": 300
+    },
+    {
+      "path": "addtions/paper_emse/generated_native_rows.tex",
+      "status": "present",
+      "sha256": "63663f63918668bf426078fa1342272c3046f56e83743ecbdf6bacf8f22a5eac",
+      "bytes": 226
+    },
+    {
+      "path": "addtions/paper_emse/generated_ablation_rows.tex",
+      "status": "present",
+      "sha256": "59b1cb1f6e57c134b0de3cb76e9624b4a59c5e61de9c49b5ed13841a20f4da5d",
+      "bytes": 294
+    },
+    {
+      "path": "addtions/paper_emse/generated_trustorigin_rows.tex",
+      "status": "present",
+      "sha256": "e20510e22c47cacedd9a0fd0f8c08240ad77a119f692bc80c1053220b5b4c8e2",
+      "bytes": 134
+    },
+    {
+      "path": "evaluation/generate_emse_paper_numbers.py",
+      "status": "present",
+      "sha256": "4462d13b40d7d2dbd2461dc105adeedc957ea8dfd7be9577a6220435ad47c9b4",
+      "bytes": 9690
+    },
+    {
+      "path": "evaluation/audit_emse_protocol.py",
+      "status": "present",
+      "sha256": "796091cd2d922bcc1f8f1bca2c1d9dc00171c8535857348e32c275bf6f606bb5",
+      "bytes": 14892
+    },
+    {
+      "path": "evaluation/reflexion_native_trustorigin.py",
+      "status": "present",
+      "sha256": "a3202f805049d10ac0ca4ad18a3e4a45f73dc52a08f5a0b2ebb1c6b98de2ace9",
+      "bytes": 17221
+    },
+    {
+      "path": "evaluation/reflexion_ollama_qwen3_anchor.py",
+      "status": "present",
+      "sha256": "f21996feaf3df46c5fe599185c40782332417730373fdd1fcddb1431140fe4bb",
+      "bytes": 10507
+    },
+    {
+      "path": "evaluation/prepare_second_coder_packet.py",
+      "status": "present",
+      "sha256": "526880683b9b8fd6db6d0f37c39a158a2c5185225ac8a14cff1edc67842c99dd",
+      "bytes": 3522
+    },
+    {
+      "path": "evaluation/analyze_second_coder.py",
+      "status": "present",
+      "sha256": "343e592248bb0a986e5e50b87b7f3c4370e22a47f2edb3c92d9cd9c212bf2cc1",
+      "bytes": 2905
+    },
+    {
+      "path": "evaluation/results/emse_protocol_audit/provenance_manifest.json",
+      "status": "present",
+      "sha256": "2c2115a06de02a19f3527404d349f5753caa1f5dbba1854d91131df5a6f97f44",
+      "bytes": 19659
+    },
+    {
+      "path": "evaluation/results/emse_protocol_audit/model_snapshot_audit.json",
+      "status": "present",
+      "sha256": "d833d8e837fc9cef70a8c61e103f53b97b180a27c339e7daf5314d43d5595a18",
+      "bytes": 19820
+    },
+    {
+      "path": "evaluation/results/emse_protocol_audit/power_analysis.json",
+      "status": "present",
+      "sha256": "abc64dae456c7579f3a2b150bb8a6f4498fc90ad16ee2ae755042f564dc10eb5",
+      "bytes": 3424
+    },
+    {
+      "path": "evaluation/results/emse_source_analysis/source_audit.json",
+      "status": "present",
+      "sha256": "cdeb0de0c45fb0ad8dd2b8a0192acf286386c8009d168684478954226f7f1eba",
+      "bytes": 5361
+    },
+    {
+      "path": "evaluation/results/emse_reflexion_trustorigin/kimi-k2.6_n50/native_trustorigin.json",
+      "status": "present",
+      "sha256": "cbcd912b5173b1b7913a4ce584ef8dc4f07ca7f94023384bb7d253515c87832f",
+      "bytes": 2234
+    },
+    {
+      "path": "evaluation/results/emse_reflexion_trustorigin/kimi-k2.6_n50/native_trustorigin.csv",
+      "status": "present",
+      "sha256": "720366f8f150c8fdfb3af6005b5e5bc9e632d7ce91affb9361263dde51de9c50",
+      "bytes": 86293
+    },
+    {
+      "path": "evaluation/results/emse_source_analysis/second_coder/CODEBOOK.md",
+      "status": "present",
+      "sha256": "b783ff12b3fc822691d3393ba601c8c653b1efeedcfe5ace2a0fbd564bffe9eb",
+      "bytes": 1366
+    },
+    {
+      "path": "evaluation/results/emse_source_analysis/second_coder/HANDOFF_TO_SECOND_CODER.md",
+      "status": "present",
+      "sha256": "b2c19a93aed83b249ca8a05d777fc17e3f9df64c153a81a8259a0432b09f2787",
+      "bytes": 814
+    },
+    {
+      "path": "evaluation/results/emse_source_analysis/second_coder/second_coder_labels.csv",
+      "status": "present",
+      "sha256": "cfe54779f5ea2d6ca5a7699dde68eb9f9427258f9fe4ef267f4a947b25624a5d",
+      "bytes": 1075
+    },
+    {
+      "path": "evaluation/results/emse_reflexion_qwen3_ollama_anchor/QWEN3_BLOCKER.md",
+      "status": "present",
+      "sha256": "f96347ffd6217d507f33f212f5fcb3f112ab90d38d724a7111ec9a9b0e3efeed",
+      "bytes": 1133
+    },
+    {
+      "path": "addtions/paper_emse/main.pdf",
+      "status": "present",
+      "sha256": "41f40e432acf5870e40d39ad210e4820ce63518213f511b2e27fd81dbdb8f3eb",
+      "bytes": 690573
+    },
+    {
+      "path": "addtions/paper_emse/cover_letter_emse.pdf",
+      "status": "present",
+      "sha256": "bcf88b700f3e3d72af72cfc08b54ca8dd96c315ccc83a47a20ddf24a4984b12e",
+      "bytes": 43804
+    },
+    {
+      "path": "addtions/paper_emse/abstract.tex",
+      "status": "present",
+      "sha256": "b4067f8f3ef614b79fb6234d0ff1c1af78891c8dac451ed531e02c223870613b",
+      "bytes": 2240
+    },
+    {
+      "path": "addtions/paper_emse/background.tex",
+      "status": "present",
+      "sha256": "74ca46e9cc8a7e01804428d0199b0b90f4f6f2db14964db572c07671eac1f3f0",
+      "bytes": 6753
+    },
+    {
+      "path": "addtions/paper_emse/conclusion.tex",
+      "status": "present",
+      "sha256": "7444337bf28633b0c6434106884208d10ba911933e0b708db6a6b09d4f361f2e",
+      "bytes": 3482
+    },
+    {
+      "path": "addtions/paper_emse/cover_letter_emse.tex",
+      "status": "present",
+      "sha256": "240c1b37b4febfda13c89d09cb4196cf507ace99c3e4f4af18dc037b45be0b45",
+      "bytes": 3368
+    },
+    {
+      "path": "addtions/paper_emse/defense_eval.tex",
+      "status": "present",
+      "sha256": "aa67fc2e0c7a6697e5dd31d41d8d632a847b5f69ea7ef0afecdc026c240d2f24",
+      "bytes": 2401
+    },
+    {
+      "path": "addtions/paper_emse/defense_mechanism.tex",
+      "status": "present",
+      "sha256": "580bb957c5e597c2ad44f2c0d374e5068ea700972802bc61adc6f11e1f34492e",
+      "bytes": 2843
+    },
+    {
+      "path": "addtions/paper_emse/discussion.tex",
+      "status": "present",
+      "sha256": "0a55d7e68bd9a248020c68955fae007f6c17a69c17dd0eb2e1fab39f0c326375",
+      "bytes": 3830
+    },
+    {
+      "path": "addtions/paper_emse/ethics.tex",
+      "status": "present",
+      "sha256": "cbd0e4837a7d380a2de94232b1f51ab4bc4623bbb2a4f24fb7cb84a9b1179118",
+      "bytes": 3652
+    },
+    {
+      "path": "addtions/paper_emse/generated_ablation_rows.tex",
+      "status": "present",
+      "sha256": "59b1cb1f6e57c134b0de3cb76e9624b4a59c5e61de9c49b5ed13841a20f4da5d",
+      "bytes": 294
+    },
+    {
+      "path": "addtions/paper_emse/generated_native_rows.tex",
+      "status": "present",
+      "sha256": "63663f63918668bf426078fa1342272c3046f56e83743ecbdf6bacf8f22a5eac",
+      "bytes": 226
+    },
+    {
+      "path": "addtions/paper_emse/generated_reflexion_rows.tex",
+      "status": "present",
+      "sha256": "c4d5f75403c95434407213b43968a71e2c0255e7992b317b3eeab20c9bdaa350",
+      "bytes": 300
+    },
+    {
+      "path": "addtions/paper_emse/generated_results.tex",
+      "status": "present",
+      "sha256": "9277a127b6657d4fdd400095c03150fbf59075f98da2ac0f72c9414921a4f5c0",
+      "bytes": 2308
+    },
+    {
+      "path": "addtions/paper_emse/generated_trustorigin_rows.tex",
+      "status": "present",
+      "sha256": "e20510e22c47cacedd9a0fd0f8c08240ad77a119f692bc80c1053220b5b4c8e2",
+      "bytes": 134
+    },
+    {
+      "path": "addtions/paper_emse/introduction.tex",
+      "status": "present",
+      "sha256": "7782f7bd9b7628da9036fd7d48a8e2ad393a7c537f2ecfa703c1ec95a1cd6d8e",
+      "bytes": 4542
+    },
+    {
+      "path": "addtions/paper_emse/main.tex",
+      "status": "present",
+      "sha256": "3e05457005b8b0a8090a1ef0bc038b91f64f9caae660db790e9a56799ce8501f",
+      "bytes": 6066
+    },
+    {
+      "path": "addtions/paper_emse/methodology.tex",
+      "status": "present",
+      "sha256": "265b91ef2cc0f043bb4e80894364cebfe3300b40bada0fbaa89165e9fa8381e1",
+      "bytes": 10745
+    },
+    {
+      "path": "addtions/paper_emse/references.bib",
+      "status": "present",
+      "sha256": "bcdc75d0b2efabd5a1a87963a4f75a7d3b07a1f90092de4b45efb846ed03d392",
+      "bytes": 16655
+    },
+    {
+      "path": "addtions/paper_emse/related_work.tex",
+      "status": "present",
+      "sha256": "5c40b8892f511842281b786ed73d0ab78475c0cda45a715ccf962a1764acb7a3",
+      "bytes": 6558
+    },
+    {
+      "path": "addtions/paper_emse/results.tex",
+      "status": "present",
+      "sha256": "cde253317b5a8fdb8e633b0d24f684fc77b559e58133d3a15ccbb521f112cc9c",
+      "bytes": 4557
+    },
+    {
+      "path": "addtions/paper_emse/severity.tex",
+      "status": "present",
+      "sha256": "9fe18bacf449de18f6daf6a6a84ec01b48a71ee3f9d0f5cdd14f2b5597f87a69",
+      "bytes": 5746
+    },
+    {
+      "path": "addtions/paper_emse/structural_defense.tex",
+      "status": "present",
+      "sha256": "65ca29688a7a7c41336eeea41052cbf50b36c7ec786ab489466daa4ab2de4e78",
+      "bytes": 8339
+    },
+    {
+      "path": "addtions/paper_emse/structural_defense_eval.tex",
+      "status": "present",
+      "sha256": "b76ed198c3a57684d8cadcfae227a193dd5349ca696a97080aa586098362172f",
+      "bytes": 2454
+    },
+    {
+      "path": "addtions/paper_emse/svglov3.clo",
+      "status": "present",
+      "sha256": "a0b9f3522e6ef83f3dd8d5901c74745d515355ccd61f0a148668283aabdb5467",
+      "bytes": 3809
+    },
+    {
+      "path": "addtions/paper_emse/svjour3.cls",
+      "status": "present",
+      "sha256": "e9840b9fdd767d9ecf92e2c79319084b4764810ed27c792872ac8be8ceae0a07",
+      "bytes": 47679
+    },
+    {
+      "path": "addtions/paper_emse/threat_model.tex",
+      "status": "present",
+      "sha256": "431cff2981082b880cd37b094c132fe0f09a712d36196fb26c47c190dec0f6ff",
+      "bytes": 13844
+    },
+    {
+      "path": "addtions/paper_emse/threats_to_validity.tex",
+      "status": "present",
+      "sha256": "97f4bceb9d31e8ad5bfef060ccd37c22b4667d7a168f0da3f7bdb487202805d9",
+      "bytes": 6598
+    }
+  ]
+}

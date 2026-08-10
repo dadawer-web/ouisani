@@ -1,0 +1,39 @@
+%% conclusion.tex -- submission version
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper studies a single architectural security boundary: the recovery path of self-healing LLM agents can re-inject externally influenced failure content into a subsequent LLM turn. The resulting channel is independent of the normal forward input path. Our evidence combines source-level multiple-case analysis with native-framework execution, matched benign controls, and explicitly labeled mechanism screens.
+
+The canonical Reflexion matrix shows substantial model heterogeneity: attack
+ASR ranges from \ReflexionMinASR{} to \ReflexionMaxASR{} across five model
+aliases, while all matched benign trials remain at zero false positives. The
+native AutoGen and Aider runs demonstrate that the phenomenon is not restricted
+to one message-construction script: AutoGen produces a non-zero attack rate for
+Kimi K2.6 (\AutoGenKimiASR{}) with zero benign false positives, and Aider
+produces \AiderGptASR{} attack ASR for GPT-5.6 Luna with zero benign false
+positives. These results support the central claim that recovery/error paths
+should be treated as independent trust boundaries, while the
+framework/model/payload strata show why a single pooled ASR would be
+misleading.
+
+The native Reflexion provenance port is the primary RQ3 provenance result:
+raw recovery produces \NativeTrustOriginRawASR{} attack success while
+TrustOrigin framing produces \NativeTrustOriginTaggedASR{}, with zero matched
+benign false positives and Fisher's exact $p=\NativeTrustOriginFisherP{}$.
+This is single-model evidence that provenance framing reduces, but does not
+eliminate, recovery-path obedience. The older Reflexion contrast screen is
+intentionally modest: raw-versus-tagged recovery content differs by only 0.010
+in pooled ASR (\CausalRawRecoveryASR{} versus \CausalTaggedRecoveryASR{}), and
+recovery-versus-forward differs by 0.060
+(\CausalRawRecoveryASR{} versus \CausalForwardASR{}). We therefore report
+these cells as exploratory mechanism screening, not as confirmatory estimates
+of a large provenance effect. Similarly, the supplementary defense-aware screen changes
+ASR from \DefenseUndefendedASR{} to \DefenseDefendedASR{}, but Fisher's exact
+test is not significant ($p=\DefenseFisherP{}$). The legitimate-recovery
+screen obtains \LegalRecoverySuccesses{}/\LegalRecoveryTasks{} successful
+repairs and zero false positives; it is useful as a screening result.
+
+The design implication is consequently two-layered. Provenance marking and untrusted framing are necessary controls because they reduce the chance that an error payload is interpreted as an instruction. They should not be treated as an absolute guarantee, especially when the model is strongly instruction-following. Privileged recovery actions require an additional structural reauthorization check at the recovery sink; this is a complementary design rule rather than a replacement for content handling.
+
+Finally, the OpenCode Go catalog, billing provenance, local raw logs, and endpoint metadata are preserved in the replication package. The catalog does not expose an immutable provider checkpoint, and the current endpoint probe was blocked with HTTP 403/1010 on both the documented GPT Responses route and the historical Chat Completions route. We therefore make no claim that provider aliases are fixed official snapshots. Exact backend-version reproducibility remains an explicit limitation and a priority for future replication.

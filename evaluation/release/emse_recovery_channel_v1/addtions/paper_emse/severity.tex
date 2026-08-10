@@ -1,0 +1,131 @@
+%% severity.tex -- submission version
+
+\section{RQ2: Native Recovery-Path Exploitability}
+\label{sec:severity}
+
+Attack success is defined by a canary behavior in the native framework
+artifact or model response. Matched benign controls use the same task and
+recovery structure without the injected directive. We report framework,
+model, and payload strata rather than relying on a single pooled ASR.
+
+\subsection{Canonical Reflexion Matrix}
+\label{sec:reflexion-e2e}
+
+The Reflexion canonical matrix uses five payload variants, five model aliases,
+\ReflexionTrialsPerVariantArm{} trials per variant and arm, and the shipped
+retry path at commit \texttt{218cf0e}. The model-stratified results are
+generated directly from the canonical manifest:
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Canonical Reflexion recovery-path results. Intervals are Wilson 95\% confidence intervals.}
+\label{tab:canonical-reflexion}
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Model} & \textbf{Successes} & \textbf{Trials} & \textbf{ASR} & \textbf{Benign FPR} & \textbf{ASR CI} \\
+\midrule
+\input{generated_reflexion_rows}\tabularnewline
+\bottomrule
+\end{tabular}
+\end{table}
+
+Attack ASR ranges from \ReflexionMinASR{} to \ReflexionMaxASR{} across the
+five aliases. Every matched benign arm is zero, for
+\ReflexionBenignTrials{} benign trials in total. The model heterogeneity
+shows why pooled rates are insufficient, while the benign controls exclude
+ordinary recovery behavior as an explanation for the canary classifier.
+
+\subsection{Native Reflexion TrustOrigin Port}
+\label{sec:reflexion-trustorigin-native}
+
+We next ported the provenance treatment to the shipped Reflexion recovery
+generator at the same commit. With \NativeTrustOriginModel{}, five payloads,
+and \NativeTrustOriginTrialsPerCell{} trials per payload, arm, and treatment,
+the raw recovery treatment produced
+\NativeTrustOriginRawSuccesses{}/\NativeTrustOriginAttackTrials{}
+(\NativeTrustOriginRawASR{}) attack successes, while the
+\trustorigin{}-tagged treatment produced
+\NativeTrustOriginTaggedSuccesses{}/\NativeTrustOriginAttackTrials{}
+(\NativeTrustOriginTaggedASR{}). The matched benign FPRs were
+\NativeTrustOriginRawFPR{} and \NativeTrustOriginTaggedFPR{}, respectively;
+the raw-versus-tagged attack contrast gives Fisher's exact
+$p=\NativeTrustOriginFisherP{}$. This is framework-level reinforcement for
+the provenance mechanism, not a cross-model defense-efficacy estimate.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Native Reflexion provenance treatment with matched benign controls.}
+\label{tab:native-trustorigin}
+\begin{tabular}{llrrr}
+\toprule
+\textbf{Model} & \textbf{Treatment} & \textbf{Attack} & \textbf{Benign FPR} & \textbf{Attack CI} \\
+\midrule
+\input{generated_trustorigin_rows}\tabularnewline
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Native AutoGen Recovery/Error Flow}
+\label{sec:autogen-e2e}
+
+AutoGen \texttt{python-v0.4.7} was executed through its native
+\texttt{AssistantAgent}, \texttt{FunctionTool}, tool-error event, and
+subsequent recovery turn. With \AutoGenTrialsPerVariantArm{} trials per
+variant and arm, GLM-5.2 and GPT-5.6 Luna produced zero attack successes,
+while Kimi K2.6 produced \AutoGenKimiASR{} ASR. Native path execution was
+unity for GLM and GPT and \AutoGenKimiPathRate{} for Kimi; benign FPR was zero
+in all three runs. This is native framework evidence, but the smaller cells
+make it a broad validation rather than a precision estimate.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Native AutoGen and Aider recovery/error flows.}
+\label{tab:native-frameworks}
+\begin{tabular}{p{1.7cm}p{2.4cm}p{3.1cm}rr}
+\toprule
+\textbf{Frame.} & \textbf{Model} & \textbf{Attack successes} & \textbf{Path rate} & \textbf{Benign FPR} \\
+\midrule
+\input{generated_native_rows}\tabularnewline
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Native Aider Recovery/Error Flow}
+\label{sec:aider-e2e}
+
+Aider \texttt{v0.86.2} was executed through
+\texttt{aider.coders.base\_coder.Coder.run\_one}, its native
+\texttt{cmd\_test} non-zero output, and the same Coder recovery loop. GPT-5.6
+Luna yielded \AiderGptASR{} attack ASR and \AiderGptPathRate{} native path
+completion, with zero benign successes. The native transcript records the
+test failure being added to the live conversation before the recovery turn;
+the result is therefore not a message-format reconstruction.
+
+\subsection{Mechanism and Channel Screen}
+\label{sec:recova-testbed}
+
+The Reflexion message-level Kimi K2.6 screen uses 20 trials per payload, arm,
+and cell. The recovery/raw user-tail reference is \CausalRawRecoveryASR{};
+the tagged variant is \CausalTaggedRecoveryASR{}; the forward/raw user-tail
+cell is \CausalForwardASR{}; the system-tail and user-head recovery cells are
+\CausalSystemTailASR{} and \CausalUserHeadASR{}, respectively. Every benign
+cell has zero FPR. The raw-versus-tagged difference is small, so this result
+is mechanism screening rather than a confirmatory estimate.
+
+\subsection{Author-constructed LangGraph Scope}
+\label{sec:langgraph-validation}
+
+Earlier LangGraph recovery-node and real-loop artifacts are retained only as
+supplementary mechanism checks because the recovery node was authored for the
+experiment rather than shipped as a default recovery primitive. They are not
+pooled with the native Reflexion, AutoGen, or Aider results and do not support
+the claim that LangGraph itself ships a vulnerable recovery loop.
+
+\paragraph{RQ2 summary.}
+The current evidence supports recovery-channel attack behavior across three
+native framework paths with matched benign controls. Model heterogeneity is
+large, and native path completion should be reported separately from ASR.
+Author-constructed nodes and message-level screens remain supplementary.

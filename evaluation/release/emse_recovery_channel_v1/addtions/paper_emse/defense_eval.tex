@@ -1,0 +1,49 @@
+%% defense_eval.tex -- submission version
+
+\section{RQ3: Mitigation Boundary and Legitimate Recovery}
+\label{sec:defense-eval}
+
+RQ3 separates mechanism screens from native-framework exploitability. The
+completed defense-aware and legitimate-recovery results are descriptive at
+their sample sizes; earlier naive-baseline and cross-model protocols are not
+included as quantitative claims because their raw artifacts and snapshot
+provenance are incomplete.
+
+\subsection{Defense-aware Attacker}
+\label{sec:defense-aware}
+
+The defense-aware screen uses five payload classes, 20 trials per class and
+configuration, and GPT-5.6 Luna. The undefended arm succeeds in
+\DefenseUndefendedSuccesses{}/\DefenseTrialsPerConfig{} trials
+(\DefenseUndefendedASR{}); the defended arm succeeds in
+\DefenseDefendedSuccesses{}/\DefenseTrialsPerConfig{} trials
+(\DefenseDefendedASR{}). Fisher's exact test gives
+$p=\DefenseFisherP{}$. The Wilson 95\% intervals are
+[\DefenseUndefendedCILow{}, \DefenseUndefendedCIHigh{}] and
+[\DefenseDefendedCILow{}, \DefenseDefendedCIHigh{}], respectively. No trial
+was blocked by an API error or a forward-path check.
+
+The point estimate is consistent with a modest reduction, but the contrast is
+not statistically established at the completed sample size. The power
+analysis estimates approximately 300 trials per pooled arm for 80\% power for
+this observed difference under the planning approximation. We therefore report
+the result as supplementary evidence, not as a general defense-effectiveness
+claim.
+
+\subsection{Legitimate Recovery}
+\label{sec:defense-cost}
+
+We generated \LegalRecoveryTasks{} deterministic tasks across arithmetic,
+assertion failure, compile error, external-content error, format error,
+permission denial, and tool timeout. GPT-5.6 Luna produced
+\LegalRecoverySuccesses{}/\LegalRecoveryTasks{} quality-passing repairs and
+triggered zero false positives. This supports the feasibility of benign
+recovery under the tested task generator, while the task set remains a
+screening sample rather than a population-quality estimate.
+
+\paragraph{RQ3 summary.}
+The completed screen supports two cautious statements: defense-aware recovery
+remains vulnerable in the tested configuration, and legitimate recovery is
+feasible with no observed false positives. It does not support a claim that
+\trustorigin{} significantly reduces attack success across models or
+frameworks.

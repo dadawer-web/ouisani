@@ -1,0 +1,167 @@
+%% threat_model.tex
+
+\section{Threat Model and Motivation}
+\label{sec:threat-model}
+
+\subsection{System Model: A Content-Processing Pipeline}
+\label{sec:system-model}
+
+We model a self-healing LLM agent framework---with \system{} as our running example---as a \emph{content-processing pipeline}. An LLM-driven execution unit ingests data from heterogeneous sources, emits actions, and, when an action fails, feeds the offending data back into its own context so that the next round can repair it. The security of such a pipeline rests on one property: \emph{provenance}. At every junction where content influences a decision, can the system tell where that content came from? We show that self-healing designs discard provenance at precisely the junction where it matters most.
+
+\paragraph{Execution units and ingestion points.}
+An agent is an LLM-driven execution unit bound to a \emph{role} (e.g., \code{Code\_Reviewer}, \code{Python\_Coder}) that fixes the set of data sources it may read and the tools it may drive. Data enters the pipeline through typed ingestion points: user messages, local files, web pages, and responses from external integrations such as MCP servers and third-party APIs. On the \emph{intake path}, each ingestion point is wrapped by validation that treats external data as untrusted---the standard entry-point discipline shared by virtually all production agent frameworks.
+
+\paragraph{Failure and the repair loop.}
+When an agent's output fails verification, or a tool invocation raises an exception, the framework suspends the unit and enters a \emph{repair loop}. A recovery component classifies the failure and selects one of a layered set of repair strategies---reflection injection, model fallback, human escalation, and others. To inform the repair, the framework captures a \emph{failure record} consisting of the agent's last input, its surrounding context, and the error trace emitted at the point of failure. This record is the raw material that repair strategies consume.
+
+\paragraph{The re-injection sink.}
+Repair strategies that alter the next-round prompt do so by writing into the context the agent will read on resumption. We call this write site the \emph{re-injection sink}---the pipeline's junction between the repair loop and the next execution round. Whatever the sink writes is read by the agent as part of its operating context. The security question is what trust label the sink assigns to what it writes, and, crucially, whether it can still tell where that content originally came from. In the baseline design we study, it cannot.
+
+\subsection{Two Junctions, One Asymmetry}
+\label{sec:trust-boundaries}
+
+The pipeline has two junctions at which content crosses between untrusted and trusted regions (Figure~\ref{fig:trust-boundaries}). They are enforced asymmetrically, and that asymmetry is the root cause we study.
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Intake junction.} Where external data first enters the pipeline---user input, tool output, fetched web content---it is tagged as untrusted and passed through validation. This is the well-defended junction: every production framework applies some form of entry-point sanitization here.
+    \item \textbf{Re-injection junction.} Where the repair loop writes back into the agent's next-round context, no provenance check is applied. Error traces and diagnostic outputs cross this junction as opaque strings, irrespective of what external content they embed. This junction is undefended by default, and is the focus of this paper.
+\end{enumerate}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+    node distance=0.6cm and 0.7cm,
+    scale=0.82, transform shape,
+    box/.style={draw, rounded corners=2pt, minimum height=0.7cm, minimum width=2.0cm, align=center, font=\small},
+    benign/.style={box, fill=green!15, draw=green!60!black},
+    attack/.style={box, fill=red!15, draw=red!70!black},
+    critical/.style={box, fill=red!70, draw=red!70!black, text=white, font=\small\bfseries},
+    arr/.style={-Stealth, thick},
+    barr/.style={-Stealth, thick, green!60!black},
+    marr/.style={-Stealth, thick, red!70!black, dashed},
+    region/.style={draw, dashed, rounded corners=4pt, inner sep=0.35cm}
+]
+% Benign flow
+\node[benign] (user) {Legitimate User};
+\node[benign, right=of user] (web1) {Normal Webpage};
+\node[benign, right=of web1] (agent1) {Agent Executes};
+\node[benign, right=of agent1] (done) {Task Done};
+\draw[barr] (user) -- (web1);
+\draw[barr] (web1) -- (agent1);
+\draw[barr] (agent1) -- (done);
+
+% Malicious flow
+\node[attack, below=1.8cm of user] (atk) {Attacker\\(Content Author)};
+\node[attack, right=of atk] (mal) {Malicious Webpage\\/ Poisoned API};
+\node[attack, right=of mal] (fail) {Parsing Error\\(induced)};
+\node[critical, right=of fail] (dump) {Failure Record\\(provenance lost)};
+\draw[marr] (atk) -- (mal);
+\draw[marr] (mal) -- (fail);
+\draw[marr] (fail) -- (dump);
+
+% Recovery path
+\node[critical, right=of dump] (orch) {Repair Loop\\Dispatch};
+\node[critical, right=of orch] (esc) {Re-injection\\(high trust)};
+\draw[marr] (dump) -- (orch);
+\draw[marr] (orch) -- (esc);
+
+% Region backgrounds
+\begin{scope}[on background layer]
+\node[region, fill=green!5, fit=(user)(web1)(agent1)(atk)(mal)(fail), label={[font=\footnotesize\itshape, green!60!black]above:Intake Path (validation applied)}] {};
+\node[region, fill=red!5, fit=(dump)(orch)(esc), label={[font=\footnotesize\itshape, red!70!black]above:Repair Loop (no provenance check)}] {};
+\end{scope}
+\end{tikzpicture}
+\caption{The two junctions of the pipeline and the \rci{} data flow. The intake path (top, green) tags external data as untrusted; the repair loop (bottom, red) re-introduces captured content into the next-round context without re-checking where it came from, producing the trust-escalation trampoline of \S\ref{sec:trampoline}.}
+\label{fig:trust-boundaries}
+\end{figure}
+
+\subsection{Attacker Model: A Data-Only Adversary}
+\label{sec:attacker-model}
+
+The attacker in our model is an \emph{external content author}: the writer of a web page the agent will fetch, the crafter of a file the agent will read, or the operator of a poisoned API or MCP server whose response the agent will consume. The attacker's capability is strictly data-bearing---they supply bytes that the pipeline ingests through a legitimate, pre-authorized ingestion point. They hold no credential on the system itself.
+
+\paragraph{What the attacker can do.}
+The attacker may author arbitrary text and arrange for the agent to read it: by publishing content at a URL the agent fetches, placing a file in a location the agent reads, or serving a response from an integration the agent calls. The content may look benign, be malformed, or carry an openly adversarial directive---the pipeline ingests it regardless, because the ingestion point was already authorized by the agent's role.
+
+\paragraph{What the attacker cannot do.}
+The attacker cannot modify the agent's role, rewrite the system prompt, swap the backing LLM, alter the recovery component's dispatch logic, or inject code into the runtime. They have no presence inside the trusted computing base and no channel other than the data the agent voluntarily pulls in. In particular, the attacker cannot write into the re-injection sink directly---that sink is fed only by the repair loop, which the attacker does not control.
+
+\paragraph{Why this is enough.}
+The attacker's narrow, data-only capability would be harmless if the pipeline preserved provenance end to end. The threat arises because the repair loop, in aggregating a failure record from whatever the agent was processing when it crashed, strips provenance from the captured content and re-introduces it at the re-injection sink under an elevated trust label. The attacker does not need to defeat the intake junction; they need only ensure their content is in scope at the moment of failure, so that the repair loop launders it on their behalf.
+
+\subsection{Attack Chain: From Intake to Re-injection}
+\label{sec:attack-chain}
+
+\rci{} composes five ordinary pipeline events into an end-to-end injection. Figure~\ref{fig:attack-chain} traces the data flow. The first three events occur on the intake side and are indistinguishable from benign operation; the last two occur inside the repair loop and constitute the injection proper.
+
+\begin{description}[leftmargin=*]
+    \item[Intake.] The agent fetches attacker-authored content through a legitimate ingestion point (\code{web\_fetch}, \code{file\_read}, an external API call). At this point the content is correctly labelled untrusted by the intake junction. Nothing is yet anomalous.
+    \item[Induced failure.] The content is shaped so that processing it raises the kind of exception the repair loop is built to handle---a malformed payload, an unexpected status code, a syntax error in an embedded snippet. No exotic bug is exploited; the framework treats these as routine recoverable failures.
+    \item[Capture.] At the point of failure, the framework assembles a failure record from the agent's last input, its surrounding context, and the emitted error trace. Because the capture site records this record as an opaque string, any attacker-authored text that was in scope at failure time is preserved verbatim---and its provenance is discarded the moment the record is formed.
+    \item[Relay.] The recovery component classifies the failure and dispatches a repair strategy (e.g., a reflection-recovery handler) that consumes the failure record as input and prepares a patch for the next-round context.
+    \item[Re-injection under high trust.] The patch---carrying the attacker's text, now stripped of its untrusted label---is written into the next-round prompt under a high-trust frame (a \code{[SYSTEM CRITICAL]} template or equivalent). The agent resumes and reads the attacker's directive as a system-issued instruction.
+\end{description}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+    node distance=0.6cm and 0.5cm,
+    stage/.style={draw, rounded corners=2pt, minimum height=0.8cm, minimum width=2.2cm, align=center, font=\footnotesize},
+    fwd/.style={stage, fill=green!12, draw=green!60!black},
+    rev/.style={stage, fill=red!15, draw=red!70!black},
+    final/.style={stage, fill=red!70, draw=red!70!black, text=white, font=\footnotesize\bfseries},
+    arr/.style={-Stealth, thick, gray!70},
+    lbl/.style={font=\tiny\itshape, gray!60!black, align=center}
+]
+% Stage chain
+\node[fwd] (s1) {Intake};
+\node[fwd, right=of s1] (s2) {Induced\\Failure};
+\node[fwd, right=of s2] (s3) {Capture};
+\node[rev, right=of s3] (s4) {Relay};
+\node[final, right=of s4] (s5) {Re-injection};
+
+\draw[arr] (s1) -- (s2);
+\draw[arr] (s2) -- (s3);
+\draw[arr] (s3) -- (s4);
+\draw[arr] (s4) -- (s5);
+
+% Stage descriptions
+\node[lbl, below=0.15cm of s1] {web\_fetch / file\_read};
+\node[lbl, below=0.15cm of s2] {malformed JSON / HTTP 500};
+\node[lbl, below=0.15cm of s3] {failure record\\(opaque string)};
+\node[lbl, below=0.15cm of s4] {repair strategy\\dispatch};
+\node[lbl, below=0.15cm of s5] {high-trust frame\\re-injection};
+
+% Boundary marker
+\draw[dashed, red!50, thick] ($(s3.east)+(0.25,-0.8)$) -- ($(s3.east)+(0.25,0.8)$);
+\node[font=\tiny\itshape, red!50, right=0.05cm of s3.east, yshift=0.9cm] {provenance discarded};
+
+% Region labels
+\node[font=\footnotesize\itshape, green!60!black] at ($(s2.north)+(0,0.5)$) {Intake side (benign-looking)};
+\node[font=\footnotesize\itshape, red!70!black] at ($(s4.north)+(0.5,0.5)$) {Repair loop (injection)};
+\end{tikzpicture}
+\caption{The \rci{} data flow across five pipeline events. The first three occur on the intake side and look like ordinary operation; the last two occur inside the repair loop and complete the injection. Provenance is discarded between Capture and Relay, when the failure record is aggregated as an opaque string.}
+\label{fig:attack-chain}
+\end{figure}
+
+The defining property of this chain is that \emph{no single event is anomalous}: each is a feature of the self-healing design, and the attacker merely composes them. This is why intake-side defenses (input sanitization, tool-permission checks) cannot close the surface---the bypass occurs \emph{after} the intake junction has legitimately accepted the content, inside the repair loop where provenance is no longer tracked.
+
+\subsection{The Trust-Escalation Trampoline}
+\label{sec:trampoline}
+
+The core insight is that the repair loop \emph{actively upgrades} the trust level of the content it processes. Content that was correctly quarantined as untrusted on the intake path is re-launched as trusted on the repair path. This creates a \emph{trampoline}: the attacker does not need to defeat the intake defenses; they need only survive the repair loop's (absent) re-validation.
+
+Formally, let $c$ be content entering the intake path with trust label $T_{in}(c) = \textsc{Untrusted}$. Let $c'$ be the same content re-entering via the repair loop. The repair loop assigns $T_{rep}(c') = \textsc{System}$ by default, because it does not track provenance. The attacker exploits the gap: $T_{rep}(c') \gg T_{in}(c)$.
+
+\subsection{Scope and Design Boundary}
+\label{sec:threat-scope}
+
+The empirical scope is content-level recovery-channel prompt injection
+(\rci{}): untagged failure content re-injected under an action-authorizing
+recovery frame. We do not claim a completed topology-mutation evaluation.
+Nevertheless, a recovery action that changes roles, tools, or topology has a
+separate authorization boundary. The design implication is the
+\emph{Privilege-Downgrade Invariant}
+$P(\text{recovery action}) \leq P(\text{failed execution})$: the recovery
+orchestrator should reauthorize the action before executing any deferred side
+effect. This invariant is discussed in \S\ref{sec:design-patterns} and is not
+included in the quantitative RQ2/RQ3 claims.
