@@ -4,8 +4,8 @@
     {
       "path": "addtions/paper_emse/current_results.md",
       "status": "present",
-      "sha256": "86a96cde10c9220c40d7842cf409a49950baeca8f51822ad335262caa24ba2df",
-      "bytes": 7318
+      "sha256": "76c55995fe0d972a6c89d1d9c68e6b732fe1d403ee0ebc05f42ba333e13c3303",
+      "bytes": 7767
     },
     {
       "path": "addtions/paper_emse/RESPONSIBLE_DISCLOSURE_DRAFT.md",
@@ -70,8 +70,8 @@
     {
       "path": "evaluation/reflexion_ollama_qwen3_anchor.py",
       "status": "present",
-      "sha256": "b460df73acc6a370b1a6b1d28c626b9be43cb67ded9067594cfe042bfefeccac",
-      "bytes": 11300
+      "sha256": "2dd9422f00a190d4be356baf3ec6753eeb4bf71a84c5a888a04c3d5b588d2af2",
+      "bytes": 11307
     },
     {
       "path": "evaluation/prepare_second_coder_packet.py",
@@ -142,8 +142,26 @@
     {
       "path": "evaluation/results/emse_reflexion_qwen3_ollama_anchor/QWEN3_BLOCKER.md",
       "status": "present",
-      "sha256": "f96347ffd6217d507f33f212f5fcb3f112ab90d38d724a7111ec9a9b0e3efeed",
-      "bytes": 1133
+      "sha256": "2341fff70c8e3adc930b4216d10a96fd2d44cec3f13417fa7184c49dbcf5d9b1",
+      "bytes": 1523
+    },
+    {
+      "path": "evaluation/results/emse_reflexion_ollama_open_anchor/qwen7b_n5/README.md",
+      "status": "present",
+      "sha256": "697e72ebe318c020b0d150d056737321fa6df40ce9a3524c6a879f1271a7cde0",
+      "bytes": 455
+    },
+    {
+      "path": "evaluation/results/emse_reflexion_ollama_open_anchor/qwen7b_n5/qwen3_anchor.json",
+      "status": "present",
+      "sha256": "7808006a74fcb3e8af7aa918330dfc88134f8560216cd04a7c708eddef532e81",
+      "bytes": 9708
+    },
+    {
+      "path": "evaluation/results/emse_reflexion_ollama_open_anchor/qwen7b_n5/qwen3_anchor.raw.jsonl",
+      "status": "present",
+      "sha256": "15e07b39bc587c0fad87a93760b597226de026d1ea839f90953e0d2f9a48e578",
+      "bytes": 547463
     },
     {
       "path": "addtions/paper_emse/main.pdf",

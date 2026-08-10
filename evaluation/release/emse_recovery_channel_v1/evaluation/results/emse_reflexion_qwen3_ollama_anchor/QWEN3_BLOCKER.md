@@ -21,6 +21,13 @@ Get "https://registry.ollama.ai/v2/library/qwen3/manifests/8b":
 dial tcp: lookup registry.ollama.ai: no such host
 ```
 
+A later retry resolved the registry but stalled while downloading the
+Cloudflare R2 blob, with TLS handshake timeouts and remote connection resets.
+The retained 5,225,374,496-byte partial blob hashes to
+`e632633eb48ff5422dd147eb39c5bb9eebf47b163b917026231eba12b077ba0a`, which
+does not match the advertised blob digest `a3de86cd1c13...`; it is therefore
+not usable as a local model layer.
+
 Therefore no Qwen3-8B trial count, ASR, confidence interval, or model digest
 is claimed. A subsequent 400-job invocation with the absent model name was
 retained as an invalid audit artifact (`qwen3_anchor.json`): all 400 jobs

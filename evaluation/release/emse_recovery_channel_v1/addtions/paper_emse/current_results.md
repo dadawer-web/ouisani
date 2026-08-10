@@ -105,6 +105,15 @@ Qwen2-family. The formal `qwen3:8b` pull failed before manifest download with
 `evaluation/results/emse_reflexion_qwen3_ollama_anchor/QWEN3_BLOCKER.md`.
 Consequently, this ledger and the paper contain no Qwen3-8B numerical claim.
 
+## Exploratory cached local anchor (not Qwen3)
+
+The cached Ollama `qwen:7b` model (Ollama family `qwen2`) completed a separate
+100-trial sensitivity run: raw attack 10/25 (0.400), TrustOrigin-tagged attack
+6/25 (0.240), matched benign false-positive rates 0/25 in both arms, and
+Fisher's exact `p=0.3635`. This result is retained as an open local-model
+exploration, not as the requested Qwen3-8B anchor and not as a confirmatory
+mitigation result.
+
 ## Reporting rule
 
 The paper may make the following claims from the frozen evidence:
