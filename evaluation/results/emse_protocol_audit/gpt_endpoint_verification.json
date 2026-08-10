@@ -1,0 +1,28 @@
+{
+  "checked_at_utc": "2026-08-09T13:52:42.382475+00:00",
+  "model": "gpt-5.6-luna",
+  "documented_endpoint": "https://opencode.ai/zen/go/v1/responses",
+  "historical_endpoint": "https://opencode.ai/zen/go/v1/chat/completions",
+  "documented_protocol": "responses",
+  "historical_protocol": "chat_completions",
+  "request": {
+    "temperature": 0.0,
+    "max_output_tokens": 16
+  },
+  "api_key_recorded": false,
+  "responses_ok": false,
+  "chat_completions_ok": false,
+  "responses_check": {
+    "http_status": 403,
+    "error": "HTTPError: Forbidden",
+    "error_body_preview": "error code: 1010\n",
+    "ok": false
+  },
+  "chat_completions_check": {
+    "http_status": 403,
+    "error": "HTTPError: Forbidden",
+    "error_body_preview": "error code: 1010\n",
+    "ok": false
+  },
+  "ok": false
+}
