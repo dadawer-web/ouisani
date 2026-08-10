@@ -41,6 +41,7 @@ FILES = [
     "evaluation/results/emse_reflexion_ollama_open_anchor/qwen7b_n5/qwen7b_anchor.raw.jsonl",
     "addtions/paper_emse/main.pdf",
     "addtions/paper_emse/cover_letter_emse.pdf",
+    "addtions/paper_emse/title_page_emse.pdf",
 ]
 
 PAPER_SOURCE_DIR = ROOT / "addtions" / "paper_emse"
