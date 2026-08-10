@@ -1,5 +1,5 @@
 %% main.tex — Trust Assumptions in Self-Healing LLM Agent Frameworks (EMSE submission)
-%% Elsevier elsarticle template
+%% Stable review-build LaTeX source; convert to the Springer macro package before upload if required by Editorial Manager.
 \documentclass[review,3p,authoryear]{elsarticle}
 
 %% ─────────────────────────────────────────────────────────────
@@ -34,10 +34,10 @@
     linkcolor=black,
     citecolor=black,
     urlcolor=blue,
-    pdftitle={Recovery-Channel Prompt Injection in Self-Healing LLM Agent Frameworks: A Multi-Case Study and Controlled Empirical Evaluation},
-    pdfauthor={Anonymous},
-    pdfsubject={Empirical Software Engineering, LLM Agents, Self-Healing Systems, Prompt Injection},
-    pdfkeywords={empirical software engineering; LLM agents; self-healing; error recovery; recovery-channel prompt injection; trust boundaries; grounded theory; multiple-case study}
+    pdftitle={Recovery-Channel Prompt Injection in Self-Healing LLM Agent Frameworks: A Multi-Case Empirical Study},
+    pdfauthor={Mingyuan Xie; Zhengxun Wu},
+    pdfsubject={Empirical Software Engineering, LLM Agents, Self-Healing Systems, Prompt Injection, Privilege Containment},
+    pdfkeywords={empirical software engineering; LLM agents; self-healing; prompt injection; error recovery; provenance tracking}
 }
 
 %% ─────────────────────────────────────────────────────────────
@@ -67,7 +67,10 @@
 \newcommand{\system}{Recova}
 \newcommand{\rci}{Recovery-Channel Prompt Injection}
 \newcommand{\trustorigin}{\textsc{TrustOrigin}}
+\newcommand{\reauthgate}{\textsc{ReauthorizationGate}}
+\newcommand{\privinv}{Privilege-Downgrade Invariant}
 \newcommand{\code}[1]{\texttt{#1}}
+\input{generated_results}
 
 %% ─────────────────────────────────────────────────────────────
 %%  Title & Authors
@@ -77,11 +80,15 @@
 
 \begin{frontmatter}
 
-    \title{Recovery-Channel Prompt Injection in Self-Healing LLM Agent Frameworks: A Multi-Case Study and Controlled Empirical Evaluation}
+    \title{Recovery-Channel Prompt Injection in Self-Healing LLM Agent Frameworks: A Multi-Case Empirical Study}
 
-    %% Author block — anonymized for review
-    \author{Anonymous Author}
-    \address{Anonymous Affiliation}
+    %% Author block; both authors are designated corresponding authors.
+    \author{Mingyuan Xie\corref{cor1}}
+    \ead{jhj208436@gmail.com}
+    \author{Zhengxun Wu\corref{cor1}}
+    \ead{2276815088@qq.com}
+    \address{School of Information Management, Qingdao University of Technology, Qingdao, Shandong, China}
+    \cortext[cor1]{Corresponding authors}
 
     \input{abstract}
 
@@ -89,11 +96,9 @@
         Empirical software engineering \sep
         LLM agents \sep
         Self-healing \sep
+        Prompt injection \sep
         Error recovery \sep
-        Recovery-channel prompt injection \sep
-        Trust boundaries \sep
-        Grounded theory \sep
-        Multiple-case study
+        Provenance tracking
     \end{keyword}
 \end{frontmatter}
 
@@ -107,8 +112,8 @@
 \input{methodology}
 \input{results}         %% RQ1: Prevalence (structural code analysis + taxonomy)
 \input{severity}        %% RQ2: Exploitability and Severity
-\input{defense_mechanism}  %% Defense design (TrustOrigin Tagging)
-\input{defense_eval}    %% RQ3: Defense Effectiveness
+\input{defense_mechanism}  %% Content-level defense design (TrustOrigin Tagging)
+\input{defense_eval}    %% RQ3: Content-Level Defense Effectiveness
 \input{discussion}
 \input{threats_to_validity}
 \input{conclusion}

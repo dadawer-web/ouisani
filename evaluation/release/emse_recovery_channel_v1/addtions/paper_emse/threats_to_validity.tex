@@ -67,7 +67,11 @@ protocol equivalence.  Billing records, endpoint metadata, and local raw logs
 prove that calls were made, but cannot prove the exact backend checkpoint.
 Three public Hugging Face repositories are recorded as snapshot candidates,
 but no provider alias-to-revision mapping is disclosed.  Exact snapshot
-reproducibility is consequently an explicit limitation.
+reproducibility is consequently an explicit limitation.  To provide a
+longer-lived open-model sensitivity point, we additionally record a local
+Ollama Qwen2-family \texttt{qwen:7b} digest and its 100 valid trial log; this
+does not make the provider-mediated results immutable or substitute for a
+Qwen3-8B checkpoint.
 
 \subsection{Construct Validity}
 

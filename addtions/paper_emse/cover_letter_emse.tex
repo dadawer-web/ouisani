@@ -1,10 +1,10 @@
 %% cover_letter_emse.tex
 %% Compile separately: pdflatex cover_letter_emse.tex
 
-\documentclass[11pt]{letter}
+\documentclass[10pt]{letter}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage[margin=1in]{geometry}
+\usepackage[margin=0.8in]{geometry}
 
 \begin{document}
 
@@ -13,24 +13,64 @@ Empirical Software Engineering}
 
 \opening{Dear Editor,}
 
-\textbf{Subject: Submission of manuscript ``Recovery-Channel Prompt Injection in Self-Healing LLM Agent Frameworks: A Multi-Case Study and Controlled Empirical Evaluation''}
+\textbf{Subject: Submission of manuscript}\\
+\textbf{``Recovery-Channel Prompt Injection in Self-Healing LLM Agent Frameworks''}
 
-We are pleased to submit the above-referenced manuscript for consideration by \emph{Empirical Software Engineering}.
+We are pleased to submit the above-referenced manuscript for consideration by
+\emph{Empirical Software Engineering}.
 
 \textbf{Summary.}
-This paper presents an empirical study of \rci{}---a prompt-injection attack class delivered through the failure payload on the recovery path of self-healing LLM agent frameworks. We employ a three-phase methodology addressing three research questions: (RQ1)~How prevalent is the \emph{trust-escalation trampoline} signature (no provenance tag on failure content combined with high-trust re-injection framing) across production agent frameworks?---a multiple-case study of six frameworks (Reflexion, MetaGPT, Aider, OpenHands, AutoGen, LangGraph) with grounded-theory coding; (RQ2)~How exploitable and severe is the resulting attack?---controlled experiments on a white-box testbed (100 trials per configuration, real LLM APIs), cross-framework validation on LangGraph, and a confirmed end-to-end exploit on Reflexion's actual retry path (0.52 ASR, $p < 0.001$); (RQ3)~How effective is the content-level \trustorigin{} provenance-tagging defense, and under what conditions does it degrade?---naive-baseline comparison, cross-model generalization (open-weights and closed-weight models), defense-aware attacker analysis, and defense-cost measurement.
+This paper studies recovery-channel prompt injection: externally originated
+failure content is captured by a self-healing agent and re-injected into a
+subsequent LLM turn under a recovery frame that can be interpreted as
+authoritative.  We combine systematic multiple-case source-code analysis with
+native-framework experiments.  In the canonical Reflexion matrix, five model
+aliases produce attack success rates from 0.174 to 0.796 while all matched
+benign controls are zero.  Native AutoGen and Aider executions provide
+additional framework evidence, and supplementary Reflexion contrast, defense-aware,
+and legitimate-recovery screens delimit what can and cannot be inferred at the
+completed sample sizes.  A native Reflexion TrustOrigin port reduces attack
+success from 0.776 to 0.548 with zero matched benign false positives.  The
+paper's design implication is to pair provenance
+handling with structural authorization checks at recovery sinks.
+
+We do not claim a new underlying language-model failure mode.  The contribution
+is a software-engineering characterization of a distinct framework transport
+path and trust boundary: externally influenced failure content is captured,
+reframed, and re-injected by recovery infrastructure.  The unit of analysis is
+the fixed-revision recovery implementation, and the results are reported for
+maintainers and designers of agent frameworks.
 
 \textbf{Contribution type.}
-This is an empirical software engineering contribution. The paper uses established empirical methodologies: multiple-case study design (Runeson \& H\"ost 2009), grounded-theory coding (Glaser \& Strauss 1967), controlled experiments with statistical hypothesis testing (Wilson confidence intervals, Fisher exact tests with Bonferroni correction), inter-annotator agreement (Cohen's $\kappa$), and threats-to-validity analysis. The paper reports both confirmatory and non-confirmatory results, including under-powered experiments reported honestly as suggestive rather than confirmatory. The central empirical finding is that content-level provenance defenses are effective but probabilistic, and degrade predictably as models become stronger instruction-followers---quantifying the ceiling of content-level mitigation on the recovery channel.
+This is an empirical software-engineering contribution.  The source analysis
+is reported as systematic multiple-case source-code analysis with qualitative
+coding, not as a complete Grounded Theory study.  Quantitative results retain
+framework/model/payload strata, matched benign controls, Wilson confidence
+intervals, Fisher exact tests where appropriate, raw logs, and an explicit
+power analysis.  Provider aliases and endpoint metadata are disclosed; the
+provider does not expose immutable checkpoint revisions, so exact snapshot
+reproducibility is stated as a limitation rather than implied.
 
 \textbf{Fit with EMSE.}
-The manuscript fits EMSE's scope in empirical software engineering: it uses established empirical methodologies (multiple-case study, grounded theory, controlled experiments with statistical tests), studies a population of real-world software artifacts (production agent frameworks with combined $\sim$105k GitHub stars), and reports findings with appropriate statistical rigor including honest reporting of under-powered results. The paper's primary contribution is empirical: it measures the prevalence, exploitability, and defense-effectiveness of an attack class on production frameworks, rather than proposing a new architectural design.
+The manuscript addresses a software-engineering design assumption in recovery
+paths of real open-source agent frameworks and evaluates that assumption with
+reproducible source evidence and controlled execution traces.  The replication
+package preserves canonical manifests, raw logs, endpoint verification, model
+provenance, and the numerical audit used to generate the tables.  A fixed local
+Qwen2-family \texttt{qwen:7b} run is included as an open-model sensitivity
+anchor (100 valid trials); it is reported as exploratory evidence and does not
+replace the provider-alias matrix or imply an immutable snapshot for the hosted
+endpoints.
 
-We confirm that this manuscript has not been published and is not under consideration elsewhere. We look forward to the editors' and reviewers' feedback.
+We confirm that this manuscript has not been published and is not under
+consideration elsewhere.  We look forward to the editors' and reviewers'
+feedback.
 
 \closing{Sincerely,\\[1em]
-Anonymous Author(s)\\
-(for double-blind review)}
+Mingyuan Xie (jhj208436@gmail.com)\\
+Zhengxun Wu (2276815088@qq.com)\\
+School of Information Management, Qingdao University of Technology\\
+Qingdao, Shandong, China}
 
 \end{letter}
 

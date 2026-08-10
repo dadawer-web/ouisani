@@ -37,8 +37,8 @@ FILES = [
     "evaluation/results/emse_source_analysis/second_coder/second_coder_labels.csv",
     "evaluation/results/emse_reflexion_qwen3_ollama_anchor/QWEN3_BLOCKER.md",
     "evaluation/results/emse_reflexion_ollama_open_anchor/qwen7b_n5/README.md",
-    "evaluation/results/emse_reflexion_ollama_open_anchor/qwen7b_n5/qwen3_anchor.json",
-    "evaluation/results/emse_reflexion_ollama_open_anchor/qwen7b_n5/qwen3_anchor.raw.jsonl",
+    "evaluation/results/emse_reflexion_ollama_open_anchor/qwen7b_n5/qwen7b_anchor.json",
+    "evaluation/results/emse_reflexion_ollama_open_anchor/qwen7b_n5/qwen7b_anchor.raw.jsonl",
     "addtions/paper_emse/main.pdf",
     "addtions/paper_emse/cover_letter_emse.pdf",
 ]

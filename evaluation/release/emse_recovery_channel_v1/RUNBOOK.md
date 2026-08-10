@@ -9,33 +9,36 @@ python evaluation/generate_emse_paper_numbers.py
 python evaluation/audit_emse_protocol.py
 ```
 
-## Human second coder
+## Optional second coder
 
-The blinded packet is in
-`evaluation/results/emse_source_analysis/second_coder/`. A human coder must
-fill `second_coder_labels.csv` independently and return it before running:
+The blinded packet is archived in
+`evaluation/results/emse_source_analysis/second_coder/`. No second-coder
+result is claimed in the paper. If an independent coder becomes available in
+future, they may fill `second_coder_labels.csv` and then run:
 
 ```powershell
 python evaluation/analyze_second_coder.py
 ```
 
-## Local Qwen3 anchor
+## Fixed local open-model anchor
 
-The intended anchor is the local Ollama model `qwen3:8b`. Before running, the
-authors must record the exact Ollama model digest/Modelfile and confirm the
-model is present:
+The accepted sensitivity anchor is the cached local Ollama model `qwen:7b`.
+The exact Ollama digest/Modelfile and the 100-trial raw log are already
+included. To reproduce the bounded run, confirm the model is present:
 
 ```powershell
 ollama list
-ollama show qwen3:8b --modelfile
-$env:OLLAMA_TRIALS_PER_PAYLOAD='20'
+ollama show qwen:7b --modelfile
+$env:OLLAMA_MODEL='qwen:7b'
+$env:OLLAMA_TRIALS_PER_PAYLOAD='5'
 $env:OLLAMA_CONCURRENCY='1'
 python evaluation/reflexion_ollama_qwen3_anchor.py
 ```
 
-The run produces 400 trials (five payloads, raw/tagged treatment, attack and
-benign arms). It must not be labeled Qwen3-8B evidence if the model is absent
-or if only a different Ollama tag is available.
+The run produces 100 trials (five payloads, raw/tagged treatment, attack and
+benign arms). It is exploratory sensitivity evidence and must not be pooled
+with the provider-alias matrix. The failed `qwen3:8b` pull is documented but
+not a completion claim.
 
 ## Paper build
 

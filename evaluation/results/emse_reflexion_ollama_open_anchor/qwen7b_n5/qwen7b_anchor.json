@@ -61,5 +61,5 @@
   "payload_sha256": "3630eacf4f0d2a1df935de5e33d39ff5963c6dd76c8108576f9022bb3c51e080",
   "completed_at_utc": "2026-08-10T04:36:43.208177+00:00",
   "notes": "Local Ollama package is the reproducibility anchor; no provider API alias is used. The pinned Reflexion PyGenerator.func_impl is called with fixed self-reflection text to isolate the recovery capture treatment.",
-  "raw_log": "evaluation\\results\\emse_reflexion_ollama_open_anchor\\qwen7b_n5\\qwen3_anchor.raw.jsonl"
+  "raw_log": "evaluation\\results\\emse_reflexion_ollama_open_anchor\\qwen7b_n5\\qwen7b_anchor.raw.jsonl"
 }

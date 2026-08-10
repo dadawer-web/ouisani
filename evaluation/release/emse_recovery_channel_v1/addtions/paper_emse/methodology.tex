@@ -121,6 +121,16 @@ are recorded as snapshot candidates where available, but no provider
 alias-to-revision mapping is exposed; API results are therefore
 provider-catalog evaluations rather than immutable-checkpoint evaluations.
 
+As an open-weight sensitivity anchor, we also ran the fixed local Ollama tag
+\texttt{qwen:7b}.  Ollama reports this cached model as Qwen2-family, Q4\_0,
+with an 8B parameter-size field and digest
+\texttt{2091ee8c8d8f27f7\allowbreak{}90c298265b1353da\allowbreak{}099a276e6c612e3b\allowbreak{}4864e72f1993cc33}; it is
+not labeled as Qwen3-8B.  The run uses five payloads, five trials per
+payload/cell, raw and TrustOrigin-tagged treatments, and matched benign arms
+(100 valid calls in total).  This deliberately bounded run tests whether the
+mechanism is observable with a local open model, not whether TrustOrigin is a
+generally effective defense.
+
 \subsection{Native-Framework Experiments}
 \label{sec:method-validation}
 

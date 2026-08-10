@@ -1,138 +1,88 @@
-%% results.tex
+%% results.tex -- submission version
 
-\section{RQ1: Prevalence of Recovery-Path Provenance Gaps}
+\section{RQ1: Recovery-Path Source Provenance}
 \label{sec:results}
 
-This section addresses RQ1: \emph{How prevalent is the trust-escalation trampoline signature across production-grade self-healing LLM agent frameworks?} We answer this question in two steps. First, we present the recovery-path provenance taxonomy derived from grounded-theory coding of all six frameworks (\S\ref{sec:rq1-taxonomy}). Second, we apply the trampoline judgment criteria (Q1: provenance tag; Q2: high-trust frame) to each framework and report the cross-case classification (\S\ref{sec:rq1-trampoline}). The exploitability of the identified signature is examined separately in RQ2 (\S\ref{sec:severity}).
+RQ1 asks how recovery paths represent the origin and authority of failure
+content. We report a qualitative multiple-case result, not a prevalence
+estimate for the entire agent ecosystem. The source audit fetched all six
+fixed revisions and matched every required code predicate.
 
-\subsection{Recovery-Path Provenance Taxonomy}
+\subsection{Cross-case Taxonomy}
 \label{sec:rq1-taxonomy}
 
-Our source-level analysis of the six frameworks' recovery paths reveals three distinct patterns of provenance handling. Table~\ref{tab:taxonomy} summarizes the taxonomy and the classification of each framework, together with the specific code evidence that grounds each judgment.
+All six cases lack a source-origin label that survives into the recovery
+representation. Three cases additionally preserve an error-status field
+(AutoGen, OpenHands, and LangGraph), but an error status answers
+\textquotedblleft{}did execution fail?\textquotedblright{} rather than
+\textquotedblleft{}where did this content originate?\textquotedblright{}.
+Four cases combine the missing source-origin label with a recovery-action
+frame: Reflexion, MetaGPT, Aider, and AutoGen. OpenHands and LangGraph are
+boundary cases because they expose error status but do not add the same
+action-authorizing recovery frame.
 
 \begin{table}[htbp]
 \centering
 \small
-\caption{Recovery-path provenance taxonomy for the six frameworks. ``Provenance Handling'' classifies how the recovery path treats failure-content origin. ``Evidence'' summarizes the specific code pattern observed at the cited commit.}
+\caption{Source-level recovery-path taxonomy at fixed revisions. Source provenance means origin tracking, not an error-status flag.}
 \label{tab:taxonomy}
-\setlength{\tabcolsep}{4pt}
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{llp{7cm}}
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{p{1.8cm}p{1.5cm}p{1.5cm}p{1.5cm}p{2.0cm}p{4.0cm}}
 \toprule
-\textbf{Framework} & \textbf{Provenance Handling} & \textbf{Evidence} \\
+\textbf{Case} & \textbf{Prov.} & \textbf{Error} & \textbf{Action} & \textbf{Sig.} & \textbf{Fixed-revision evidence} \\
 \midrule
-Reflexion~\cite{reflexion-code}    & No-provenance       & \code{feedback} string (test runner stdout+stderr) concatenated verbatim into the prompt; no tag distinguishes external test output from internal compilation errors. \\
-MetaGPT~\cite{meta-agent}          & No-provenance       & Test \code{stderr} injected as ``Console logs'' under a role-playing frame; no tag distinguishes test-printed content from framework diagnostics. \\
-Aider~\cite{aider-code}            & No-provenance       & Target file content embedded in \code{ValueError} message alongside edit-instruction frame; no tag distinguishes file content from framework error. \\
-AutoGen~\cite{autogen}             & No-provenance       & Tool exception formatted as \code{"Error: \{e\}"} and returned in the same \code{tool} role as successful results; \code{is\_exec\_success} signal computed but discarded at all call sites. \\
-OpenHands~\cite{openhands-code}    & No-provenance       & \code{ErrorObservation} objects appended to \code{state.history}; \code{CodeActAgent} converts errors and successful observations via the same \code{conversation\_memory.process\_events} path. \\
-LangGraph~\cite{langgraph}         & Partial-provenance  & \code{ToolNode} can wrap tool \emph{exceptions} in \code{ToolMessage(status="error")} when \code{handle\_tool\_errors} is enabled; but tool-returned error strings are wrapped as \code{ToolMessage(status="success")} with no content-level trust framing. \\
+Reflexion & No & No & Yes & Yes & Raw \texttt{feedback} placed in a unit-test-results recovery envelope. \\
+MetaGPT & No & No & Yes & Yes & Test stderr placed under \textquotedblleft Console logs\textquotedblright{} in a role-playing debug prompt. \\
+Aider & No & No & Yes & Yes & Edit failure text and target content followed by an instruction to reply with fixed versions. \\
+AutoGen & No & Yes & Yes & Yes & \texttt{is\_error=True} is preserved internally, but the model-facing result has no source-origin label. \\
+OpenHands & No & Yes & No & No & \texttt{ErrorObservation} and an error marker are converted to a user message without source-origin labeling. \\
+LangGraph & No & Yes & No & No & Exception status is represented by \texttt{ToolMessage} with \texttt{status=error}; returned error strings can remain success messages. \\
 \bottomrule
-\end{tabular}%
-}
+\end{tabular}
 \end{table}
 
-\paragraph{No-provenance pattern (5/6 frameworks).}
-Five of the six frameworks do not distinguish internally generated diagnostic content from externally originated content in the failure payload. The structural commonality across these codebases is striking: in every case, the failure payload is stored and propagated as an opaque string whose origin is discarded at the capture site.
+\paragraph{Reflexion.}
+The retry path concatenates the raw test-runner output with the previous
+implementation and reflection text:
 
-In Reflexion, the \code{feedback} string---which may embed arbitrary text printed by an adversarial test case---is concatenated verbatim into the retry prompt (Listing~\ref{lst:wild-reflexion}). The string is assembled by a Python f-string that interleaves the few-shot example, the previous implementation, the raw test-runner output, and the reflection note, with no field marking which portion originated externally.
-
-In MetaGPT, test \code{stderr} is injected as ``Console logs'' under a role-playing frame with no provenance tag (Listing~\ref{lst:wild-metagpt}). The prompt template instructs the LLM to ``figure out your own role'' from the message, treating the entire payload---including the stderr---as authoritative context to act upon.
-
-In Aider, the target file content (which may be an adversarial file the agent was asked to edit) is embedded in a \code{ValueError} message that is re-injected into the next LLM iteration via the \code{num\_reflections} loop. The framework's edit-instruction frame (``Just reply with fixed versions'') and the file content are concatenated with no delimiter that would allow the LLM to distinguish framework directives from external content.
-
-In AutoGen, tool exceptions are formatted as \code{"Error: \{e\}"} and returned in the same \code{tool} role used for successful results. Although a boolean \code{is\_exec\_success} signal is computed at the tool-execution site, it is discarded at all five call sites we inspected, so the error content enters the conversation history with no provenance tag and no role distinction from legitimate output.
-
-In OpenHands, \code{ErrorObservation} objects are appended to \code{state.history} and converted to LLM messages via the same \code{conversation\_memory.process\_events} path as successful observations. The error status is recorded in the object's metadata but is not reflected in the message-level trust framing that the LLM receives.
-
-\paragraph{Partial-provenance pattern (1/6 frameworks).}
-LangGraph is the only framework that provides partial provenance tagging. Its prebuilt \code{ToolNode} can wrap tool \emph{exceptions} in a \code{ToolMessage} with \code{status="error"} metadata when \code{handle\_tool\_errors} is enabled. However, when a tool \emph{returns} an error-like string (the common case for tools that fetch external content and encounter a processing error), the \code{ToolMessage} status is \code{"success"}---there is no content-level trust framing to distinguish error-recovery content from legitimate output. No framework in our sample achieves full-provenance tracking.
-
-\paragraph{Cross-case convergence.}
-The prevalence of the no-provenance pattern (5/6 frameworks) indicates that the absence of provenance tracking is not an isolated implementation oversight but a shared architectural assumption. The recovery path is uniformly treated as a trusted internal channel---a design choice inherited from classical exception-handling, where the failure payload is generated by the trusted computing base. In the LLM-agent setting, where failure payloads frequently embed external content, this assumption no longer holds, yet no framework in our sample has revised it.
-
-\begin{lstlisting}[language=Python,caption={Reflexion retry path (excerpt from \code{programming\_runs/generators/generator\_utils.py},~\cite{reflexion-code}). The \code{feedback} string embeds unit-test output that may contain adversarial content from external test cases; it is wrapped in a \code{[unit test results]} envelope and injected into the LLM under a system-framed reflexion prompt, with no provenance tag.},label={lst:wild-reflexion}]
-# generic_generate_func_impl (excerpt)
-message = (f"{reflexion_few_shot}\n"
-           f"[previous impl]:\n{add_code_block(prev_func_impl)}\n\n"
+\begin{lstlisting}[language=Python,caption={Reflexion retry path at commit \texttt{218cf0e}.},label={lst:wild-reflexion}]
+message = (f"[previous impl]:\n{add_code_block(prev_func_impl)}\n\n"
            f"[unit test results from previous impl]:\n{feedback}\n\n"
            f"[reflection on previous impl]:\n{self_reflection}\n\n"
            f"[improved impl]:\n{func_sig}")
-# feedback is the raw test-runner output (stdout+stderr);
-# it is concatenated verbatim with no provenance tag.
+# feedback is raw test-runner output; no source-origin label is carried.
 \end{lstlisting}
 
-\begin{lstlisting}[language=Python,caption={MetaGPT \code{DebugError} prompt template (excerpt from \code{metagpt/actions/debug\_error.py},~\cite{meta-agent}). The test runner's \code{stderr} (which may contain adversarial content from external test cases) is injected as \code{\# Console logs} under a role-playing frame, with no provenance tag.},label={lst:wild-metagpt}]
-PROMPT_TEMPLATE = """
-NOTICE
-1. Role: You are a Development Engineer or QA engineer;
-2. Task: You received this message from another Development Engineer ...
-Based on the message, first, figure out your own role ...
-# Legacy Code
-```python
-{code}```
----
-# Unit Test Code
-```python
-{test_code}```
----
+\paragraph{MetaGPT.}
+At \texttt{v0.8.1}, \texttt{DebugError} places test output under a
+role-playing prompt:
+
+\begin{lstlisting}[language=Python,caption={MetaGPT debug prompt at \texttt{v0.8.1}.},label={lst:wild-metagpt}]
 # Console logs
-```text
-{logs}```
+{logs}
 ---
-Now you should start rewriting the code ...
-"""
-# `logs` is `output_detail.stderr` from the test runner;
-# it is concatenated verbatim with no provenance tag.
+Now you should start rewriting the code:
+# logs is test-runner output and is not source-origin tagged.
 \end{lstlisting}
 
-\subsection{Trust-Escalation Trampoline Classification}
+\paragraph{Boundary cases.}
+OpenHands stores \texttt{ErrorObservation} in state history and adds
+\texttt{[Error occurred in processing last action]} when converting the
+observation to a user message. LangGraph exposes an error status for
+exceptions in \texttt{ToolMessage}, but a tool that returns an error-like
+string can still produce a successful tool message. AutoGen's internal
+\texttt{FunctionExecutionResult} correctly records \texttt{is\_error=True};
+the limitation is that this status is not a source-origin distinction in the
+model-facing recovery content. These observations are why the paper separates
+source provenance from error status.
+
+\subsection{Interpretation}
 \label{sec:rq1-trampoline}
 
-Applying the judgment criteria defined in \S\ref{sec:method-criteria}, we classify each framework's recovery path on two dimensions: Q1 (provenance tag?) and Q2 (high-trust frame?). Table~\ref{tab:trampoline} reports the classification, together with the specific evidence for the high-trust-frame judgment.
-
-\begin{table}[htbp]
-\centering
-\small
-\caption{Trust-escalation trampoline signature across six production frameworks. Q1 = provenance tag on recovery path; Q2 = high-trust frame applied to failure content. Trampoline = Q1=No $\wedge$ Q2=Yes. ``Verified'' = code excerpt re-fetched and regex-matched at the cited commit by an independent verifier.}
-\label{tab:trampoline}
-\setlength{\tabcolsep}{4pt}
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{lcccccl}
-\toprule
-\textbf{Framework} & \textbf{Stars} & \textbf{Q1} & \textbf{Q2} & \textbf{Trampoline?} & \textbf{Verified?} & \textbf{High-trust frame evidence} \\
-\midrule
-Reflexion~\cite{reflexion,reflexion-code}  & $\sim$2.4k  & No  & Yes & \textbf{Yes}    & Yes     & ``[unit test results from previous impl]'' envelope under system-framed prompt \\
-MetaGPT~\cite{meta-agent}                  & $\sim$40k   & No  & Yes & \textbf{Yes}    & Yes     & ``Role: You are a Development Engineer'' role-playing frame \\
-Aider~\cite{aider-code}                    & $\sim$3.4k  & No  & Yes & \textbf{Yes}    & Yes     & ``Just reply with fixed versions'' edit-instruction frame \\
-AutoGen~\cite{autogen}                     & $\sim$35k   & No  & Yes & \textbf{Yes}    & Yes     & Error returned in same \code{tool} role as successful results \\
-LangGraph~\cite{langgraph}                 & $\sim$10k   & Partial & No & Partial & Yes  & No system-level frame; \code{ToolMessage} with \code{status="error"} metadata only \\
-OpenHands~\cite{openhands-code}            & $\sim$60k   & No  & No  & \textbf{No}     & Manual  & State-managed; no prompt-level high-trust framing \\
-\bottomrule
-\end{tabular}%
-}
-\end{table}
-
-\paragraph{Four of six frameworks exhibit the trampoline signature.}
-Reflexion, MetaGPT, Aider, and AutoGen all satisfy Q1=No (no provenance tag) and Q2=Yes (high-trust frame). In each case, externally originated content embedded in a failure payload is re-injected into the LLM context under a frame that signals trustworthiness:
-
-\begin{itemize}[leftmargin=*]
-    \item \textbf{Reflexion} wraps the test-runner output in a ``[unit test results from previous impl]'' envelope under a system prompt that frames the conversation as a recovery session. The LLM is instructed to use the feedback to improve its implementation, signaling that the content is authoritative diagnostic signal.
-    \item \textbf{MetaGPT} prepends a role-playing instruction (``You are a Development Engineer or QA engineer'') that frames the entire payload---including the test stderr---as a message to act upon. The LLM is told to ``figure out your own role'' from the message, treating the stderr as part of the task description rather than untrusted diagnostic context.
-    \item \textbf{Aider} embeds the file content in a \code{ValueError} whose message includes the directive ``Just reply with fixed versions of the blocks above.'' The edit-instruction frame signals that the content is a legitimate edit request, not adversarial input.
-    \item \textbf{AutoGen} returns tool exceptions in the same \code{tool} message role used for successful results. The message role is the trust signal: the LLM has no way to distinguish a legitimate tool return from an error that embeds external content, because both arrive in the same role.
-\end{itemize}
-
-This combination---no provenance tag plus high-trust framing---is the structural signature of the trust-escalation trampoline: content that should be treated as untrusted (because it may originate from external sources) is instead treated as trusted (because the recovery path wraps it in a high-trust frame without checking its origin).
-
-\paragraph{LangGraph: partial trampoline.}
-LangGraph provides partial provenance tagging at the message level (\code{ToolMessage} with \code{status="error"} for exceptions), but does not apply a high-trust frame to error content. The provenance gap exists for returned error strings (which receive \code{status="success"}), but the trust-escalation step (high-trust framing) is absent. We classify LangGraph as \emph{partial trampoline}: the structural preconditions for the attack are present (no content-level trust distinction), but the active trust-upgrade step is missing. Whether the partial signature is exploitable in practice is examined in RQ2 (\S\ref{sec:langgraph-validation}).
-
-\paragraph{OpenHands: no trampoline.}
-OpenHands wraps tool exceptions in \code{ErrorObservation} objects and manages them through state history rather than prompt-level framing. While the provenance gap exists (errors and successful observations are converted by the same path), the trust-escalation step is weaker: no system-level frame is applied to the error content. We classify OpenHands as \emph{no trampoline}. This does not mean OpenHands is immune to recovery-channel attacks---the provenance gap still allows error content to enter the LLM context without a trust downgrade---but the specific trust-escalation mechanism studied in this paper is absent.
-
-\paragraph{Cross-case observation: maturity independence.}
-The trampoline signature is not correlated with framework maturity or adoption. It appears in both small frameworks (Reflexion, 2.4k stars) and large ones (AutoGen, 35k stars; MetaGPT, 40k stars). It appears in single-agent retry systems (Reflexion, Aider) and multi-agent collaboration platforms (MetaGPT, AutoGen). It appears in graph-based orchestration (LangGraph, partially) and state-managed architectures (OpenHands, absent). This suggests the provenance gap is a \emph{systemic} design pattern in the LLM agent ecosystem, not an artifact of any single framework's implementation choices. The convergence is consistent with a shared intellectual lineage: all six frameworks inherit the assumption---from the self-healing and reflexion literature~\cite{reflexion,self-refine,critic}---that the recovery path is a corrective loop operating on benign diagnostic content.
-
-\paragraph{RQ1 summary.}
-The structural code analysis reveals that the trust-escalation trampoline signature is prevalent across the production agent ecosystem: four of six frameworks exhibit the full signature (no provenance tag $\wedge$ high-trust frame), one exhibits a partial signature, and only one lacks the trampoline entirely. The prevalence is not explained by framework size, adoption, or architectural style, indicating a systemic design blind spot in the self-healing pattern. Whether this structural signature translates to practical exploitability is the subject of RQ2.
+The four full-signature cases identify a recurring trust assumption: failure
+content is treated as material for the next repair action without preserving
+whether it originated in an external file, test fixture, tool return, or
+framework-generated diagnostic. The source evidence supports a design-level
+finding about missing complete mediation at the recovery boundary. It does not
+support a statistical claim about all agent frameworks, and it does not by
+itself establish exploitability; exploitability is evaluated in RQ2.

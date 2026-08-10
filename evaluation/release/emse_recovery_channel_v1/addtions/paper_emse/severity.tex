@@ -36,6 +36,18 @@ five aliases. Every matched benign arm is zero, for
 shows why pooled rates are insufficient, while the benign controls exclude
 ordinary recovery behavior as an explanation for the canary classifier.
 
+\paragraph{Fixed local open-model sensitivity anchor.}
+The cached local \QwenLocalModel{} was run through the same pinned Reflexion
+generator as a sensitivity check.  With \QwenLocalTrialsPerCell{} trials per
+payload/cell, the raw treatment produced
+\QwenLocalRawSuccesses{}/\QwenLocalAttackTrials{} attack successes
+(\QwenLocalRawASR{}), while TrustOrigin framing produced
+\QwenLocalTaggedSuccesses{}/\QwenLocalAttackTrials{}
+(\QwenLocalTaggedASR{}).  Both matched benign FPRs were zero and the Fisher
+contrast was $p=\QwenLocalFisherP{}$.  Because this is a 100-trial exploratory
+anchor rather than a powered mitigation comparison, it is not pooled with
+the canonical provider-alias matrix.
+
 \subsection{Native Reflexion TrustOrigin Port}
 \label{sec:reflexion-trustorigin-native}
 

@@ -10,9 +10,10 @@ for the reported counts, the numerical-table generator, and the blinded
 second-coder packet. API credentials and provider response bodies are excluded.
 
 The provider-mediated model results are alias-provenance evaluations: the
-provider does not expose an immutable backend checkpoint. The local Ollama
-Qwen3-8B anchor is tracked separately and must not be described as complete
-until its model files, local digest, and run manifest are present.
+provider does not expose an immutable backend checkpoint. The fixed local
+Ollama `qwen:7b` sensitivity anchor is included with its digest, manifest, and
+raw log. It is a bounded exploratory open-model result, not a Qwen3-8B result
+and not a replacement for the provider-alias matrix.
 
 ## Reproduction modes
 
@@ -30,11 +31,8 @@ redistributed.
 
 ## Status
 
-This is a staging package (2026-08-10). A public *final* GitHub release and
-Zenodo DOI must only be created after the fixed local-model anchor and the
-human second-coder labels are added, the manifest is regenerated, and the
-authors approve the release. A prerelease staging tag has been pushed for
-auditability. The cached `qwen:7b` was used only for a harness smoke
-test and is excluded from the formal Qwen3-8B evidence because its Ollama
-metadata identifies it as Qwen2-family. A formal `qwen3:8b` pull is currently
-blocked by the local registry/DNS path.
+This is a staging package (2026-08-10). A prerelease GitHub release has been
+pushed for auditability; final GitHub publication and a Zenodo DOI require
+author approval/login. No independent second-coder labels are claimed; RQ1 is
+single-coder qualitative analysis with an explicit limitation. The attempted
+`qwen3:8b` pull is retained only as an invalid blocker record.

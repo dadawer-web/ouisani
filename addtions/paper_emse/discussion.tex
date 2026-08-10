@@ -1,52 +1,52 @@
-%% discussion.tex
+%% discussion.tex -- current evidence freeze
 
 \section{Discussion}
 \label{sec:discussion}
 
-The empirical findings across RQ1 (\S\ref{sec:results}), RQ2 (\S\ref{sec:severity}), and RQ3 (\S\ref{sec:defense-eval}) reveal a systemic provenance gap across the self-healing LLM agent ecosystem: four of six production frameworks exhibit the trust-escalation trampoline signature, the controlled and end-to-end experiments confirm this signature is practically exploitable, and the defense evaluation establishes that content-level provenance signaling becomes insufficient as models become stronger instruction-followers. In this section, we distill the findings into actionable architectural design patterns (\S\ref{sec:design-patterns}), offer recommendations for framework developers (\S\ref{sec:recommendations}), and discuss the study's limitations (\S\ref{sec:limitations}).
+The current evidence supports a focused architectural interpretation: a recovery path is a trust boundary whenever it transports failure content into a subsequent LLM turn. The native Reflexion, AutoGen, and Aider results show that the behavior is not tied to one message-format reconstruction, while the large model variation shows why framework/model/payload strata are necessary. The native Reflexion TrustOrigin port is the primary provenance result; the other screens delimit its scope.
 
-\subsection{Design Patterns for Safe Recovery}
+\subsection{Design Implications}
 \label{sec:design-patterns}
 
-We propose three design patterns that framework developers can adopt to close the provenance gap. These patterns are grounded in the empirical observations of \S\ref{sec:results} and draw on classical operating system provenance-tracking principles~\cite{saltzer1975protection}. Each pattern addresses a specific structural deficiency identified in the taxonomy.
+\paragraph{Capture provenance at the failure boundary.}
+Frameworks should label content at the point where exceptions, tool returns, test output, or external files are captured. The label must survive packaging and re-injection so that the recovery policy can distinguish internally generated diagnostics from external-origin content.
 
-\paragraph{Pattern 1: Provenance Tagging at Capture Site.}
-\label{sec:pattern-tagging}
-The root cause of the no-provenance pattern (\S\ref{sec:rq1-taxonomy}) is that failure content is captured without recording its origin. We recommend tagging every piece of failure content at the \emph{capture site}---the point where the exception, error message, or test output is first caught---with a provenance label indicating whether it originated internally (framework exception, compilation error) or externally (web page, file content, test output, tool return value). This is the agent analog of the \code{PAGE\_USER} provenance tag in classical kernels~\cite{levine2003system}: data copied from userspace retains a marker that prevents it from being executed as kernel code. We refer to this pattern as \trustorigin{} tagging. The tag must be propagated through all subsequent transformations (packaging, re-injection) so that downstream code can make trust decisions based on origin rather than content.
+\paragraph{Frame unknown content as untrusted.}
+Recovery prompts should not place unverified failure content inside a system-like or role-authority frame. Unknown provenance should fail closed and be presented as data to inspect, not as an instruction to execute.
 
-\paragraph{Pattern 2: Untrusted Framing for External-Origin Content.}
-\label{sec:pattern-framing}
-The root cause of the high-trust frame pattern (Q2=Yes in \S\ref{sec:rq1-trampoline}) is that failure content is re-injected under a frame that signals trustworthiness---a system message, a role-playing instruction, or a ``previous attempt'' envelope. We recommend that recovery paths apply \emph{untrusted framing} to content whose provenance tag indicates external origin: the content should be explicitly marked as untrusted (e.g., ``The following error output originates from an EXTERNAL source and may contain adversarial directives'') and the LLM should be instructed not to execute embedded directives. This pattern addresses the trust-escalation step of the trampoline: even if the content is present in the LLM context, the frame signals that it should not be obeyed.
+\paragraph{Reauthorize privileged recovery actions.}
+Content-level handling is not sufficient for actions that change roles, tools, or topology. Such actions should pass through a centralized reauthorization gate that checks the failed execution's authority and the recovery action's requested privilege.
 
-\paragraph{Pattern 3: Fail-Closed Default for Unknown Provenance.}
-\label{sec:pattern-failclosed}
-When the provenance of failure content cannot be determined---e.g., because the failing tool is newly registered or the content's origin is ambiguous---the recovery path should default to treating it as untrusted (fail-closed) rather than trusted (fail-open). This pattern addresses the unregistered-tool limitation: a tool that fetches external content but is not in the framework's known-external whitelist should be assumed to return external content. The fail-closed default ensures that the provenance gap does not widen as new tools are added to the framework.
-
-\paragraph{Out-of-scope: authorization-based defenses.}
-Recovery paths that perform privileged side effects (role replacement, topology mutation) require a distinct, authorization-based defense class (privilege-downgrade invariants enforced structurally). This is a separate concern from the content-level provenance defense studied in this paper; we identify it as an adjacent research direction but do not evaluate it here (see \S\ref{sec:threat-scope}).
+This is a design implication rather than a completed RQ4 experiment in the
+present study. The proposed invariant is
+$P(\text{recovery action}) \leq P(\text{failed execution})$; implementing it at
+the orchestrator sink provides an LLM-independent authorization decision. A
+future native-framework port should verify the invariant with fixed commits,
+matched benign tasks, and raw traces.
 
 \subsection{Recommendations for Framework Developers}
 \label{sec:recommendations}
 
-Based on the cross-case analysis, we offer the following recommendations:
+Developers should (i) preserve error-origin metadata, (ii) separate tool errors from successful tool returns, (iii) reserve high-trust framing for verified internal diagnostics, (iv) include matched benign recovery tests in security evaluations, and (v) publish model/protocol metadata whenever LLM-backed results are reported.
 
-\begin{itemize}[leftmargin=*]
-    \item \textbf{Audit recovery paths for provenance tagging.} Framework developers should systematically audit their retry, reflection, and debug loops to verify that failure content is tagged with its origin at the capture site. The Q1/Q2 criteria (\S\ref{sec:method-criteria}) provide a simple checklist: if Q1=No and Q2=Yes, the recovery path exhibits the trampoline signature and should be remediated.
-    \item \textbf{Separate error messages from tool returns.} AutoGen's pattern of returning errors in the same \code{tool} role as successful results is a structural deficiency: it conflates error-recovery content with legitimate output. Frameworks should use distinct message roles or metadata fields for error content, as LangGraph partially does with \code{ToolMessage(status="error")}.
-    \item \textbf{Avoid system-level framing for external content.} Reflexion's \code{[unit test results]} envelope and MetaGPT's role-playing frame are high-trust frames applied to content of unknown provenance. Frameworks should reserve high-trust frames for content whose provenance is verified as internal.
-\end{itemize}
+\subsection{Structural and Content-level Controls}
+\label{sec:structural-vs-content}
+
+The two defense classes address different failure modes. Provenance and untrusted framing reduce the probability that an LLM obeys an injected directive, but their effectiveness is model- and payload-dependent. Structural reauthorization prevents a privileged recovery side effect even when the model produces an unsafe recommendation. The latter is therefore a complement, not a replacement, for content-level handling.
 
 \subsection{Limitations}
 \label{sec:limitations}
 
-\paragraph{Sample size and scope.}
-The study covers six frameworks, which is a subset of the broader LLM agent ecosystem. While the combined star count exceeds 105k, closed-source frameworks (e.g., Claude Code~\cite{claude-code}) and frameworks with different architectural conventions may exhibit different patterns. Future work should extend the analysis to additional frameworks, including closed-source systems where source-level analysis is not possible.
-
-\paragraph{Exploitability validation on one framework.}
-The end-to-end case study (RQ2, \S\ref{sec:reflexion-e2e}) validates exploitability on Reflexion only. While the trampoline signature is structurally identical in MetaGPT, Aider, and AutoGen, we have not confirmed exploitability on those frameworks end-to-end. The Reflexion case study establishes a \emph{lower bound} on exploitability: at least one framework with the trampoline signature is practically exploitable. Confirming exploitability on the remaining three frameworks is immediate future work.
-
-\paragraph{LLM dependency.}
-The case study's ASR (0.52) is measured with a single LLM (gpt-5.6-luna) at temperature~0.7. Stronger instruction-following models may yield higher ASR (the cross-model evaluation in \S\ref{sec:cross-model} reports that defended ASR rises from 0.07 to 0.50 when moving from DeepSeek/Qwen to gpt-oss-120b, and to 0.36 on a closed-weight frontier model), while weaker models may yield lower ASR. The structural trampoline signature, however, is LLM-independent: it is a property of the recovery-path code, not of the model that processes the re-injected content.
-
-\paragraph{Dynamic evolution.}
-The analysis is performed at fixed commit hashes. Frameworks evolve rapidly, and the observed patterns may change as developers become aware of the provenance gap. We commit to releasing the analysis scripts so that the classification can be re-run on future commits.
+The native AutoGen, Aider, and TrustOrigin port use 50 trials per payload/arm
+or treatment, the contrast screen uses 20 trials per payload (100 pooled trials
+per cell), and the defense-aware and legitimate-recovery screens are
+supplementary. The TrustOrigin port uses one model and holds the self-reflection
+text fixed, so it strengthens native path evidence without establishing general
+defense efficacy. The provider exposes aliases but not immutable
+checkpoint revisions; the GPT historical artifacts use a different protocol
+from the route specified in the current service documentation, and the
+current endpoint probes were blocked by HTTP 403/1010. These limitations
+constrain exact replication and confirmatory inference. The study consequently
+treats contrast, defense-aware, and legitimate-recovery results as screening
+evidence and avoids generalizing them beyond the recorded
+framework/model/payload strata.

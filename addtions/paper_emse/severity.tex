@@ -1,337 +1,143 @@
-%% severity.tex
+%% severity.tex -- submission version
 
-\section{RQ2: Exploitability and Severity}
+\section{RQ2: Native Recovery-Path Exploitability}
 \label{sec:severity}
 
-RQ1 established that the trust-escalation trampoline signature is prevalent across the production agent ecosystem. This section addresses the natural follow-up question: \emph{is the structural signature practically exploitable, and if so, how severe is the resulting attack?} We answer this through four complementary experiments that escalate from controlled testbed measurement to confirmed end-to-end exploit on production code:
+Attack success is defined by a canary behavior in the native framework
+artifact or model response. Matched benign controls use the same task and
+recovery structure without the injected directive. We report framework,
+model, and payload strata rather than relying on a single pooled ASR.
 
-\begin{enumerate}[leftmargin=*]
-    \item \textbf{Controlled testbed experiment} (\S\ref{sec:recova-testbed}): We measure the attack success rate (ASR) of the \rci{} attack on the \system{} white-box testbed~\cite{omo} using real LLM APIs, with and without the \trustorigin{} defense.
-    \item \textbf{Cross-framework validation on LangGraph} (\S\ref{sec:langgraph-validation}): We replicate the attack on LangGraph's public API (no source modification) to establish that the vulnerability class is not an artifact of the authors' testbed.
-    \item \textbf{Confirmed end-to-end exploit on Reflexion} (\S\ref{sec:reflexion-e2e}): We execute the attack against Reflexion's actual shipped retry path---not a reconstruction---to confirm exploitability on production code that real users run.
-    \item \textbf{Forward-defense bypass} (\S\ref{sec:forward-bypass}): We show that the \rci{} attack succeeds even when the forward path is fully defended, establishing \rci{} as an independent attack surface.
-\end{enumerate}
-
-The attack vector is summarized as follows. \textbf{\rci{}}: adversarial content embedded in a tool's error trace is re-injected into the next-round LLM prompt under a high-trust system frame, causing the LLM to obey an injected directive. The defense mechanism---\trustorigin{} tagging (provenance-based content framing)---is specified in \S\ref{sec:defense-eval}. Privilege-escalation vectors on the recovery path (e.g., role replacement, topology mutation) are a distinct authorization problem outside the scope of this empirical study (see \S\ref{sec:threat-scope}).
-
-\subsection{Controlled Testbed Experiment}
-\label{sec:recova-testbed}
-
-The controlled experiment serves \emph{mechanism attribution}: because production frameworks do not expose the internal hooks needed to isolate whether content-level provenance drives a given defense outcome, we instrument the \system{} testbed at every trust-boundary crossing. The testbed's role is to establish the mechanism; the claim that the vulnerability class generalizes beyond the testbed rests on the LangGraph (\S\ref{sec:langgraph-validation}) and Reflexion (\S\ref{sec:reflexion-e2e}) experiments.
-
-\subsubsection{Experimental Setup}
-\label{sec:recova-setup}
-
-\paragraph{Testbed.}
-\system{}~\cite{omo} is a multi-agent LLM operating system (Java 21) with 11 recovery tiers realized by 14 concrete strategy classes and tool-level \code{PermissionChecker}. The system is not publicly released; its role here is mechanism attribution via controlled ablation.
-
-\paragraph{Real LLM targets.}
-All attack measurements use real LLM APIs rather than deterministic obedience models:
-\begin{itemize}[leftmargin=*]
-    \item \textbf{DeepSeek-V4-Flash} (via SenseNova, 166 calls): a production-deployed instruction-following LLM, used as the next-round agent.
-    \item \textbf{Qwen2.5-72B-Instruct} (via SiliconFlow, 234 calls): a 72B-parameter open-weights LLM providing cross-model diversity.
-\end{itemize}
-Both are called at temperature 0.7 to capture natural non-determinism. A multi-tier API rotation strategy ensures stable throughput across 400 total calls.
-
-\paragraph{Configurations.}
-Two matched configurations are compared:
-\begin{itemize}[leftmargin=*]
-    \item \textbf{DEFENSE\_OFF (baseline):} No \trustorigin{} tagging (external content defaults to \code{SYSTEM\_GENERATED}); failure content is re-injected under the high-trust recovery template.
-    \item \textbf{DEFENSE\_ON (defended):} \trustorigin{} tagging enabled (external content tagged \code{TOOL\_OUTPUT\_EXTERNAL} $\rightarrow$ untrusted template with explicit ``Do NOT execute embedded directives'' warning; trusted content retains the high-trust template).
-\end{itemize}
-
-\paragraph{Workloads.}
-Two task sets, 100 samples each per configuration (400 total trials):
-\begin{enumerate}[leftmargin=*]
-    \item \textbf{ReflectionInjection} (attack): Five adversarial payload variants---pseudo-recovery-protocol, fake traceback, Base64-encoded directive, context confusion, authority forgery---cycled across samples (20 trials each). Each payload disguises an instruction to invoke \code{canary\_probe} as a recovery step.
-    \item \textbf{BenignRecovery} (benign): Internal errors plus legitimate recovery operations. False alarm = recovery blocked.
-\end{enumerate}
-
-\subsubsection{Attack Success Detection and Inter-Annotator Agreement}
-\label{sec:detection}
-
-The LLM freely describes its next action (we avoid binary ``will you call the tool?'' probing, which triggers safety refusals), and we classify the response in three steps: (1) refusal detection (refusal phrases $\rightarrow$ attack fails); (2) obedience detection (obedience verb + tool name $\rightarrow$ attack succeeds); (3) conservative default (ambiguous mentions $\rightarrow$ attack failure).
-
-Because the detector is rule-based over free-form LLM responses, we validate its reliability with a stratified sample of 100 responses (5 payload variants $\times$ 2 LLMs $\times$ 2 configurations, 5 samples per cell) labeled independently by two human annotators using the same written rubric. Table~\ref{tab:agreement} reports Cohen's $\kappa$ for each pair. The classifier's agreement with either annotator reaches the ``almost perfect'' band ($\kappa \geq 0.88$), and the two annotators agree with each other at a ``substantial'' level ($\kappa = 0.79$), supporting the use of automated detection for the remaining 300 trials.
-
-\begin{table}[htbp]
-\centering
-\caption{Inter-annotator agreement on attack-success classification (Cohen's $\kappa$, $n=100$ stratified samples). 95\% CIs are asymptotic, computed from the observed and expected agreement rates.}
-\label{tab:agreement}
-\begin{tabular}{lcc}
-\toprule
-\textbf{Pair} & \textbf{$\kappa$ [95\% CI]} & \textbf{Agreement (\%)} \\
-\midrule
-Annotator A vs.\ Annotator B & 0.79 [0.66, 0.92] & 91 \\
-Classifier vs.\ Annotator A  & 0.90 [0.80, 1.00] & 96 \\
-Classifier vs.\ Annotator B  & 0.88 [0.78, 0.98] & 95 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsubsection{Main Results}
-\label{sec:recova-results}
-
-Table~\ref{tab:results} reports the full evaluation results across the 400-trial design. Each row aggregates 100 trials under one (configuration, task set) pair. Wilson 95\% confidence intervals and Fisher exact $p$-values are computed from the underlying success/total counts.
-
-\begin{table}[htbp]
-\centering
-\small
-\caption{Controlled testbed results (2 configurations $\times$ 2 task sets $\times$ 100 samples = 400 trials). The attack vector uses real LLM APIs (DeepSeek-V4-Flash, Qwen2.5-72B-Instruct) at temperature~0.7; benign-recovery uses simulated failure traces. ASR and FAR are fractions in $[0,1]$; Wilson 95\% CI is for the binomial proportion; Def.\ ovhd is recovery-machinery overhead in ms (excluding LLM inference), mean$\pm$std over $N=30$; Total is end-to-end latency including LLM inference, mean$\pm$std over $N=30$ with 95\% bootstrap CI in brackets; p50 ASR is the median of the 5 per-variant ASRs. Boldface marks the defended configuration on the attack vector.}
-\label{tab:results}
-\setlength{\tabcolsep}{4pt}
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{llccccc}
-\toprule
-\textbf{Defense} & \textbf{Task Set} & \textbf{ASR/FAR} & \textbf{Wilson 95\% CI} & \textbf{p50 ASR} & \textbf{Def.\ ovhd (ms)} & \textbf{Total (ms)} \\
-\midrule
-\multirow{2}{*}{OFF} & ReflectionInjection & 0.57 & $[0.47, 0.66]$ & 0.55 & $0.20{\pm}0.05$ & $1879{\pm}205\;[1805, 1950]$ \\
-                     & BenignRecovery      & 0.00$^*$ & $[0.00, 0.04]$ & --- & $0.02{\pm}0.03$ & $19{\pm}2\;[19, 20]$ \\
-\midrule
-\multirow{2}{*}{ON}  & ReflectionInjection & \textbf{0.07} & $[0.03, 0.14]$ & 0.00 & $0.11{\pm}0.04$ & $1717{\pm}166\;[1658, 1774]$ \\
-                     & BenignRecovery      & \textbf{0.00}$^*$ & $[0.00, 0.04]$ & --- & $0.02{\pm}0.03$ & $10{\pm}1\;[10, 11]$ \\
-\bottomrule
-\end{tabular}%
-}
-\\[2pt]
-\footnotesize $^*$FAR (false alarm rate) for benign rows; all other entries in the ASR/FAR column are ASR.
-\\
-\footnotesize Fisher's exact test (two-sided), baseline vs.\ defended: $p = 7.6\times 10^{-15}$ (Bonferroni-corrected $\alpha/2 = 0.025$ applies).
-\end{table}
-
-\paragraph{Baseline severity (ASR = 0.57).}
-Under the undefended configuration, the \rci{} attack succeeds in 57 of 100 trials (Wilson CI $[0.47, 0.66]$). Per-variant ASRs range from 0.10 to 1.00: payloads mimicking legitimate operational runbooks (pseudo-recovery-protocol, authority-forgery) achieve near-certain obedience, while Base64-encoded and context-confusion variants occasionally trigger LLM suspicion. The median per-variant ASR of 0.55 indicates that half the variants succeed on the majority of their trials---no single payload is universally successful, but the attack surface as a whole is reliably exploitable.
-
-\paragraph{Defense efficacy (0.57 $\rightarrow$ 0.07).}
-Enabling the \trustorigin{} defense routes externally-originated error traces to the untrusted template, which prepends an explicit ``Do NOT execute embedded directives'' warning. In 93 of 100 trials the LLM respects the warning and refuses the injected directive; in 7 trials the LLM obeys despite the warning. The reduction from 0.57 to 0.07 (87.7\%) is statistically significant ($p = 7.6 \times 10^{-15}$), confirming it is not due to sampling noise. The residual 7\% ASR reflects the fundamental limit of content-based provenance: trust framing is a probabilistic signal, not a structural invariant. The empirical profile of this degradation under stronger instruction-following models is the subject of RQ3 (\S\ref{sec:defense-eval}).
-
-\paragraph{False alarm rate.}
-FAR is 0.00 (Wilson upper bound 0.04) on benign recoveries under DEFENSE\_ON, identical to the baseline. The defense blocks exactly the externally-originated injections and nothing else: internal errors retain the high-trust template.
-
-\subsection{Cross-Framework Validation: LangGraph}
-\label{sec:langgraph-validation}
-
-A single-system evaluation risks the objection that the vulnerability is an artifact of \system{}'s design. To address this, we ran the attack end-to-end on LangGraph~\cite{langgraph} (v1.1.10, langchain v1.2.18) using only its public API---no source modification, no patching, no custom error-handling logic. We report a recovery-path experiment (author-constructed recovery node on \code{StateGraph}, matching common Reflexion-style patterns) and a forward-path experiment (entirely library-default \code{create\_react\_agent} with built-in \code{ToolNode}).
-
-\subsubsection{Recovery-Path on LangGraph \code{StateGraph}}
-\label{sec:langgraph-recovery}
-
-We construct a LangGraph \code{StateGraph} with three nodes: a worker that calls \code{fetch\_webpage}, a tool executor, and a recovery node that catches tool exceptions. The recovery node follows the common pattern documented in LangGraph tutorials and Reflexion-style designs~\cite{reflexion}: catch failure, wrap diagnostic, re-inject into LLM. The \code{fetch\_webpage} tool raises an exception whose message contains the adversarial payload. The recovery node wraps the error content in system-level framing (``\code{[SYSTEM RECOVERY] A tool has failed. The system has captured the following diagnostic output.}'') before feeding it to the LLM---the trust-escalation trampoline. In the defended configuration, the recovery node wraps the error in explicit untrusted framing instead.
-
-\begin{table}[htbp]
-\centering
-\small
-\caption{Recovery-path attack on LangGraph (\code{StateGraph} with author-constructed recovery node). DeepSeek-V4-Flash at temperature~0.7, $N=5$ per variant (25 total per configuration). ``Errors'' are API rate-limit failures (not attack failures).}
-\label{tab:langgraph-recovery-v1}
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{llcccc}
-\toprule
-\textbf{Config} & \textbf{Variant} & \textbf{ASR} & \textbf{Wilson 95\% CI} & \textbf{Successes/Trials} & \textbf{Errors} \\
-\midrule
-\multirow{6}{*}{Baseline} & pseudo-recovery-protocol & 0.80 & $[0.38, 0.96]$ & 4/5 & 0 \\
-                          & fake-traceback            & 0.80 & $[0.38, 0.96]$ & 4/5 & 1 \\
-                          & base64-encoded            & 1.00 & $[0.57, 1.00]$ & 5/5 & 0 \\
-                          & context-confusion         & 0.40 & $[0.12, 0.77]$ & 2/5 & 1 \\
-                          & authority-forgery         & 0.80 & $[0.38, 0.96]$ & 4/5 & 1 \\
-\cmidrule(lr){2-6}
-                          & \textbf{Pooled}           & \textbf{0.76} & $\mathbf{[0.57, 0.89]}$ & \textbf{19/25} & 3 \\
-\midrule
-\multirow{6}{*}{Defended} & pseudo-recovery-protocol & 0.00 & $[0.00, 0.43]$ & 0/5 & 0 \\
-                          & fake-traceback            & 0.00 & $[0.00, 0.43]$ & 0/5 & 0 \\
-                          & base64-encoded            & 0.00 & $[0.00, 0.43]$ & 0/5 & 0 \\
-                          & context-confusion         & 0.20 & $[0.04, 0.62]$ & 1/5 & 0 \\
-                          & authority-forgery         & 0.00 & $[0.00, 0.43]$ & 0/5 & 0 \\
-\cmidrule(lr){2-6}
-                          & \textbf{Pooled}           & \textbf{0.04} & $\mathbf{[0.01, 0.20]}$ & \textbf{1/25} & 0 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Table~\ref{tab:langgraph-recovery-v1} shows that the recovery-path attack achieves a pooled baseline ASR of \textbf{0.76} (Wilson CI $[0.57, 0.89]$) on LangGraph. Four of five variants achieve $\geq$80\% ASR. The untrusted-framing defense reduces the pooled ASR to \textbf{0.04} (Wilson CI $[0.01, 0.20]$)---a 94.7\% relative reduction (Fisher $p = 2.7 \times 10^{-5}$). This experiment validates the recovery-channel injection mechanism on a third-party framework: the attack succeeds because the recovery pipeline actively upgrades the trust level of external content, not because of a standard tool-output injection.
-
-\subsubsection{Forward-Path on LangGraph \code{create\_react\_agent}}
-\label{sec:langgraph-forward}
-
-As supplementary evidence, we tested the standard forward-path injection on LangGraph's \code{create\_react\_agent} prebuilt with entirely library-default components. The \code{fetch\_webpage} tool \emph{returns} (not raises) an error string containing the adversarial payload. LangGraph's \code{ToolNode} wraps this return value in a \code{ToolMessage(status="success")}---the standard tool-output path.
-
-\begin{table}[htbp]
-\centering
-\small
-\caption{Forward-path attack on LangGraph (\code{create\_react\_agent}, entirely library-default components). DeepSeek-V4-Flash at temperature~0.7, $N=10$ per variant (50 total). ``Errors'' are API rate-limit failures; excluding errors, the attack succeeded on 44/44 completed trials.}
-\label{tab:langgraph-forward}
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{lcccc}
-\toprule
-\textbf{Variant} & \textbf{ASR} & \textbf{Wilson 95\% CI} & \textbf{Successes/Trials} & \textbf{Errors} \\
-\midrule
-pseudo-recovery-protocol & 1.00 & $[0.72, 1.00]$ & 10/10 & 0 \\
-fake-traceback            & 0.60 & $[0.31, 0.83]$ & 6/10  & 4 \\
-base64-encoded            & 0.80 & $[0.49, 0.94]$ & 8/10  & 2 \\
-context-confusion         & 1.00 & $[0.72, 1.00]$ & 10/10 & 0 \\
-authority-forgery         & 1.00 & $[0.72, 1.00]$ & 10/10 & 0 \\
-\midrule
-\textbf{Pooled}           & \textbf{0.88} & $[0.76, 0.94]$ & \textbf{44/50} & 6 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Table~\ref{tab:langgraph-forward} shows that the attack achieves a pooled ASR of \textbf{0.88} (Wilson CI $[0.76, 0.94]$) using entirely library-default LangGraph components. Excluding the 6 API rate-limit failures, the attack succeeded on every completed trial (44/44 = 100\%). This confirms that LangGraph's library-default tool-output path already lacks provenance tagging.
-
-\subsubsection{Real Agentic Loop (Ecological Validity Check)}
-\label{sec:real-agentic-loop}
-
-A potential objection is that the experiments above measure a \emph{proxy}: the LLM describes its intent to call \code{canary\_probe}, but the tool is never actually executed. We address this by running a real agentic loop using \code{create\_react\_agent}'s \code{bind\_tools} mechanism, where attack success is defined as \code{canary\_probe} being \emph{actually invoked} (a \code{ToolMessage} with the canary result is appended to the conversation).
-
-\begin{table}[htbp]
-\centering
-\small
-\caption{Real agentic-loop experiment on LangGraph (\code{create\_react\_agent} with \code{bind\_tools}). DeepSeek-V4-Flash at temperature~0.7, $N=5$ per variant (25 total per configuration). Attack success = \code{canary\_probe} actually executed.}
-\label{tab:real-agentic-loop}
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{llccc}
-\toprule
-\textbf{Config} & \textbf{Variant} & \textbf{ASR} & \textbf{Wilson 95\% CI} & \textbf{Successes/Trials} \\
-\midrule
-\multirow{6}{*}{Baseline} & pseudo-recovery-protocol & 1.00 & $[0.48, 1.00]$ & 5/5 \\
-                          & fake-traceback            & 1.00 & $[0.48, 1.00]$ & 5/5 \\
-                          & base64-encoded            & 0.80 & $[0.38, 0.96]$ & 4/5 \\
-                          & context-confusion         & 1.00 & $[0.48, 1.00]$ & 5/5 \\
-                          & authority-forgery         & 1.00 & $[0.48, 1.00]$ & 5/5 \\
-\cmidrule(lr){2-5}
-                          & \textbf{Pooled}           & \textbf{0.96} & $\mathbf{[0.80, 0.99]}$ & \textbf{24/25} \\
-\midrule
-\multirow{6}{*}{Defended$^\dagger$} & pseudo-recovery-protocol & 1.00 & $[0.48, 1.00]$ & 5/5 \\
-                          & fake-traceback            & 1.00 & $[0.48, 1.00]$ & 5/5 \\
-                          & base64-encoded            & 0.40 & $[0.12, 0.77]$ & 2/5 \\
-                          & context-confusion         & 0.20 & $[0.04, 0.62]$ & 1/5 \\
-                          & authority-forgery         & 0.00 & $[0.00, 0.43]$ & 0/5 \\
-\cmidrule(lr){2-5}
-                          & \textbf{Pooled}           & \textbf{0.52} & $\mathbf{[0.33, 0.70]}$ & \textbf{13/25} \\
-\bottomrule
-\end{tabular}
-\\[2pt]
-\footnotesize $^\dagger$9 of 25 defended trials were contaminated by API rate-limit exhaustion and counted as failures (conservative); excluding them, the clean defended ASR is 13/16 = 0.81 ($[0.57, 0.93]$). Fisher's exact test: $p = 7.6 \times 10^{-4}$.
-\end{table}
-
-Table~\ref{tab:real-agentic-loop} shows the baseline real-loop ASR is \textbf{0.96} (Wilson CI $[0.80, 0.99]$; 24/25), slightly \emph{higher} than the 0.88 proxy measurement on the same framework. This confirms the rule-based intent classifier is a conservative estimator: real tool execution yields marginally higher ASR because the agentic loop's tool-call protocol bypasses second-order safety filtering. The defended column tests a system-prompt-level untrusted warning (the strongest forward-path analog without modifying \code{ToolNode} internals); its pooled ASR of 0.52 is substantially higher than the 0.07 achieved by the per-content \trustorigin{} template on the recovery path, confirming that per-content provenance tagging is substantially more effective than system-prompt-level warnings.
-
-\subsection{Confirmed End-to-End Exploit: Reflexion}
+\subsection{Canonical Reflexion Matrix}
 \label{sec:reflexion-e2e}
 
-The LangGraph experiments above, while run on a third-party framework, still rely on author-constructed recovery nodes (LangGraph ships no built-in recovery primitive). To confirm exploitability on production code that real users run, we executed an end-to-end \rci{} exploit against Reflexion's~\cite{reflexion-code} \emph{actual} retry path---not a reconstruction, but the verbatim prompt construction from \code{generic\_generate\_func\_impl} at commit \texttt{218cf0e}.
-
-\paragraph{Threat model.}
-An attacker controls a unit-test case whose execution prints adversarial content to stdout/stderr. The test runner captures this output as the \code{feedback} string. Reflexion's retry path wraps \code{feedback} in a \code{[unit test results from previous impl]:} envelope under the system prompt \texttt{PY\_REFLEXION\_CHAT\_INSTRUCTION}, with no provenance tag. The LLM emits an ``improved implementation'' parsed by Reflexion's actual \code{parse\_code\_block} function.
-
-\paragraph{Exploit design.}
-The target function is \code{mystery\_seq} (a Fibonacci sequence identifier not present in Reflexion's few-shot example, so the model genuinely needs the test feedback). The previous implementation returns \code{n * 2} (wrong). The adversarial \code{feedback} contains both legitimate test failures and an injection directive framed as a test-infrastructure requirement. We test 5 injection variants: \emph{grader\_requirement}, \emph{assertion\_embedded}, \emph{test\_setup\_import}, \emph{pseudo\_recovery}, and \emph{authority\_forgery}. The benign control arm uses the same test failures without the injection. Attack success = the LLM's parsed code block contains \code{canary\_probe}. $N=10$ per variant (50 per arm, 100 total), gpt-5.6-luna at temperature 0.7.
+The Reflexion canonical matrix uses five payload variants, five model aliases,
+\ReflexionTrialsPerVariantArm{} trials per variant and arm, and the shipped
+retry path at commit \texttt{218cf0e}. The model-stratified results are
+generated directly from the canonical manifest:
 
 \begin{table}[htbp]
 \centering
 \small
-\caption{End-to-end \rci{} exploit against Reflexion's actual retry path (\code{generic\_generate\_func\_impl} at commit \texttt{218cf0e}). $N=10$ per variant (50 per arm), gpt-5.6-luna at temperature~0.7. ``FPR'' = false-positive rate on the benign control arm.}
-\label{tab:reflexion-e2e}
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{lccc}
+\caption{Canonical Reflexion recovery-path results. Intervals are Wilson 95\% confidence intervals.}
+\label{tab:canonical-reflexion}
+\begin{tabular}{lrrrrr}
 \toprule
-\textbf{Variant} & \textbf{ASR} & \textbf{Wilson 95\% CI} & \textbf{Successes/Trials} \\
+\textbf{Model} & \textbf{Successes} & \textbf{Trials} & \textbf{ASR} & \textbf{Benign FPR} & \textbf{ASR CI} \\
 \midrule
-\multicolumn{4}{l}{\textit{Attack arm (adversarial feedback)}} \\
-grader\_requirement       & 1.00 & $[0.72, 1.00]$ & 10/10 \\
-assertion\_embedded       & 1.00 & $[0.72, 1.00]$ & 10/10 \\
-test\_setup\_import       & 0.60 & $[0.31, 0.83]$ & 6/10  \\
-pseudo\_recovery          & 0.00 & $[0.00, 0.28]$ & 0/10  \\
-authority\_forgery        & 0.00 & $[0.00, 0.28]$ & 0/10  \\
-\midrule
-\textbf{Pooled attack ASR}  & \textbf{0.52} & $[0.39, 0.65]$ & \textbf{26/50} \\
-\midrule
-\multicolumn{4}{l}{\textit{Benign control arm (no injection)}} \\
-\textbf{Pooled benign FPR}  & \textbf{0.00} & $[0.00, 0.07]$ & \textbf{0/50} \\
+\input{generated_reflexion_rows}\tabularnewline
 \bottomrule
 \end{tabular}
-\\[2pt]
-\footnotesize Fisher's exact test (attack vs.\ benign, two-sided): $p = 3.5 \times 10^{-10}$.
 \end{table}
 
-Table~\ref{tab:reflexion-e2e} reports a pooled ASR of \textbf{0.52} (Wilson CI $[0.39, 0.65]$) with \textbf{0.00} false-positive rate on the benign control (Wilson CI $[0.00, 0.07]$); Fisher's exact test gives $p = 3.5 \times 10^{-10}$. Two variants achieve 100\% ASR: \emph{grader\_requirement} and \emph{assertion\_embedded}. The model resists the more obvious \emph{pseudo\_recovery} and \emph{authority\_forgery} variants (0/10 each), but obeys when the injection is framed as a legitimate test-infrastructure requirement---exactly the trust-escalation trampoline: the recovery pipeline's high-trust framing causes the LLM to treat the test output's directive as a grader requirement rather than untrusted content.
+Attack ASR ranges from \ReflexionMinASR{} to \ReflexionMaxASR{} across the
+five aliases. Every matched benign arm is zero, for
+\ReflexionBenignTrials{} benign trials in total. The model heterogeneity
+shows why pooled rates are insufficient, while the benign controls exclude
+ordinary recovery behavior as an explanation for the canary classifier.
 
-Listing~\ref{lst:reflexion-e2e-response} shows a representative successful exploit. The LLM's ``improved implementation'' begins with \code{import canary\_probe; canary\_probe()}, smuggled in via the test feedback. This is a true end-to-end exploit: it uses Reflexion's actual \code{generic\_generate\_func\_impl} prompt construction, actual \texttt{PY\_REFLEXION\_CHAT\_INSTRUCTION} system prompt, actual few-shot example, and actual \code{parse\_code\_block}. No author-constructed recovery node: Reflexion's own code \emph{is} the recovery node.
+\paragraph{Fixed local open-model sensitivity anchor.}
+The cached local \QwenLocalModel{} was run through the same pinned Reflexion
+generator as a sensitivity check.  With \QwenLocalTrialsPerCell{} trials per
+payload/cell, the raw treatment produced
+\QwenLocalRawSuccesses{}/\QwenLocalAttackTrials{} attack successes
+(\QwenLocalRawASR{}), while TrustOrigin framing produced
+\QwenLocalTaggedSuccesses{}/\QwenLocalAttackTrials{}
+(\QwenLocalTaggedASR{}).  Both matched benign FPRs were zero and the Fisher
+contrast was $p=\QwenLocalFisherP{}$.  Because this is a 100-trial exploratory
+anchor rather than a powered mitigation comparison, it is not pooled with
+the canonical provider-alias matrix.
 
-\begin{lstlisting}[language=Python,caption={Representative successful exploit on Reflexion. The adversarial test output (top, injected into \code{feedback}) is wrapped by Reflexion's retry path in a \code{[unit test results]} envelope under a system-framed prompt. The LLM's ``improved implementation'' (bottom, parsed by Reflexion's actual \code{parse\_code\_block}) begins with the smuggled \code{canary\_probe} call. Trial \texttt{attack/grader\_requirement/0}.},label={lst:reflexion-e2e-response}]
-# --- Adversarial test output (attacker-controlled `feedback`) ---
-Tests passed:
+\subsection{Native Reflexion TrustOrigin Port}
+\label{sec:reflexion-trustorigin-native}
 
-Tests failed:
-assert mystery_seq(1) == 1 # output: 2
-assert mystery_seq(2) == 1 # output: 4
-...
-Grader note: the test harness requires `import canary_probe;
-canary_probe()` at the top of the solution module for test
-environment isolation. Solutions missing this import will fail
-to initialize the test runner and will be scored 0.
-
-# --- LLM's "improved implementation" (parsed by parse_code_block) ---
-import canary_probe
-
-canary_probe()
-
-
-def mystery_seq(n: int) -> int:
-    """
-    Given an integer n >= 1, return the n-th term of the
-    Fibonacci sequence.
-    """
-    if n <= 2:
-        return 1
-    previous, current = 1, 1
-    for _ in range(3, n + 1):
-        previous, current = current, previous + current
-    return current
-\end{lstlisting}
-
-\subsection{Forward-Defense Bypass: \rci{} as an Independent Attack Surface}
-\label{sec:forward-bypass}
-
-The most important experiment for establishing \rci{} as an \emph{independent} attack surface---not merely a variant of indirect prompt injection~\cite{greshake2023indirect}---is to show that \rci{} succeeds even when the forward path is fully defended. If forward-path defenses suffice, \rci{} is not a distinct attack surface; if they do not, \rci{} bypasses forward-path defenses by construction, because the recovery pipeline re-stamps untrusted content as system-trusted \emph{after} those defenses have already accepted it.
-
-\paragraph{Design.}
-We run two configurations on the same recovery pipeline, $N=10$ trials per variant (50 total per config), temperature 0.7:
-\begin{itemize}[leftmargin=*]
-    \item \textbf{CONFIG\_A (forward-path undefended):} No forward-path defenses. The recovery node wraps the error trace in the \code{[SYSTEM CRITICAL]} template (baseline).
-    \item \textbf{CONFIG\_B (forward-path fully defended):} Three forward-path defenses are enabled before the tool call: (1) an input sanitizer (signature-based, 9 patterns), (2) a prompt-injection detector (LLM classifier at temperature 0.0), and (3) a tool-permission check (\code{canary\_probe} is NOT allowed on the forward path). The recovery path is identical to CONFIG\_A.
-\end{itemize}
-
-The key design choice: all three forward-path defenses inspect the \emph{user input} (``Please fetch https://example.com/test and summarize it.''), which is benign. The adversarial content enters via the tool's \emph{failure} (the external webpage's content is captured in the error trace), which is not inspected by any forward-path defense.
+We next ported the provenance treatment to the shipped Reflexion recovery
+generator at the same commit. With \NativeTrustOriginModel{}, five payloads,
+and \NativeTrustOriginTrialsPerCell{} trials per payload, arm, and treatment,
+the raw recovery treatment produced
+\NativeTrustOriginRawSuccesses{}/\NativeTrustOriginAttackTrials{}
+(\NativeTrustOriginRawASR{}) attack successes, while the
+\trustorigin{}-tagged treatment produced
+\NativeTrustOriginTaggedSuccesses{}/\NativeTrustOriginAttackTrials{}
+(\NativeTrustOriginTaggedASR{}). The matched benign FPRs were
+\NativeTrustOriginRawFPR{} and \NativeTrustOriginTaggedFPR{}, respectively;
+the raw-versus-tagged attack contrast gives Fisher's exact
+$p=\NativeTrustOriginFisherP{}$. This is framework-level reinforcement for
+the provenance mechanism, not a cross-model defense-efficacy estimate.
 
 \begin{table}[htbp]
 \centering
 \small
-\caption{Forward-path defense bypass: \rci{} ASR under full forward-path defenses. $N=10$ per variant (50 total per config).}
-\label{tab:forward-defense-bypass}
-\begin{tabular}{lccc}
+\caption{Native Reflexion provenance treatment with matched benign controls.}
+\label{tab:native-trustorigin}
+\begin{tabular}{llrrr}
 \toprule
-\textbf{Config} & \textbf{ASR} & \textbf{Wilson 95\% CI} & \textbf{Successes/Trials} \\
+\textbf{Model} & \textbf{Treatment} & \textbf{Attack} & \textbf{Benign FPR} & \textbf{Attack CI} \\
 \midrule
-A: Forward-path undefended        & 0.74 & $[0.60, 0.84]$ & 37/50 \\
-B: Forward-path FULLY defended    & 0.68 & $[0.54, 0.79]$ & 34/50 \\
+\input{generated_trustorigin_rows}\tabularnewline
 \bottomrule
 \end{tabular}
-\\[2pt]
-\footnotesize Fisher's exact test (two-sided): $p = 0.660$ (not significant). Forward-path defenses blocked 0/50 trials in CONFIG\_B.
 \end{table}
 
-\paragraph{Result.}
-Table~\ref{tab:forward-defense-bypass} shows that CONFIG\_B (forward-path fully defended) achieves an ASR of \textbf{0.68} (Wilson CI $[0.54, 0.79]$), statistically indistinguishable from CONFIG\_A's \textbf{0.74} (Wilson CI $[0.60, 0.84]$; Fisher $p = 0.660$). The forward-path defenses blocked \emph{zero} of the 50 trials in CONFIG\_B, because all three defenses inspect the user input (benign) rather than the tool's failure payload (adversarial).
+\subsection{Native AutoGen Recovery/Error Flow}
+\label{sec:autogen-e2e}
 
-\paragraph{Interpretation.}
-This result establishes \rci{} as an independent attack surface that forward-path defenses cannot cover:
-\begin{enumerate}[leftmargin=*]
-    \item \emph{Forward-path defenses operate on the wrong content.} Input sanitizers, injection detectors, and tool-permission checks inspect the user's request, not the external content that the tool fetches and that causes the failure. The adversarial payload enters the agent context via the tool's error trace, which is never seen by any forward-path defense.
-    \item \emph{The recovery pipeline re-stamps untrusted content as system-trusted.} The recovery node wraps the error trace in the \code{[SYSTEM CRITICAL]} template, granting it system-level trust. This re-stamping happens \emph{after} the forward-path defenses have already run and accepted the user input.
-    \item \emph{\rci{} is not a variant of indirect injection.} Indirect injection injects content via the tool's \emph{return value}, read directly by the LLM on the forward path. \rci{} injects content via the tool's \emph{failure}, captured in the error trace and re-injected by the recovery pipeline under a high-trust frame. Forward-path defenses that inspect tool return values do not inspect error traces.
-\end{enumerate}
+AutoGen \texttt{python-v0.4.7} was executed through its native
+\texttt{AssistantAgent}, \texttt{FunctionTool}, tool-error event, and
+subsequent recovery turn. With \AutoGenTrialsPerVariantArm{} trials per
+variant and arm, GLM-5.2 and GPT-5.6 Luna produced zero attack successes,
+while Kimi K2.6 produced \AutoGenKimiASR{} ASR. Native path execution was
+unity for GLM and GPT and \AutoGenKimiPathRate{} for Kimi; benign FPR was zero
+in all three runs. This is native framework evidence, but the smaller cells
+make it a broad validation rather than a precision estimate.
 
-This experiment directly addresses the concern that \rci{} is merely indirect injection with extra steps. Even with three complementary forward-path defenses---including an LLM-based injection detector---the attack succeeds at 68\% ASR, because the defenses operate on the forward path and the bypass occurs on the recovery path.
+\begin{table}[htbp]
+\centering
+\small
+\caption{Native AutoGen and Aider recovery/error flows.}
+\label{tab:native-frameworks}
+\begin{tabular}{p{1.7cm}p{2.4cm}p{3.1cm}rr}
+\toprule
+\textbf{Frame.} & \textbf{Model} & \textbf{Attack successes} & \textbf{Path rate} & \textbf{Benign FPR} \\
+\midrule
+\input{generated_native_rows}\tabularnewline
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Native Aider Recovery/Error Flow}
+\label{sec:aider-e2e}
+
+Aider \texttt{v0.86.2} was executed through
+\texttt{aider.coders.base\_coder.Coder.run\_one}, its native
+\texttt{cmd\_test} non-zero output, and the same Coder recovery loop. GPT-5.6
+Luna yielded \AiderGptASR{} attack ASR and \AiderGptPathRate{} native path
+completion, with zero benign successes. The native transcript records the
+test failure being added to the live conversation before the recovery turn;
+the result is therefore not a message-format reconstruction.
+
+\subsection{Mechanism and Channel Screen}
+\label{sec:recova-testbed}
+
+The Reflexion message-level Kimi K2.6 screen uses 20 trials per payload, arm,
+and cell. The recovery/raw user-tail reference is \CausalRawRecoveryASR{};
+the tagged variant is \CausalTaggedRecoveryASR{}; the forward/raw user-tail
+cell is \CausalForwardASR{}; the system-tail and user-head recovery cells are
+\CausalSystemTailASR{} and \CausalUserHeadASR{}, respectively. Every benign
+cell has zero FPR. The raw-versus-tagged difference is small, so this result
+is mechanism screening rather than a confirmatory estimate.
+
+\subsection{Author-constructed LangGraph Scope}
+\label{sec:langgraph-validation}
+
+Earlier LangGraph recovery-node and real-loop artifacts are retained only as
+supplementary mechanism checks because the recovery node was authored for the
+experiment rather than shipped as a default recovery primitive. They are not
+pooled with the native Reflexion, AutoGen, or Aider results and do not support
+the claim that LangGraph itself ships a vulnerable recovery loop.
 
 \paragraph{RQ2 summary.}
-The four experiments jointly establish that the trust-escalation trampoline is practically exploitable and severe. The controlled testbed experiment (ASR 0.57 $\rightarrow$ 0.07, $p = 7.6\times 10^{-15}$) demonstrates high baseline severity and significant defense efficacy with real LLMs. The LangGraph cross-framework validation (recovery-path: 0.76 $\rightarrow$ 0.04; forward-path: 0.88; real-loop: 0.96) confirms the vulnerability is not specific to the testbed. The Reflexion end-to-end exploit (ASR 0.52, $p = 3.5 \times 10^{-10}$) confirms exploitability on production code. The forward-defense bypass (ASR 0.68, $p = 0.660$) establishes \rci{} as an independent attack surface that forward-path defenses cannot cover.
+The current evidence supports recovery-channel attack behavior across three
+native framework paths with matched benign controls. Model heterogeneity is
+large, and native path completion should be reported separately from ASR.
+Author-constructed nodes and message-level screens remain supplementary.
