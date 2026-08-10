@@ -30,10 +30,11 @@ redistributed.
 
 ## Status
 
-This is a staging package (2026-08-10). A public GitHub release and Zenodo DOI
-must only be created after the fixed local-model anchor and the human
-second-coder labels are added, the manifest is regenerated, and the authors
-approve the release. The cached `qwen:7b` was used only for a harness smoke
+This is a staging package (2026-08-10). A public *final* GitHub release and
+Zenodo DOI must only be created after the fixed local-model anchor and the
+human second-coder labels are added, the manifest is regenerated, and the
+authors approve the release. A prerelease staging tag has been pushed for
+auditability. The cached `qwen:7b` was used only for a harness smoke
 test and is excluded from the formal Qwen3-8B evidence because its Ollama
 metadata identifies it as Qwen2-family. A formal `qwen3:8b` pull is currently
 blocked by the local registry/DNS path.
