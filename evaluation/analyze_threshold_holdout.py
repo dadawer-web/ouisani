@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""Analyze the frozen, post-selection Java threshold holdout.
+
+The production threshold is fixed at 50 before this script is run.  The input
+is one Java-21 VPS JSONL file containing profiles that were not used by the
+training selector in ``analyze_jvm_starvation.py``.  No threshold is tuned in
+this script; it only computes detection/false-positive rates and confidence
+intervals from the raw observations.
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+import math
+from collections import defaultdict
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+TARGET = ROOT / "evaluation/target/threshold_holdout"
+PAPER_GENERATED = ROOT / "addtions/paper/generated"
+THRESHOLD = 50
+EXPECTED_MORPHOLOGIES = {
+    "alternating-burst",
+    "staggered-ramp",
+    "long-hold-drip",
+    "tenant-batch",
+    "cooperative-burst",
+    "background-ramp",
+}
+
+
+def wilson(successes: int, n: int, z: float = 1.959963984540054) -> tuple[float, float]:
+    if n == 0:
+        return math.nan, math.nan
+    p = successes / n
+    denominator = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / denominator
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denominator
+    return max(0.0, center - half), min(1.0, center + half)
+
+
+def main() -> None:
+    raw_paths = sorted(TARGET.glob("jvm_permission_starvation_vps_threshold_holdout_03.raw.jsonl"))
+    if len(raw_paths) != 1:
+        raise SystemExit(f"expected exactly one frozen holdout JSONL, found {len(raw_paths)}")
+    rows = [json.loads(line) for line in raw_paths[0].read_text(encoding="utf-8").splitlines() if line.strip()]
+    if len(rows) != 180:
+        raise SystemExit(f"expected 180 holdout observations, found {len(rows)}")
+    if {r["morphology"] for r in rows} != EXPECTED_MORPHOLOGIES:
+        raise SystemExit("holdout morphology set changed; update the preregistered profile list explicitly")
+    if {r["architecture"] for r in rows} != {"NEURON_COUPLED"}:
+        raise SystemExit("holdout must exercise the production coupled Java policy")
+    if {r["deadline_ms"] for r in rows} != {10}:
+        raise SystemExit("holdout deadline must remain the frozen 10 ms diagnostic deadline")
+
+    attack = [r for r in rows if r["workload_class"] == "attack"]
+    benign = [r for r in rows if r["workload_class"] == "benign"]
+    attack_hits = sum(r["resource_rejections"] > THRESHOLD for r in attack)
+    benign_hits = sum(r["resource_rejections"] > THRESHOLD for r in benign)
+    attack_ci = wilson(attack_hits, len(attack))
+    benign_ci = wilson(benign_hits, len(benign))
+
+    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for row in rows:
+        groups[(row["morphology"], row["workload_class"])].append(row)
+    summary_rows = []
+    for (morphology, workload_class), values in sorted(groups.items()):
+        hits = sum(r["resource_rejections"] > THRESHOLD for r in values)
+        ci = wilson(hits, len(values))
+        summary_rows.append({
+            "morphology": morphology,
+            "workload_class": workload_class,
+            "n": len(values),
+            "mean_resource_rejections": sum(r["resource_rejections"] for r in values) / len(values),
+            "min_resource_rejections": min(r["resource_rejections"] for r in values),
+            "max_resource_rejections": max(r["resource_rejections"] for r in values),
+            "threshold_hits": hits,
+            "threshold_rate": hits / len(values),
+            "ci_low": ci[0],
+            "ci_high": ci[1],
+        })
+
+    report = {
+        "experiment": "java_threshold_holdout",
+        "selection_rule": "threshold=50 frozen from the training split before this holdout was run",
+        "selected_threshold": THRESHOLD,
+        "source": str(raw_paths[0].relative_to(ROOT)).replace("\\", "/"),
+        "host": rows[0].get("host_id"),
+        "java_mode": rows[0].get("benchmark_mode"),
+        "observations": len(rows),
+        "attack_n": len(attack),
+        "attack_detection_rate": attack_hits / len(attack),
+        "attack_detection_ci": list(attack_ci),
+        "benign_n": len(benign),
+        "benign_false_positive_rate": benign_hits / len(benign),
+        "benign_false_positive_ci": list(benign_ci),
+        "balanced_accuracy": ((attack_hits / len(attack)) + (1 - benign_hits / len(benign))) / 2,
+        "morphologies": sorted(EXPECTED_MORPHOLOGIES),
+        "profile_summary": summary_rows,
+    }
+    (TARGET / "threshold_holdout_report.json").write_text(
+        json.dumps(report, indent=2), encoding="utf-8")
+
+    with (TARGET / "threshold_holdout_profile_summary.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(summary_rows[0]))
+        writer.writeheader()
+        writer.writerows(summary_rows)
+
+    PAPER_GENERATED.mkdir(parents=True, exist_ok=True)
+    macros = [
+        "% Generated by evaluation/analyze_threshold_holdout.py; do not edit.",
+        f"\\newcommand{{\\ThresholdHoldoutObservationCount}}{{{len(rows):,}}}",
+        f"\\newcommand{{\\ThresholdHoldoutPerProfileCount}}{{30}}",
+        f"\\newcommand{{\\ThresholdHoldoutAttackCount}}{{{len(attack)}}}",
+        f"\\newcommand{{\\ThresholdHoldoutAttackDetection}}{{{100 * report['attack_detection_rate']:.1f}\\%}}",
+        f"\\newcommand{{\\ThresholdHoldoutAttackCILow}}{{{100 * attack_ci[0]:.1f}\\%}}",
+        f"\\newcommand{{\\ThresholdHoldoutAttackCIHigh}}{{{100 * attack_ci[1]:.1f}\\%}}",
+        f"\\newcommand{{\\ThresholdHoldoutBenignCount}}{{{len(benign)}}}",
+        f"\\newcommand{{\\ThresholdHoldoutBenignFP}}{{{100 * report['benign_false_positive_rate']:.1f}\\%}}",
+        f"\\newcommand{{\\ThresholdHoldoutBenignFPCIHigh}}{{{100 * benign_ci[1]:.1f}\\%}}",
+        f"\\newcommand{{\\ThresholdHoldoutBalancedAccuracy}}{{{100 * report['balanced_accuracy']:.1f}\\%}}",
+    ]
+    (PAPER_GENERATED / "threshold_holdout_results.tex").write_text("\n".join(macros) + "\n", encoding="utf-8")
+
+    print(json.dumps({
+        "selected_threshold": THRESHOLD,
+        "attack": f"{attack_hits}/{len(attack)} ({100 * report['attack_detection_rate']:.1f}%)",
+        "benign_false_positive": f"{benign_hits}/{len(benign)} ({100 * report['benign_false_positive_rate']:.1f}%)",
+        "balanced_accuracy": report["balanced_accuracy"],
+        "observations": len(rows),
+    }, indent=2))
+
+
+if __name__ == "__main__":
+    main()

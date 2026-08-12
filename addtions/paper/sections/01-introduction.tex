@@ -1,181 +1,107 @@
-% =============================================================================
-%  Section 1 — Introduction
-% =============================================================================
 \section{Introduction}
 \label{sec:intro}
 
-The deployment of large language model (LLM) agents is shifting from
-single-user, single-process setups toward \emph{multi-tenant} platforms in
-which many tenants concurrently execute heterogeneous agent workflows on a
-common runtime~\cite{mei2025aios,wu2023autogen}. This shift elevates a set of
-concerns that classical operating systems address through kernel-level
-abstractions---resource fairness, execution isolation, and accountable access
-control---from the periphery to the center of the runtime design space.
-Prevailing agent frameworks, however, remain anchored at the application
-layer: orchestrators such as AutoGen~\cite{wu2023autogen} and the Model
-Context Protocol (MCP)~\cite{anthropic2024mcp} treat resource accounting and
-access control as largely orthogonal concerns, counting token consumption in
-user space through best-effort interceptors and enforcing permissions through
-static, declarative policies evaluated independently of the runtime resource
-state. This \emph{layer-separated, each-to-its-own} design inherits the
-assumption that resource control, execution isolation, and access control can
-be governed in isolation without loss of safety.
+Multi-tenant LLM agents share runtimes, tool gateways, caches, and execution
+capacity across tenants~\cite{mei2025aios,wu2023autogen}. This consolidation
+makes permission checking a systems problem. A permission decision is
+scheduled on an executor, reads policy state, may append an audit event, and
+must complete while untrusted tenants generate work. Resource admission and
+permission governance can therefore interact even when their interfaces are
+implemented by separate modules. This systems-level interaction is the focus
+of this paper.
 
-\paragraph{Scope: a runtime-level middleware, not a kernel.}
-Before proceeding we state the scope explicitly. This paper presents a
-\emph{runtime-level middleware} that sits between the agent framework and the
-host OS. We borrow OS-kernel terminology (cgroup, syscall, OOM killer,
-\texttt{NoNewPrivs}) strictly as a \emph{functional analogy} for the logical
-role of each primitive; the trust boundary is the JVM/container, not a
-hardware ring. The enforcement mechanisms are language-level constructs:
-\texttt{InheritableThreadLocal} propagation for privilege non-increase,
-\texttt{synchronized} token buckets for rate limiting, depth-threshold
-policies for escalation, and a shared per-turn trace identifier for audit
-correlation. This is not a new operating-system kernel in the seL4
-sense~\cite{klein2009sel4}; the contribution is the governance
-\emph{design}---how these mechanisms are coupled---not kernel-enforced
-isolation. A kernel-level re-implementation would strengthen the boundary
-but is orthogonal to the coupling argument, which holds at any enforcement
-layer where the same primitives can be deployed.
+We study one conditional but consequential failure mode. Suppose a runtime
+sets a deadline for a permission decision and uses a permissive result when
+that deadline expires. Hostile work that delays a shared policy executor can
+then turn a policy-plane availability failure into an unsafe admission. The
+condition is not inevitable: fail-closed handling preserves safety, and a
+reserved permission executor can avoid the scheduling bottleneck. The point is
+that deadline semantics, capacity allocation, and resource pressure must be
+evaluated together as an architectural choice rather than hidden behind
+separate layer interfaces.
 
-We argue that this assumption breaks down for multi-tenant LLM agent runtimes,
-and we identify a class of \emph{coupled resource--security failures} that no
-single layer can prevent in isolation. The failure mode has two facets.
-First, under resource contention the security module itself competes for the
-same scarce resources---CPU slices for policy evaluation, memory for audit
-logs, locks for permission state---and may be degraded or starved precisely
-when the attack demands it most. Second, during the transient window in which
-the resource layer is contended but has not yet tripped a hard failure, an
-attacker can slip a privileged operation through a permission layer that has
-no causal link to the ongoing pressure. The root cause is architectural: the
-three governance layers maintain disjoint audit trails, and without a shared
-causal identifier, cross-layer correlation---and thus timely detection of
-coupled attacks---is structurally impossible. The gap is widened by a
-LIM-specific attack surface that classical isolation models were never
-designed to handle: an LLM-integrated machine (LIM) agent dynamically spawns
-sub-agents at runtime through natural-language-driven tool calls and requests
-permission escalation through unstructured prompts rather than
-system calls~\cite{hardy1988confused}, so a sub-agent spawned by a downgraded
-parent can silently inherit a fresh default profile---effectively escalating
-its privileges at the moment of creation---while a deeply nested sub-agent
-can phrase a destructive-tool request in natural language, bypassing the
-depth-aware scrutiny that the approval channel was never designed to carry.
+\paragraph{Neuron.}
+We present \textbf{Neuron}, a dependable runtime architecture with two core
+mechanisms. First, permission checks execute on reserved capacity instead of
+the executor used by tenant work. Second, resource admission exports a
+pressure signal to the escalation policy; under sustained pressure, a
+destructive request one level below the normal depth boundary is denied
+instead of entering an interactive approval path. A per-turn trace identifier
+joins the resource event and permission verdict for audit correlation.
+Spawn-time identity propagation and privilege non-increase support the design,
+while quotas and sandboxes are implementation mechanisms rather than
+co-equal research contributions.
 
-\paragraph{The coupled governance design principle.}
-To close these gaps at the architectural level, we present \textbf{Neuron}, a
-multi-tenant LLM agent governance runtime designed around the principle of
-\emph{coupled resource--security governance}. The design unifies resource
-control, execution isolation, and access control at the \emph{runtime level}
-through two complementary mechanisms. \emph{First}, every governance
-decision---whether originating from the cgroup, sandbox, or permission
-layer---is stamped with a single \emph{trace identifier} injected at the turn
-boundary and aggregated into a unified audit chain; this shared identifier
-provides cross-layer \emph{audit correlation}, enabling post-hoc
-reconstruction of any attack timeline. \emph{Second}, a cross-layer
-\emph{joint-decision mechanism} lets a resource-layer signal (cumulative
-rate-limit rejection count) tighten the permission verdict in real time,
-providing the online coupling that audit correlation alone cannot---the trace
-identifier makes the coupling \emph{auditable}, the joint decision makes it
-\emph{effective}. Atop these two mechanisms, Neuron enforces spawn-time
-privilege non-increase and depth-aware escalation, closing the LIM-specific
-attack surface that layer-separated designs leave open.
-
-\paragraph{Threat model scope.}
-The threat model (Section~\ref{sec:threat}) assumes the attacker can
-already issue a malicious escalation request; Neuron does not inspect
-prompt content and therefore does not defend against prompt injection,
-which is the upstream cause of such requests reaching the policy gate.
-The contribution is \emph{enforcement} (once a request arrives, the
-runtime guarantees interception), not end-to-end prevention.
-
-\paragraph{Differentiation from distributed tracing.}
-A natural reading is that the per-turn trace identifier is a
-correlation ID in the sense of OpenTelemetry~\cite{opentelemetry2024}
-or Zipkin~\cite{zipkin2017}, making the ``unified audit chain'' a
-rediscovery of existing observability practice. The distinction is
-structural and is a core selling point of this work:
-distributed-tracing systems propagate a trace context \emph{across}
-process boundaries for \emph{observability} (latency attribution,
-dependency mapping), and the trace context is a \emph{passive label}
-that does not influence the execution path. Neuron's trace identifier
-is propagated \emph{within} the runtime's spawn boundary and is
-\emph{causally load-bearing}: the resource layer's
-\texttt{preCheckAndReserve} gateway consults the trace's cgroup quota
-before the call proceeds, the permission layer's
-\texttt{EscalationPolicy} reads the trace's spawn depth before
-adjudicating, and the sandbox layer stamps the trace on every
-isolation decision. The trace identifier is not a post-hoc correlation
-label but a \emph{governance key} that the enforcement machinery reads
-on the critical path. The contribution is not the trace ID itself but
-the \emph{invariant} that resource pressure translates into a security
-response---a feedback loop that distributed-tracing systems do not
-close.
-
-This paper makes four contributions:
+\paragraph{Systematic evaluation.}
+An earlier draft used Python multiprocessing to model Java lock contention and
+emphasized one 3\,ms deadline. That model demonstrated a possible mechanism
+but could not establish behavior of the Neuron runtime. We remove it from the
+evidence chain. The present study executes the production
+\texttt{RateLimitSyscallFilter} and \texttt{EscalationPolicy} classes in
+Java~21, retains immutable JSONL observations, and treats each independently
+started JVM as the replication unit. Five core runs are completed on each of
+two environments, and a separate capacity experiment varies the permission
+pool and queue. The four predeclared architectures are:
 
 \begin{enumerate}
-    \item \textbf{A coupled resource--security governance architecture.}
-    We identify the \emph{coupled failure} mode in which resource contention
-    and security enforcement degrade each other---a failure mode invisible to
-    layer-separated designs---and present a runtime-level architecture that
-    fuses cgroup-based resource control, sandbox-based execution isolation,
-    and permission-based access control through two complementary mechanisms:
-    (a)~a unified audit chain keyed by a per-turn trace identifier for
-    cross-layer audit correlation, and (b)~a cross-layer joint-decision
-    mechanism in which a resource-layer signal tightens the permission
-    verdict in real time. We further provide a pseudocode-level
-    invariant argument showing that spawn-time privilege non-increase holds
-    across all code paths, including exception and concurrent cases
-    (Section~\ref{sec:arch}).
-
-    \item \textbf{Closure of the LIM agent attack surface.}
-    We characterize the attack surface arising from runtime sub-agent spawning
-    and natural-language privilege escalation, and close it through three
-    design mechanisms: (i)~an inheritable privilege context enforcing
-    spawn-time privilege non-increase, (ii)~tenant-identity propagation across
-    spawn boundaries, and (iii)~a depth-aware escalation policy using a
-    \emph{dual-track} destructive-tool classification---a name whitelist
-    (Track~1) for fast-path matching combined with a capability-surface
-    classifier (Track~2) that inspects the tool handler's API-call surface to
-    detect destructive tools regardless of name. The dual-track design closes
-    the name-evasion bypass: the interception rate on name-evasion attacks
-    rises from $0\%$ (name-only) to $100\%$ (capability-integrated) with a
-    $0\%$ false-positive rate (Section~\ref{sec:eval-capability-classifier}).
-
-    \item \textbf{An explicit threat model and failure-case analysis.}
-    We state the attacker profile, capabilities, and out-of-scope assumptions
-    as an independent section (Section~\ref{sec:threat}), and enumerate the
-    conditions under which the coupled governance guarantees degrade or
-    fail---low-and-slow attacks under the rate threshold, depth-boundary
-    requests, latency improvements under LLM-dominant regimes, prevention-layer
-    scope, and single-node scope (Section~\ref{sec:lim-failure}).
-
-    \item \textbf{Architecture validation through multi-faceted
-    evaluation.}
-    We validate the architecture through reproducible experiments
-    yielding statistically aggregated evidence across two core
-    governance scenarios, four adaptive probes designed to test each
-    defense point, and an external-framework architectural comparison
-    contrasting Neuron's coupled governance with the layer-separated
-    designs of AutoGen, LangGraph, and MCP---confirming the
-    vulnerability pattern is structural, not an artifact of our
-    codebase. Two dedicated experiments substantiate the coupling
-    thesis directly: a permission-layer starvation experiment showing
-    decision correctness degrades under resource pressure without
-    coupling and is preserved at $100\%$ with it
-    (Section~\ref{sec:eval-starvation}), and a cross-layer joint-decision
-    experiment showing the resource signal \emph{changing} the permission
-    verdict in real time (Section~\ref{sec:eval-joint}). The benign-workload
-    evaluation confirms a $0.00\%$ false-positive rate across 14{,}850
-    operations and governance overhead below $0.01\%$ of end-to-end latency
-    (Sections~\ref{sec:eval-fp}, \ref{sec:eval-overhead}).
+  \item a shared permission executor with fail-open timeout handling;
+  \item the same shared executor with fail-closed handling;
+  \item a reserved permission executor without cross-layer coupling; and
+  \item reserved capacity plus Neuron's pressure-aware joint decision.
 \end{enumerate}
 
-The remainder of this paper is organized as follows.
-Section~\ref{sec:bg} surveys the background and motivates the coupled-failure
-model. Section~\ref{sec:threat} states the threat model.
-Section~\ref{sec:arch} presents the Neuron architecture, its coupled
-governance mechanisms, and the invariant argument for spawn-time privilege
-non-increase. Section~\ref{sec:eval} reports the evaluation that validates the
-design. Section~\ref{sec:rw} discusses related work, and
-Section~\ref{sec:conc} concludes.
+The comparison separates two effects. If both reserved configurations meet
+their deadlines, reservation explains availability. If only the coupled
+configuration changes a depth-1 destructive request from \textsc{ask} to
+\textsc{deny}, the difference is attributable to the resource signal rather
+than executor isolation. A fixed-trace replay of previously collected API
+sessions then tests the same decision path with application-level tool-call
+sequences; it is a replay, not a new claim of production deployment.
+
+\paragraph{Research questions.}
+The paper follows the causal chain ``failure exists $\rightarrow$ mechanism
+is isolated $\rightarrow$ behavior is checked outside one machine.''
+
+\begin{description}
+  \item[\textbf{RQ1}] Under what combinations of permission deadline and
+  hostile load does a shared Java policy executor miss its deadline, and how
+  do fail-open, fail-closed, and reserved-capacity architectures differ?
+  \item[\textbf{RQ2}] Does a resource-pressure signal change the production
+  escalation-policy verdict beyond the effect of reserving capacity?
+  \item[\textbf{RQ3}] Do the failure and availability patterns reproduce on a
+  second containerized environment, and how sensitive are they to permission
+  pool and queue capacity?
+  \item[\textbf{RQ4}] Does the safety/availability trade-off persist when the
+  permission policy runs in a separate Java process behind an HTTP boundary
+  with injected delay and pause faults?
+  \item[\textbf{RQ5}] Does the decision path preserve completion for benign
+  and adversarial API-derived tool-call traces, and what residual risks remain
+  outside the local JVM/container boundary?
+\end{description}
+
+\paragraph{Contributions.}
+This work contributes:
+
+\begin{enumerate}
+  \item a precise condition for resource-induced policy unavailability that
+  states the required deadline and timeout semantics;
+  \item a runtime architecture coupling permission-capacity isolation with a
+  resource-informed permission verdict; and
+  \item a reproducible Java~21 evaluation with four fair baselines, two
+  environments, independent JVM replications, response-surface and capacity
+  sweeps, automated raw-data aggregation, and a fixed API-trace replay.
+\end{enumerate}
+
+Identity propagation, privilege non-increase, and audit correlation are
+supporting mechanisms. WASM, Docker, quota enforcement, and LLM routing are
+engineering context and are reported in the artifact or appendix rather than
+presented as independent innovations. AutoGen, LangGraph, and MCP are treated
+as orchestration/protocol examples, not as competing multi-tenant security
+systems; observations about their defaults therefore motivate integration
+requirements but do not establish superiority over those projects.
+
+Section~\ref{sec:bg} defines the failure conditions. Section~\ref{sec:threat}
+states assumptions and non-goals. Section~\ref{sec:arch} describes the
+architecture. Section~\ref{sec:eval} reports the cross-environment
+evaluation, Section~\ref{sec:rw} positions the work, and Section~\ref{sec:conc}
+concludes.

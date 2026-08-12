@@ -555,7 +555,7 @@ def main() -> int:
             env[k] = os.environ[k]
 
     try:
-        results = run_evaluation(env, n_per_variant=10)
+        results = run_evaluation(env, n_per_variant=100)
     except RuntimeError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         print("", file=sys.stderr)

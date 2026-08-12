@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Summarize process-separated permission-service runs at run level."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import math
+import re
+from collections import defaultdict
+from pathlib import Path
+
+
+def percentile(values: list[float], q: float) -> float:
+    xs = sorted(values)
+    if not xs:
+        return math.nan
+    pos = q * (len(xs) - 1)
+    lo, hi = math.floor(pos), math.ceil(pos)
+    return xs[lo] if lo == hi else xs[lo] * (hi - pos) + xs[hi] * (pos - lo)
+
+
+def mean_ci(values: list[float]) -> tuple[float, float, float]:
+    if not values:
+        return math.nan, math.nan, math.nan
+    mean = sum(values) / len(values)
+    if len(values) < 2:
+        return mean, mean, mean
+    variance = sum((x - mean) ** 2 for x in values) / (len(values) - 1)
+    t95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
+           6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262}.get(len(values) - 1, 1.96)
+    half = t95 * math.sqrt(variance / len(values))
+    return mean, mean - half, mean + half
+
+
+def read_rows(input_dir: Path, pattern: str) -> list[dict]:
+    rows: list[dict] = []
+    for path in sorted(input_dir.glob(pattern)):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                rows.append(json.loads(line))
+    if not rows:
+        raise SystemExit(f"no rows found in {input_dir} matching {pattern}")
+    return rows
+
+
+def write_csv(path: Path, records: list[dict]) -> None:
+    if not records:
+        return
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(records[0]))
+        writer.writeheader()
+        writer.writerows(records)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input-dir", type=Path,
+                        default=Path(__file__).resolve().parent / "target" / "permission_http")
+    parser.add_argument("--pattern", default="permission_http_win_http_core_*.raw.jsonl")
+    parser.add_argument("--output-dir", type=Path)
+    args = parser.parse_args()
+    out = args.output_dir or args.input_dir
+    out.mkdir(parents=True, exist_ok=True)
+    rows = read_rows(args.input_dir, args.pattern)
+
+    # First reduce request observations to one number per independent driver run.
+    by_run: dict[tuple, list[dict]] = defaultdict(list)
+    for row in rows:
+        by_run[(row["run_id"], row["scenario"], row["architecture"])].append(row)
+    run_records: list[dict] = []
+    for (run_id, scenario, architecture), group in sorted(by_run.items()):
+        attacks = [r for r in group if r.get("workload_class") == "attack"]
+        benign = [r for r in group if r.get("workload_class") == "benign"]
+        latencies = [float(r["latency_ms"]) for r in group]
+        run_records.append({
+            "run_id": run_id,
+            "scenario": scenario,
+            "architecture": architecture,
+            "deadline_ms": group[0].get("deadline_ms"),
+            "attack_secure_rate": sum(bool(r["secure_decision"]) for r in attacks) / max(1, len(attacks)),
+            "benign_completion_rate": sum(bool(r["benign_completed"]) for r in benign) / max(1, len(benign)),
+            "error_tightening_rate": sum(bool(r["error_tightening"]) for r in benign) / max(1, len(benign)),
+            "timeout_rate": sum(bool(r["timed_out"]) for r in group) / len(group),
+            "service_error_rate": sum(bool(r["service_error"]) for r in group) / len(group),
+            "latency_p50_ms": percentile(latencies, .50),
+            "latency_p95_ms": percentile(latencies, .95),
+            "observations": len(group),
+        })
+    write_csv(out / "permission_http_run_summary.csv", run_records)
+
+    # Then compute means and small-sample t intervals across independent runs.
+    by_condition: dict[tuple, list[dict]] = defaultdict(list)
+    for record in run_records:
+        by_condition[(record["scenario"], record["architecture"])].append(record)
+    cross_records: list[dict] = []
+    for (scenario, architecture), group in sorted(by_condition.items()):
+        result = {"scenario": scenario, "architecture": architecture, "runs": len(group)}
+        for field in ("attack_secure_rate", "benign_completion_rate", "error_tightening_rate",
+                      "timeout_rate", "service_error_rate", "latency_p50_ms", "latency_p95_ms"):
+            mean, low, high = mean_ci([float(r[field]) for r in group])
+            result[field + "_mean"] = mean
+            result[field + "_ci_low"] = low
+            result[field + "_ci_high"] = high
+        cross_records.append(result)
+    write_csv(out / "permission_http_cross_run_summary.csv", cross_records)
+
+    generated = Path(__file__).resolve().parents[1] / "addtions" / "paper" / "generated"
+    generated.mkdir(parents=True, exist_ok=True)
+    macros = [
+        "% Generated by evaluation/analyze_permission_http.py; do not edit.",
+        f"\\newcommand{{\\PermissionHttpObservationCount}}{{{len(rows):,}}}",
+        f"\\newcommand{{\\PermissionHttpRunCount}}{{{len({r['run_id'] for r in rows})}}}",
+        f"\\newcommand{{\\PermissionHttpScenarioCount}}{{{len({r['scenario'] for r in rows})}}}",
+    ]
+    number_words = {
+        "1": "One", "4": "Four", "5": "Five", "10": "Ten",
+        "16": "Sixteen", "20": "Twenty", "50": "Fifty",
+    }
+    def token(value: object) -> str:
+        cleaned = re.sub(r"[^A-Za-z0-9]+", "", str(value))
+        return re.sub(r"\d+", lambda match: number_words.get(match.group(),
+                    "Number" + match.group()), cleaned)
+    for record in cross_records:
+        name = token(record["scenario"]) + token(record["architecture"])
+        macros.extend([
+            f"\\newcommand{{\\PermissionHttp{name}Runs}}{{{record['runs']}}}",
+            f"\\newcommand{{\\PermissionHttp{name}AttackSecure}}{{{100*record['attack_secure_rate_mean']:.1f}\\%}}",
+            f"\\newcommand{{\\PermissionHttp{name}BenignComplete}}{{{100*record['benign_completion_rate_mean']:.1f}\\%}}",
+            f"\\newcommand{{\\PermissionHttp{name}Tightening}}{{{100*record['error_tightening_rate_mean']:.1f}\\%}}",
+            f"\\newcommand{{\\PermissionHttp{name}Timeout}}{{{100*record['timeout_rate_mean']:.1f}\\%}}",
+            f"\\newcommand{{\\PermissionHttp{name}PninetyFive}}{{{record['latency_p95_ms_mean']:.1f}}}",
+        ])
+    (generated / "permission_http_results.tex").write_text("\n".join(macros) + "\n", encoding="utf-8")
+    manifest = {
+        "pattern": args.pattern,
+        "raw_files": [str(p) for p in sorted(args.input_dir.glob(args.pattern))],
+        "observations": len(rows),
+        "run_ids": sorted({r["run_id"] for r in rows}),
+        "scenarios": sorted({r["scenario"] for r in rows}),
+    }
+    (out / "permission_http_analysis_manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8")
+    print(f"loaded {len(rows):,} observations from {len(manifest['run_ids'])} independent runs")
+    print(f"wrote {out / 'permission_http_cross_run_summary.csv'}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,350 +1,95 @@
-% =============================================================================
-%  Section 5 — Related Work
-% =============================================================================
 \section{Related Work}
 \label{sec:rw}
-
-We situate Neuron with respect to four bodies of work---multi-agent
-frameworks, OS-level resource management, prompt-layer LLM security, and
-the 2023--2025 wave of LLM-agent security and red-team evaluation
-benchmarks. The coupled-governance design validated in Section~\ref{sec:eval}
-does not, to our knowledge, appear in prior work; in each body below we
-identify the specific gap that it addresses, and a positioning statement at
-the end of the section returns to the unifying claim.
-
-% -----------------------------------------------------------------------------
-\subsection{Multi-Agent Frameworks}
-\label{sec:rw-maf}
-
-A first body of work treats the LLM agent as an application-layer concern and
-focuses on rich coordination logic. AutoGen~\cite{wu2023autogen} provides a
-conversational multi-agent programming model in which role-tagged
-participants exchange messages to decompose tasks;
-MetaGPT~\cite{hong2023metagpt} encodes software-engineering standard
-operating procedures as a multi-agent workflow with structured intermediate
-artifacts; LangGraph~\cite{langgraph2024}, AgentScope~\cite{agentscope2024},
-and OpenWorker~\cite{openworker} generalize the pattern to arbitrary
-topologies with delegation, message-passing, and stateful graph execution;
-and the Model Context Protocol~\cite{anthropic2024mcp} standardizes how
-tools are exposed to agents across these frameworks. These systems achieve
-expressive collaboration, but they govern agents entirely from \emph{above}
-the runtime boundary: token consumption is counted in user-space interceptors,
-access control is expressed as static declarative policy, and neither is
-bound to a runtime resource account.
-
-\emph{Multi-agent frameworks therefore offer no native defense against a
-malicious co-tenant.} A tenant that floods the shared message bus
-or filesystem can starve the very interceptors that enforce permissions, and
-a sub-agent spawned at runtime can inherit a fresh default profile rather
-than a clamped one. Neuron differs by moving governance \emph{below} the
-application: agent processes are runtime-managed, their token consumption is
-accounted by a hierarchical cgroup, and their spawn boundary enforces
-privilege non-increase---so the collaboration logic of frameworks like
-AutoGen and MetaGPT can run atop a substrate that is multi-tenant-safe by
-construction rather than vulnerable to co-tenant interference.
-
-% -----------------------------------------------------------------------------
-\subsection{OS-Level Resource Management}
-\label{sec:rw-osr}
-
-A second body of work provides the isolation primitives that classical
-operating systems use to contain untrusted computation. Linux
-cgroup~v2~\cite{linux2024cgroupv2} accounts for and caps CPU, memory, and
-\IO{} consumption per process group; namespaces and seccomp confine what a
-process can see and call; and sandbox runtimes---gVisor~\cite{young2023gvisor},
-Firecracker~\cite{agache2020firecracker}, Kata Containers, Docker, and
-WebAssembly---provide defense-in-depth isolation through user-space kernels,
-lightweight VMs, or in-process memory ceilings. These primitives are mature
-and effective at limiting \emph{bytes and cycles}.
-
-\emph{Their limitation is that they have no awareness of the LLM semantic
-boundary.} A cgroup caps memory in pages and CPU in nanoseconds, but the
-dominant resource of an LLM agent is the \emph{token}, whose consumption is
-invisible to a classical memory controller: a single tool call that triggers
-a long generation can exhaust a tenant's budget without ever touching the
-cgroup's byte counter, and a soft-limit breach in token space has no
-classical analogue to trigger reclamation. Neuron's cgroup controller
-treats the token as the first-class resource---with soft and hard limits,
-transactional propagation up the quota tree, and a
-\texttt{preCheckAndReserve} gateway that denies over-quota calls
-\emph{before} the LLM is invoked---and its \texttt{DockerSandboxProvider}
-and GraalWasm sandbox reuse the standard hardening repertoire
-(\texttt{cap-drop ALL}, \texttt{no-new-privileges}, seccomp, read-only
-rootfs) as instrumented layers of a governance stack rather than standalone
-boundaries. Crucially, every sandbox and cgroup decision is stamped with the
-per-turn trace identifier and aggregated into the same audit chain as the
-permission decision, so that isolation faults become causally linkable to
-the resource and security events that surround them---a linkage that
-classical primitives do not provide.
-
-\paragraph{Distributed tracing: OpenTelemetry, Zipkin, and the
-correlation-ID distinction.}
-As argued in Section~\ref{sec:intro}, the per-turn trace identifier
-differs structurally from a correlation ID in OpenTelemetry~\cite{opentelemetry2024}
-or Zipkin~\cite{zipkin2017}: distributed-tracing systems propagate a
-\emph{passive} label for observability, whereas Neuron's trace
-identifier is \emph{causally load-bearing}---read on the critical path
-by the resource, permission, and sandbox layers. The contribution is
-not the trace ID itself but the \emph{invariant} that resource pressure
-translates into a security response (the contention-window attack of
-Section~\ref{sec:bg-lim} is invisible to OpenTelemetry because
-OpenTelemetry does not close a feedback loop from resource state to
-permission decision). Distributed-tracing systems provide the
-plumbing; Neuron provides the enforcement contract that the plumbing
-carries.
-
-% -----------------------------------------------------------------------------
-\subsection{Security and Access Control in LLMs}
 \label{sec:rw-sec}
 
-A third body of work addresses LLM security at the prompt and protocol
-layer. Input/output guardrails inspect prompts and model outputs for
-jailbreaks, toxicity, or policy violations; capability and permission
-models, including declarative ABAC/RBAC and the Model Context Protocol's
-tool-authorization surface~\cite{anthropic2024mcp}, express what an agent
-may call; and the LLM red-teaming literature~\cite{shen2024prompt} studies
-prompt injection and jailbreak attacks at the model layer, typically through
-static prompt evaluations. These mechanisms rest on two assumptions: that
-privileges are bound at start-up and that any escalation proceeds through an
-explicit, kernel-mediated call, and they are evaluated against a static
-caller identity without awareness of the runtime spawn tree or the runtime
-resource state.
+\paragraph{Agent runtimes and orchestration.}
+AutoGen, LangGraph, and related systems provide abstractions for agent
+coordination, tool invocation, and workflow state~\cite{wu2023autogen,langgraph2024}.
+MCP standardizes communication between model-facing clients and tool/data
+servers~\cite{anthropic2024mcp}. These projects are relevant integration
+contexts, not equivalent security baselines: their primary goals differ
+from multi-tenant resource and permission governance. Neuron can sit below
+an orchestrator or beside a protocol gateway. Our comparison is therefore
+architectural---which identity, pressure, and verdict signals must cross the
+boundary---rather than a performance ranking against those projects.
 
-\emph{Both assumptions fail for LIM agents, and both fail under resource
-pressure.} LLM-integrated machine agents spawn sub-agents dynamically
-through natural-language-driven tool calls and request escalation through
-unstructured prompts, opening surfaces---spawn-time privilege escalation,
-tenant-identity loss across spawn, and depth-oblivious approval---that
-static guardrails do not cover; and because the guardrail itself competes
-for the same scarce resources as the attacker, it can be starved precisely
-when the attack demands it most, with no causal link back to the ongoing
-contention. Neuron closes these surfaces with three mechanisms that have no
-classical analogue: an inheritable \texttt{SpawnPrivilegeContext} enforcing
-spawn-time privilege non-increase (the LIM equivalent of
-\texttt{NoNewPrivs}), tenant-identity propagation across the spawn
-boundary, and a depth-aware \texttt{EscalationPolicy} that carries the
-spawn-tree context in every approval request and auto-denies destructive
-operations from deeply nested sub-agents. Coupled with the unified audit
-chain and the reproducible evaluation harness---which yields
-statistically aggregated evidence (mean, p50, p95, p99) via
-run-index-seeded sampling---Neuron unifies cross-layer governance
-evidence and reproducible architecture validation, a combination that
-static guardrails and prompt-level red-teaming do not provide.
+AIOS-like work moves scheduling, memory, and tool management into an
+agent-oriented systems layer~\cite{mei2025aios}. Neuron shares the premise
+that agents require runtime support, but focuses on the interaction between
+resource admission and permission availability. The key distinction is not
+whether a framework has a rate limiter or an access-control list in
+isolation; it is whether policy-plane capacity and timeout semantics remain
+safe under tenant pressure and whether pressure can be part of a permission
+decision when desired.
 
-% -----------------------------------------------------------------------------
-\subsection{LLM-Agent Security and Red-Team Evaluation Benchmarks}
-\label{sec:rw-eval}
+Recent agent-security surveys and benchmarks study policy compliance, tool
+misuse, and interaction-level safety~\cite{wang2024policy,ruan2024toolemu,zhang2024agentsafetybench,struppek2024agent}. These works motivate runtime
+enforcement, but do not evaluate whether tenant-induced executor contention
+makes the authorization path unavailable or how timeout semantics convert
+that availability loss into an admission decision.
 
-A fourth body of work, matured over 2023--2025, has produced standardized
-benchmarks and red-team suites for evaluating the security of tool-integrated
-LLM agents. We organize them by the layer at which the attack is launched,
-because the layering clarifies what each benchmark measures and what it does
-not.
+\paragraph{Resource isolation and admission control.}
+Operating systems and containers provide CPU, memory, process, and I/O
+isolation. Token buckets and cgroups are established mechanisms for limiting
+bursts and allocating capacity. A deployment can place its permission
+service in a separate process or cgroup, which is a strong alternative to
+Neuron's reserved executor. Our isolated baseline reflects the same design
+principle inside one JVM. The paper does not claim that cross-layer coupling
+replaces isolation: the evaluation shows that isolation protects
+availability, whereas coupling supplies a pressure-conditioned verdict.
 
-\paragraph{Indirect prompt injection on tool-integrated agents.}
-Greshake et al.~\cite{greshake2023not} introduced the indirect prompt
-injection attack pattern, in which adversary-controlled content embedded in
-retrieved documents or tool outputs hijacks the agent's downstream
-behavior. Liu et al.~\cite{liu2024promptinjection} generalized the attack
-across LLM-integrated applications and measured a high baseline success
-rate against systems lacking structural defenses.
-InjecAgent~\cite{zhan2024injecagent} consolidated the attack pattern into a
-benchmark of 1{,}054 test cases spanning 17 tool-integrated agent scenarios,
-reporting attack success rates of 14--84\% on production LLMs and providing
-a reusable harness that has become a de facto evaluation substrate.
-AgentDojo~\cite{debenedetti2024agentdojo} extended the evaluation to
-\emph{interleaved} user-instruction and tool-output injection, with 974 test
-cases and 18 agent tasks; its headline finding is that no leading LLM
-achieves below 30\% attack success under adaptive prompts, even with
-detection-based defenses---evidence that prompt-layer defenses alone are
-insufficient. Yang et al.~\cite{yang2024cache} demonstrated that the cache
-layer shared between agents can itself be a vector for prompt injection,
-exposing a class of attack that is invisible to per-call sanitization.
+Work on overload control and circuit breaking similarly distinguishes
+admission, queuing, and fallback behavior. Neuron's failure model applies
+that distinction to a security-sensitive policy path. A fail-open fallback
+trades security for availability; a fail-closed fallback makes the opposite
+trade. Making both baselines explicit is essential because lower timeout
+correctness in a fail-open system is otherwise easily misattributed to a new
+security mechanism.
 
-\paragraph{Compromise via tools and memory.}
-A complementary line of work studies attacks that subvert the agent through
-the tools and knowledge bases it consumes rather than through the prompt
-itself. AgentPoison~\cite{chen2024agentsecurity} showed that poisoning a
-single memory or knowledge entry can trigger persistent misbehavior across
-sessions; ``Breaking Agents''~\cite{zhang2024breaking} amplified tool
-malfunction into full agent compromise; and
-Agent~Meltdown~\cite{struppek2024agent} demonstrated remote code execution
-through adversarially crafted tool-use responses. Donovan
-et al.~\cite{donovan2024compromising} cataloged manipulation of external
-tools as a generic attack surface, and Fang et al.~\cite{fang2024llm}
-showed that autonomous LLM agents can weaponize tool access to hack
-production websites---evidence that tool-layer compromise is no longer
-hypothetical. Trojan-prompt attacks~\cite{tan2024trojan} generalize this
-to black-box settings.
+\paragraph{Access control, delegation, and confused deputies.}
+Privilege attenuation and the confused-deputy problem have long motivated
+capability systems and least-privilege delegation~\cite{hardy1988confused}.
+Neuron's spawn-time privilege non-increase applies that principle to dynamic
+sub-agent creation: a child cannot silently receive a more permissive
+profile than its parent. Depth is an additional, agent-specific risk signal,
+not a substitute for capabilities or target-scoped authorization. The
+pressure-aware rule further treats runtime state as context for a narrow
+class of destructive requests.
 
-\paragraph{Defenses at the prompt and policy layer.}
-In response, several works have proposed defenses operating at or above
-the model boundary. Adaptive-attack red-teaming studies by
-Andriushchenko and Carlini~\cite{andriushchenko2024agent} showed that
-simple adaptive attacks jailbreak all leading safety-aligned LLMs,
-motivating structural rather than model-level defenses. Bae and
-Lee~\cite{bae2024defending} proposed an information-theoretic separation
-between trusted instructions and untrusted data, providing a
-provably-bounded defense against indirect prompt injection under stated
-assumptions. Anthropic's published defense
-strategies~\cite{anthropic2024promptinjection} and the OpenAI Model
-Spec~\cite{openai2024modelspec} both encode privilege-escalation refusal
-and chain-of-command policies at the prompt and protocol layer.
-Peng et al.~\cite{peng2024navigating} surveyed red-teaming methodology for
-LLM-integrated systems, and Wang et al.~\cite{wang2024policy} surveyed
-permission and authorization in LLM agents.
+\paragraph{Policy availability and fail-safe defaults.}
+Security engineering commonly recommends fail-safe defaults, but real
+systems sometimes introduce permissive fallbacks to meet latency or
+availability targets. Prior work on reference monitors emphasizes complete
+mediation and tamper resistance; distributed authorization work also
+recognizes policy-service latency and partitions. Our contribution is a
+controlled characterization of this tradeoff in a multi-tenant agent
+runtime, including an isolated fail-closed baseline. We do not claim the
+general discovery that overload can delay a service. The contribution lies
+in tracing that delay through agent permission semantics and evaluating a
+resource-informed policy response.
 
-\paragraph{Capability-based agent security and the dual-LLM pattern.}
-A 2024--2025 wave of work moves beyond prompt-layer defenses toward
-\emph{structural} isolation of agent capabilities. ToolEmu~\cite{ruan2024toolemu}
-emulates tool execution in a sandboxed environment to identify risks
-without real-world side effects---an emulation-layer sandbox that
-complements but does not replace runtime governance. The dual-LLM
-pattern~\cite{anthropic2024dual} (also called privilege-separated LLM
-architecture) separates a trusted ``planner'' LLM from an untrusted
-``worker'' LLM that processes external content, so that even if the
-worker is compromised via prompt injection, the trusted planner
-mediates all privileged actions. This is architecturally analogous to
-the privilege separation in Neuron's \texttt{SpawnPrivilegeContext}
-(spawn-time privilege non-increase), but operates at the model layer
-rather than the runtime layer: the dual-LLM pattern assumes the trusted
-LLM is itself immune to prompt injection, whereas Neuron's
-depth-aware \texttt{EscalationPolicy} enforces privilege non-increase
-\emph{regardless} of the LLM's behavior, because it adjudicates based
-on spawn-tree depth and tool capability rather than natural-language
-content. Debenedetti et al.~\cite{debenedetti2024defeating} showed
-that existing prompt-layer defenses are bypassable by adaptive attacks,
-providing further motivation for runtime-level enforcement.
-Agent-SafetyBench~\cite{zhang2024agentsafetybench} provides a 10K-case
-benchmark across 8 safety risk types for LLM agents, evaluating both
-interaction-level and tool-level safety; its threat model assumes a
-well-behaved substrate, whereas Neuron's threat model explicitly grants
-the adversary co-tenant substrate access.
+Policy-as-code engines such as Open Policy Agent (OPA)~\cite{opa2024} provide
+an important practical comparator: they separate declarative policy evaluation
+from application code and can be deployed beside an API gateway or admission
+controller. OPA, identity-oriented authorization, and relationship-based
+authorization are complementary policy mechanisms; none by itself specifies
+reserved executor capacity or whether a deadline miss under tenant pressure
+fails open. Neuron evaluates that runtime availability and verdict boundary
+explicitly rather than claiming to replace these policy engines.
 
-\emph{The gap Neuron addresses relative to this body of work is
-twofold.} First, the dual-LLM pattern and ToolEmu operate
-\emph{within} a single agent's trust boundary; neither addresses the
-multi-tenant co-residency attack surface where a malicious tenant
-starves the very enforcement machinery (trusted LLM, emulator, or
-guardrail) that the defense depends on. Second, the capability-based
-approach of ToolEmu---sandboxing at the emulation layer---does not
-bind tool execution to a runtime resource account, so a malicious
-agent that floods the emulator's shared state can degrade the
-emulation fidelity of co-resident agents. Neuron's contribution is to
-\emph{couple} the capability-based isolation (sandbox + capability
-classifier, Section~\ref{sec:eval-capability-classifier}) with
-resource-layer enforcement (cgroup + rate limiter) through the shared
-trace identifier, so that resource pressure translates into a security
-response---a coupling that the dual-LLM pattern, ToolEmu, and
-Agent-SafetyBench do not provide because their threat models exclude
-co-tenant substrate interference.
+\paragraph{Cross-layer observability.}
+Distributed tracing correlates events across services through propagated
+identifiers. Neuron uses the same systems idea across resource admission,
+spawn, and permission paths. Correlation alone does not enforce safety; it
+makes the causal chain inspectable and supplies consistent context to the
+joint decision. The enforcement contribution is the policy input and its
+reserved execution path, not the trace identifier by itself.
 
-\paragraph{LLM agent operating systems: AIOS and the architectural
-difference.}
-AIOS~\cite{mei2025aios} is the closest prior system to Neuron in its
-positioning as an ``LLM agent operating system,'' so we state the
-architectural difference explicitly. AIOS isolates \emph{LLM-specific
-services}---scheduling, context management, memory management, storage
-management, and access control---into an ``AIOS kernel'' that serves
-agents built on heterogeneous frameworks; its primary optimization
-target is \emph{throughput} (up to $2.1\times$ faster execution via
-LLM-call scheduling and context caching), and its access control is a
-per-agent permission list consulted at call time. Neuron differs on
-three axes. \emph{First, coupling vs.\ isolation:} AIOS isolates
-services to improve scheduling efficiency, but its resource manager
-and access controller remain independently consulted modules; Neuron's
-defining property is that the two are \emph{causally coupled} through
-a shared per-turn trace identifier, so that resource pressure
-translates directly into a security response (the contention-window
-attack of Section~\ref{sec:bg-lim} is invisible to AIOS's design).
-\emph{Second, spawn-time privilege:} AIOS does not define a
-spawn-time privilege inheritance contract; an agent that spawns a
-sub-agent has no structural guarantee that the child's permissions
-are a subset of the parent's, which is precisely the LIM attack
-surface Neuron closes via \texttt{SpawnPrivilegeContext}
-(Section~\ref{sec:arch-invariant}). \emph{Third, threat model:}
-AIOS assumes a cooperative multi-agent workload and optimizes for
-fairness and throughput; Neuron assumes an adversarial multi-tenant
-workload and is evaluated under resource-flooding, privilege-escalation,
-and adaptive attacks. The two systems are therefore complementary in
-goal---AIOS optimizes LLM-call scheduling, Neuron closes a security
-gap that scheduling-only designs leave open---but they are not
-substitutes: AIOS does not address the coupled resource--security
-failure or the spawn-time escalation surface that are Neuron's
-contributions.
-
-\emph{We acknowledge that the AIOS comparison above is descriptive
-(architectural analysis based on the published system~\cite{mei2025aios}
-and its open-source release), not a direct quantitative benchmark
-under a shared workload.} A fair head-to-head throughput or
-isolation-strength comparison would require calibrating for the two
-systems' different optimization targets (AIOS optimizes LLM-call
-scheduling throughput; Neuron optimizes coupled governance under
-adversarial load), different runtime substrates (Python/asyncio vs.\
-Java/virtual threads), and different resource models (per-agent
-permission list vs.\ cgroup-style hierarchical quota). Without this
-calibration, a raw throughput number would conflate language-runtime
-overhead with architectural design choices, obscuring rather than
-clarifying the comparison. We therefore position the AIOS discussion
-as an \emph{architectural differentiation} that motivates Neuron's
-design, not as a performance claim. A calibrated quantitative
-comparison on a shared multi-tenant adversarial workload is left as
-future work.
-
-\paragraph{Gap addressed by Neuron.}
-Three observations demarcate Neuron's contribution from this body of work.
-First, the benchmarks above \emph{assume a well-behaved operating
-substrate}: their threat model grants the agent access to tools, memory,
-and computation, and the attack vector is the content of an instruction or
-a tool output. They do not test what happens when the substrate itself is
-the attack surface---when a co-tenant can exhaust the memory that the
-guardrail reads from, starve the CPU that runs the detector, or forge a
-trace identifier in the audit log. Neuron's threat model
-(Section~\ref{sec:threat}) explicitly grants the adversary the ability to
-consume shared substrates and to spawn sub-agents, and its evaluation
-(Section~\ref{sec:eval-adaptive}) replays adaptive attacks against these
-surfaces.
-
-Second, the defenses proposed at the prompt and protocol layer---detector
-networks, information-theoretic separation, instruction
-hierarchies~\cite{anthropic2024promptinjection,openai2024modelspec,bae2024defending}---are
-complementary to, not substitutes for, runtime-level enforcement. A detector
-that runs as a user-space interceptor can itself be starved by the
-resource-flooding attack of Section~\ref{sec:eval-cross}, and a
-chain-of-command policy expressed at the prompt layer is bypassed if a
-spawned sub-agent inherits a fresh unrestricted profile. Neuron's
-spawn-time privilege non-increase and depth-aware escalation
-(Section~\ref{sec:arch-invariant}) are the structural counterparts that
-make the prompt-layer defenses enforceable under runtime pressure.
-
-Third, the existing benchmarks evaluate against a \emph{single-agent
-threat model with an attacker-in-the-data}; they do not measure
-multi-tenant co-residency, cross-tenant spawn, or depth-aware escalation.
-Neuron's evaluation suite
-(Sections~\ref{sec:eval-cross}--\ref{sec:eval-adaptive}) is, to our
-knowledge, the first LLM-agent governance evaluation against a
-\emph{co-resident multi-tenant adversary} with spawn capability, and its
-external-framework comparison
-(Section~\ref{sec:eval-external}) confirms that the gap is not an artifact
-of Neuron's codebase: AutoGen, LangGraph, and MCP all exhibit the same
-vulnerability pattern under the same attack.
-
-% -----------------------------------------------------------------------------
-\paragraph{Positioning.}
-Across the four bodies above, prior work governs \emph{one} layer at a
-time---coordination, resources, prompt-level security, or
-benchmark-driven evaluation---and evaluates each in isolation.
-\emph{To our knowledge, Neuron is the first system to couple these
-layers at the governance-runtime level:} a single per-turn trace
-identifier binds cgroup-based resource
-control, sandbox-based execution isolation, and permission-based access
-control into one auditable enforcement loop, so that resource pressure
-translates directly into a security response and the LIM spawn surface is
-closed under the same causal frame. This coupling, validated by the
-near-$100\%$ cross-attack interception and the externally corroborated
-baseline vulnerability results of Section~\ref{sec:eval}, fills the gap in
-bottom-level governance of LLM agent operating systems that no prior
-layer-separated design provides---a gap that the existing LLM-agent
-security benchmarks~\cite{debenedetti2024agentdojo,zhan2024injecagent,chen2024agentsecurity}
-cannot expose because their threat model excludes co-tenant substrate
-interference and dynamic spawn-time privilege escalation.
+\paragraph{Positioning for software systems research.}
+The work is a software-architecture study of a runtime control plane. Its
+unit of comparison is an architecture configuration---shared fail-open,
+shared fail-closed, isolated, or coupled---and its main outcomes are
+policy-plane availability and verdict semantics. Sandboxing, WASM, Docker,
+LLM routing, and formal models are useful components of the broader Neuron
+prototype, but they are outside the causal evaluation and are not presented
+as independent innovations here.

@@ -75,8 +75,13 @@ AUDIT_BUFFER_CAPACITY = 2048
 # ════════════════════════════════════════════════════════════════════════════
 
 def make_shared_state(manager: mp.Manager, config: str) -> dict:
-    """创建跨进程共享的权限层状态。"""
-    return {
+    """创建跨进程共享的权限层状态。
+
+    permission_isolated 配置使用独立的锁和缓冲区，模拟 permission 模块
+    运行在独立线程池+独立资源配额上，不受攻击者争用影响，但也不主动
+    耦合资源层信号（不做 cross-layer joint-decision）。
+    """
+    state = {
         "config": config,
         "profile_lock": manager.RLock(),      # PermissionProfile 读取锁
         "audit_lock": manager.Lock(),         # UnifiedAuditLog bufferLock
@@ -88,6 +93,12 @@ def make_shared_state(manager: mp.Manager, config: str) -> dict:
         "rate_last_refill": manager.Value("d", time.time()),
         "stop_attack": manager.Value("b", False),
     }
+    # permission_isolated: 独立锁 + 独立审计缓冲区（隔离 starvation）
+    if config == "permission_isolated":
+        state["isolated_profile_lock"] = manager.RLock()
+        state["isolated_audit_lock"] = manager.Lock()
+        state["isolated_audit_buffer"] = manager.list()
+    return state
 
 
 def refill_rate_bucket(state: dict) -> None:
@@ -131,6 +142,7 @@ def permission_decide(state: dict, depth: int, tool_name: str) -> dict:
     """权限决策路径：rate-limit → profile-read → audit → policy → deadline-check。
 
     在资源压力下，profile-read 会被攻击者线程阻塞，导致决策超时。
+    permission_isolated 配置使用独立锁，不受攻击者争用影响。
     """
     trace_id = uuid.uuid4().hex[:12]
     start = time.perf_counter()
@@ -147,11 +159,21 @@ def permission_decide(state: dict, depth: int, tool_name: str) -> dict:
 
     expected = evaluate_escalation_policy(depth, tool_name)
 
+    # permission_isolated: 使用独立锁（不受攻击者争用）
+    if state["config"] == "permission_isolated":
+        profile_lock = state["isolated_profile_lock"]
+        audit_lock = state["isolated_audit_lock"]
+        audit_buffer = state["isolated_audit_buffer"]
+    else:
+        profile_lock = state["profile_lock"]
+        audit_lock = state["audit_lock"]
+        audit_buffer = state["audit_buffer"]
+
     # 读取 PermissionProfile（持 profileLock）
     # 攻击者线程高频争用此锁，模拟攻击者触发权限检查填满审计缓冲区
     acquired = False
     try:
-        acquired = state["profile_lock"].acquire(timeout=DECISION_DEADLINE_MS / 1000)
+        acquired = profile_lock.acquire(timeout=DECISION_DEADLINE_MS / 1000)
         if not acquired:
             # deadline 超时：回退到 permissive 默认（ASK_WITH_CONTEXT）
             # 这是 Neuron 的 fail-open 路径（与 ALLOW_ONCE fallback 一致）
@@ -172,11 +194,17 @@ def permission_decide(state: dict, depth: int, tool_name: str) -> dict:
             "tool": tool_name,
             "layer": "PERMISSION",
         }
-        audit_ok = append_audit(state, audit_entry)
+        # permission_isolated 写入独立缓冲区（不与攻击者争用 bufferLock）
+        if state["config"] == "permission_isolated":
+            with audit_lock:
+                audit_buffer.append(audit_entry)
+            audit_ok = True
+        else:
+            audit_ok = append_audit(state, audit_entry)
 
     finally:
         if acquired:
-            state["profile_lock"].release()
+            profile_lock.release()
 
     latency = (time.perf_counter() - start) * 1000
     return {
@@ -244,7 +272,8 @@ def run_config(config: str, n_trials: int = 30, n_attackers: int = 8) -> dict[st
     manager = mp.Manager()
     state = make_shared_state(manager, config)
 
-    # 启动攻击者进程（baseline 和 permission_only 下生效；coupled 下源头限流阻止）
+    # 启动攻击者进程（baseline/permission_only/permission_isolated 下生效；coupled 下源头限流阻止）
+    # permission_isolated 也启动攻击者：测试攻击存在时独立池是否有效隔离
     attack_procs: list[mp.Process] = []
     if config != "coupled":
         for i in range(n_attackers):
@@ -310,7 +339,7 @@ def main() -> int:
     print("Uses multiprocessing for genuine cross-process lock contention")
     print("=" * 70)
 
-    configs = ["baseline", "permission_only", "coupled"]
+    configs = ["baseline", "permission_only", "permission_isolated", "coupled"]
     all_results = []
     for cfg in configs:
         res = run_config(cfg, n_trials=30, n_attackers=8)
@@ -369,20 +398,25 @@ def main() -> int:
     # 关键结论
     base = all_results[0]
     perm = all_results[1]
-    coupled = all_results[2]
+    isolated = all_results[2]
+    coupled = all_results[3]
     print()
     print("Key findings:")
-    print(f"  - Baseline correctness:        {base['decision_correctness']:.2%} "
+    print(f"  - Baseline correctness:           {base['decision_correctness']:.2%} "
           f"(deadline fallback {base['deadline_fallback_rate']:.2%}, "
           f"audit drop {base['audit_drop_rate']:.2%})")
-    print(f"  - Permission-only correctness: {perm['decision_correctness']:.2%} "
+    print(f"  - Permission-only correctness:    {perm['decision_correctness']:.2%} "
           f"(deadline fallback {perm['deadline_fallback_rate']:.2%}, "
           f"audit drop {perm['audit_drop_rate']:.2%})")
-    print(f"  - Coupled correctness:         {coupled['decision_correctness']:.2%} "
+    print(f"  - Permission-isolated correctn.:  {isolated['decision_correctness']:.2%} "
+          f"(deadline fallback {isolated['deadline_fallback_rate']:.2%}, "
+          f"audit drop {isolated['audit_drop_rate']:.2%})")
+    print(f"  - Coupled correctness:            {coupled['decision_correctness']:.2%} "
           f"(deadline fallback {coupled['deadline_fallback_rate']:.2%}, "
           f"audit drop {coupled['audit_drop_rate']:.2%})")
-    print(f"  - Baseline p95 latency:        {base['latency_p95_ms']:.3f}ms")
-    print(f"  - Coupled p95 latency:         {coupled['latency_p95_ms']:.3f}ms")
+    print(f"  - Baseline p95 latency:           {base['latency_p95_ms']:.3f}ms")
+    print(f"  - Permission-isolated p95:        {isolated['latency_p95_ms']:.3f}ms")
+    print(f"  - Coupled p95 latency:            {coupled['latency_p95_ms']:.3f}ms")
 
     return 0
 

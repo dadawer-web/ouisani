@@ -1,6 +1,16 @@
 % refs.bib — Neuron AIOS paper references
 % Bibliographic entries for the works cited in 05-related_work.tex and 06-conclusion.tex.
 
+@book{wohlin2012experimentation,
+  author    = {Claes Wohlin and Per Runeson and Martin H{\"o}st and Magnus C. Ohlsson and Bj{\"o}rn Regnell and Anders Wessl{\'e}n},
+  title     = {Experimentation in Software Engineering},
+  publisher = {Springer},
+  year      = {2012},
+  edition   = {2nd},
+  address   = {Berlin, Germany},
+  isbn      = {978-3-642-29044-2},
+}
+
 @inproceedings{agache2020firecracker,
   author    = {Alexandru Agache and Marc Brooker and Andreea Iordache and Anthony Liguori and Rolf Neugebauer and Phil Piwonka and Diana-Maria Popa},
   title     = {Firecracker: Lightweight Virtualization for Serverless Applications},
@@ -368,4 +378,49 @@
   howpublished = {\url{https://www.daytona.io/}},
   year      = {2025},
   note      = {Open-source platform providing standardized, secure development environments; offers workspace isolation but targets developer productivity rather than multi-tenant agent governance},
+}
+
+% =============================================================================
+%  Software-architecture governance references (service mesh, policy-as-code,
+%  API gateway, observability)
+% =============================================================================
+
+@misc{istio2024,
+  author    = {{Istio Authors}},
+  title     = {{Istio}: An Open Platform to Connect, Manage, and Secure Microservices},
+  howpublished = {\url{https://istio.io}},
+  year      = {2024},
+  note      = {CNCF graduated service mesh; implements traffic management, security, and observability for microservices via the sidecar proxy pattern on top of Envoy},
+}
+
+@misc{envoy2024,
+  author    = {{Envoy Proxy Authors}},
+  title     = {{Envoy Proxy}: An Open Source Edge and Service Proxy},
+  howpublished = {\url{https://www.envoyproxy.io}},
+  year      = {2024},
+  note      = {CNCF graduated layer-7 proxy; serves as the data plane for service meshes such as Istio, mediating east-west traffic between service instances},
+}
+
+@misc{opa2024,
+  author    = {{Open Policy Agent Authors}},
+  title     = {{Open Policy Agent}: An Open Source, General-Purpose Policy Engine},
+  howpublished = {\url{https://www.openpolicyagent.org}},
+  year      = {2024},
+  note      = {CNCF graduated policy-as-code engine; uses the Rego declarative policy language for stateless authorization evaluation across API gateways, admission controllers, and CI/CD pipelines},
+}
+
+@misc{kong2024,
+  author    = {{Kong Inc.}},
+  title     = {{Kong}: The Cloud Connectivity API Company},
+  howpublished = {\url{https://konghq.com/kong}},
+  year      = {2024},
+  note      = {Open-source API gateway providing routing, authentication, and rate limiting (token bucket, leaky bucket, sliding window) at the ingress boundary},
+}
+
+@misc{apisix2024,
+  author    = {{Apache Software Foundation}},
+  title     = {Apache {APISIX}: A Dynamic, Real-Time, High-Performance API Gateway},
+  howpublished = {\url{https://apisix.apache.org}},
+  year      = {2024},
+  note      = {Apache top-level project; cloud-native API gateway with plugin-based rate limiting, authentication, and observability at the ingress boundary},
 }

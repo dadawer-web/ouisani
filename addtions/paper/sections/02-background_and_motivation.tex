@@ -7,14 +7,14 @@
 This section establishes the conceptual baseline of multi-tenant LLM agent
 runtimes (Section~\ref{sec:bg-kernel}), exposes the limitations of conventional,
 layer-separated isolation (Section~\ref{sec:bg-lim}), characterizes the novel attack
-surfaces introduced by LIM agents (Section~\ref{sec:bg-attack}), and derives the
+surfaces introduced by LLM agents (Section~\ref{sec:bg-attack}), and derives the
 design goals that motivate Neuron (Section~\ref{sec:bg-goals}).
 
 % -----------------------------------------------------------------------------
-\subsection{Multi-Tenant LLM Agent Operating Systems}
+\subsection{Multi-Tenant LLM Agent Runtimes}
 \label{sec:bg-kernel}
 
-An \emph{LLM agent operating system} extends the classical process abstraction
+A multi-tenant LLM agent runtime extends the classical process abstraction
 to agent workloads. Where a conventional process binds a program counter and a
 file-descriptor table to a scheduling entity, an agent process binds a
 \emph{turn}---an atomic interaction comprising a prompt, a sequence of tool
@@ -25,7 +25,7 @@ play the role of CPU cycles), and enforcing isolation among co-resident
 agents.
 
 Three properties of modern agent workloads distinguish them from conventional
-processes and elevate them to first-class OS concerns:
+processes and elevate them to first-class runtime concerns:
 
 \begin{itemize}
     \item \textbf{Long-running and stateful.} Agents persist memory, plans, and
@@ -54,19 +54,20 @@ runtime boundary, observing the workload from the outside.
 \subsection{Limitations of Layer-Separated Isolation}
 \label{sec:bg-lim}
 
-Classical operating systems isolate concerns across three largely independent
+Classical isolation designs separate concerns across three largely independent
 layers, each with its own mechanism and its own audit trail:
 
 \begin{itemize}
-    \item \textbf{Resource control} (cgroups~\cite{linux2024cgroupv2}) accounts
-    for and caps resource consumption---CPU, memory, and, in our setting, LLM
-    tokens. Resource decisions are recorded in cgroup-local logs.
+    \item \textbf{Resource control} (quota managers such as Linux
+    cgroup~v2~\cite{linux2024cgroupv2}) accounts for and caps resource
+    consumption---CPU, memory, and, in our setting, LLM tokens. Resource
+    decisions are recorded in quota-manager-local logs.
     \item \textbf{Execution isolation} (sandboxes, seccomp, containers such as
     gVisor~\cite{young2023gvisor} and Firecracker~\cite{agache2020firecracker})
     confines what an execution context can do at the system-call level.
     Isolation decisions are recorded in sandbox-local logs.
-    \item \textbf{Access control} (capabilities~\cite{mercer2012capsicum,
-    klein2009sel4}, declarative policies) determines whether an operation is
+    \item \textbf{Access control} (capabilities~\cite{mercer2012capsicum,klein2009sel4},
+    declarative policies) determines whether an operation is
     permitted. Permission decisions are recorded in permission-local logs.
 \end{itemize}
 
@@ -89,7 +90,7 @@ has no mechanism to observe, let alone act upon.
 \paragraph{Privilege escalation in contention windows.}
 The converse pathway is equally dangerous. Between the moment resource
 pressure begins to build and the moment the resource layer trips a hard
-out-of-memory signal, there exists a transient \emph{contention window} in
+quota-exceeded signal, there exists a transient \emph{contention window} in
 which the runtime is impaired but not yet in failure. During this window, an
 attacker can issue a privileged operation---a cross-tenant VFS access, a
 destructive tool call---that the permission layer, still nominally functional,
@@ -98,16 +99,17 @@ to the ongoing attack. By the time either layer logs the event, the two
 records sit in disjoint trails with no shared identifier to correlate them.
 
 The root cause is the absence of a \emph{shared causal identifier}.
-Without a single trace that threads through cgroup, sandbox, and permission
-decisions, cross-layer correlation is impossible: the runtime cannot reconstruct
-that ``the permission grant at time $t$ occurred inside the contention window
-opened by the broadcast flood at time $t-\delta$.'' Each layer operates---and fails---in isolation.
+Without a single trace that threads through quota-manager, sandbox, and
+permission decisions, cross-layer correlation is impossible: the runtime
+cannot reconstruct that ``the permission grant at time $t$ occurred inside the
+contention window opened by the broadcast flood at time $t-\delta$.'' Each
+layer operates---and fails---in isolation.
 
 % -----------------------------------------------------------------------------
-\subsection{Novel Attack Surfaces in LIM Agents}
+\subsection{Novel Attack Surfaces in LLM Agents}
 \label{sec:bg-attack}
 
-Beyond the coupled-failure mode, LIM agents introduce attack surfaces that
+Beyond the coupled-failure mode, LLM agents introduce attack surfaces that
 classical isolation models were not designed to handle, because they violate
 two foundational assumptions: that privileges bind at start-up, and that
 escalation proceeds through explicit system calls.
@@ -187,9 +189,9 @@ that Neuron must satisfy:
     correctness test suite remains green.
 \end{description}
 
-Goals G1 and G5 target the coupled-failure mode of Section~\ref{sec:bg-lim}; goals
-G2--G4 target the LIM-specific attack surfaces of Section~\ref{sec:bg-attack}; G6
-constrains the design space to evolvable, non-disruptive closures. The Neuron
-architecture presented in Section~\ref{sec:arch} is designed to satisfy these
-goals jointly, rather than in the layer-separated fashion that motivates this
-work.
+Goals G1 and G5 target the coupled-failure mode of Section~\ref{sec:bg-lim};
+goals G2--G4 target the LLM-specific attack surfaces of
+Section~\ref{sec:bg-attack}; G6 constrains the design space to evolvable,
+non-disruptive closures. The Neuron architecture presented in
+Section~\ref{sec:arch} is designed to satisfy these goals jointly, rather than
+in the layer-separated fashion that motivates this work.

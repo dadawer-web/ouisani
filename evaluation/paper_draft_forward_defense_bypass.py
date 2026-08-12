@@ -397,23 +397,21 @@ def run_trial(api_key: str, base_url: str, model: str, variant: str,
 
 # ── Main ──────────────────────────────────────────────────────────────────
 def main() -> int:
-    base = Path("e:/ouisani")
-    out_dir = base / "neuron-java/target/redteam"
+    base = Path(__file__).resolve().parents[1]
+    configured_out = os.environ.get("EMSE_OUTPUT_DIR", "").strip()
+    out_dir = Path(configured_out).resolve() if configured_out else base / "evaluation" / "results" / "emse_defense_aware"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     env = load_dotenv(base / ".env")
-    for k in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"):
-        if k not in env and k in os.environ:
-            env[k] = os.environ[k]
-
-    api_key = env.get("OPENAI_API_KEY")
-    base_url = env.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    model = env.get("OPENAI_MODEL", "gpt-4o-mini")
+    api_key = os.environ.get("EMSE_API_KEY") or env.get("OPENCODE_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
+    base_url = os.environ.get("EMSE_BASE_URL") or env.get("OPENCODE_CHAT_BASE_URL", "")
+    suffix = os.environ.get("EMSE_MODEL_KEY", "GPT56_LUNA").upper()
+    model = os.environ.get("OPENAI_MODEL") or env.get(f"EMSE_MODEL_{suffix}", "")
     if not api_key:
         print("ERROR: OPENAI_API_KEY not set", file=sys.stderr)
         return 2
 
-    N_PER_VARIANT = 10  # 5 variants × 10 = 50 trials per config
+    N_PER_VARIANT = int(os.environ.get("EMSE_DEFENSE_N", "20"))
     raw_logs: list[dict[str, Any]] = []
     per_config: dict[str, dict[str, Any]] = {}
 
