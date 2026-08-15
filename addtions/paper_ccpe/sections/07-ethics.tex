@@ -1,0 +1,58 @@
+% =============================================================================
+%  Section 7 — Ethics and Reproducibility
+% =============================================================================
+\section{Ethics and Reproducibility}
+\label{sec:ethics}
+
+\paragraph{Ethics.}
+All experiments were conducted against the authors' own runtime; no
+third-party users or personally identifiable data were involved. The
+API collection used commercial LLM endpoints under
+their respective terms of service, with no personally identifiable
+information processed and adversarial prompts confined to the
+controlled experimental context.
+
+\paragraph{Reproducibility.}
+The evaluation harness, probe payloads, capability-surface classifier,
+TLA$^+$ specification, and raw result files (CSV/JSON) are released as
+a replication package to enable independent verification. The package
+contains the Java source, environment records, raw JSONL observations,
+analysis scripts, generated manuscript values, and a one-click consistency
+check. The process-separated permission-service experiment is explicitly a
+same-host loopback deployment and is not presented as WAN or multi-node
+evidence.
+
+\section*{Statements and Declarations}
+
+\paragraph{Funding.}
+No funding was received for conducting this study or for preparing this
+manuscript.
+
+\paragraph{Competing interests.}
+The authors declare that they have no relevant financial or non-financial
+interests to disclose.
+
+\paragraph{Ethics approval and consent to participate.}
+Not applicable. The study used the authors' own software runtime and did not
+involve human participants, animals, or personally identifiable information.
+
+\paragraph{Consent for publication.}
+Not applicable.
+
+\paragraph{Data availability.}
+The raw JSONL observations, environment records, derived summaries, and
+frozen manuscript values are included in the public replication package at
+\url{https://github.com/dadawer-web/ouisani/tree/ccpe-repro-20260811/ccpe-repro-20260811}.
+The package is also prepared for a future Zenodo deposit; a DOI can be added
+after deposit without changing the reported data.
+
+\paragraph{Code availability.}
+The Java~21 Neuron source, benchmark drivers, analysis scripts, formal model,
+and one-click reproduction instructions are included in the same public
+repository and are released under an open-source license.
+
+\paragraph{Author contributions.}
+Mingyuan Xie and Zhengxun Wu jointly contributed to the conception,
+methodology, software implementation, experiments, analysis, and manuscript
+preparation. Both authors approved the submitted version and agree to be
+accountable for the work.

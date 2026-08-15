@@ -206,13 +206,20 @@ public final class VfsManager {
         for (String prefix : prefixes) {
             String physical = physicalWorkspaceMap.get(prefix);
             if (physical == null || physical.isEmpty()) continue;
+            // Shell commands use POSIX syntax.  On Windows the workspace is
+            // stored with backslashes, which Git Bash would interpret as
+            // escapes instead of path separators.
+            String physicalForShell = System.getProperty("os.name", "")
+                    .toLowerCase(Locale.ROOT).contains("win")
+                    ? physical.replace('\\', '/')
+                    : physical;
             // 仅替换作为独立路径起点的前缀：
             //   - 前缀前不能是 \w - . 字符（避免 my_factory、x/factory 误匹配）
             //   - 前缀后必须跟 / 、结尾或非路径字符（避免 /factoryX 被替换成 {PHYSICAL}X 破坏路径）
             String regex = "(?<![\\w\\-\\.])" + java.util.regex.Pattern.quote(prefix) + "(?=/|$|[^\\w/.-])";
             result = java.util.regex.Pattern.compile(regex)
                     .matcher(result)
-                    .replaceAll(java.util.regex.Matcher.quoteReplacement(physical));
+                    .replaceAll(java.util.regex.Matcher.quoteReplacement(physicalForShell));
         }
         return result;
     }

@@ -539,7 +539,7 @@ public class TopologyCompiler {
      * 将编译器从"软件工程专用"升级为"领域不可知的通用 AGI 调度器"。
      * 适用于写代码、写小说、查股票、做数学题、发送邮件等一切任务。
      * <p>
-     * 四大核心指令：
+     * 核心编译指令：
      * <ol>
      *   <li>领域不可知论 — 根据 ExpertDomain SOP 切换思维，不预设是写代码</li>
      *   <li>万物皆 ETL — Extract(获取) → Transform(处理) → Load(落地)</li>
@@ -552,7 +552,7 @@ public class TopologyCompiler {
         String thinkOpen = "<" + "think" + ">";
         String thinkClose = "</" + "think" + ">";
         return """
-                【通用神经符号编译器指令 — 4 条核心法则 — 极度重要，违反即失败】
+                【通用神经符号编译器指令 — 核心法则 — 极度重要，违反即失败】
 
                 法则 1: 领域不可知论 (Domain Agnosticism)
                 - 你不是一个纯粹的程序员。你是 AIOS 的内核调度器 (Kernel Scheduler)。
@@ -587,7 +587,12 @@ public class TopologyCompiler {
                 - 自检：如果一个节点的 role 描述超过 15 个字，或包含"和"/"并"/"以及"等连接词，说明它不够原子化，必须继续拆分。
                 - 复杂任务应该生成 10-20 个节点。简单任务至少 4 个节点。如果你的节点数 < 4，说明拆解粒度太粗。
 
-                法则 5: 强制思考过程 (Mandatory Thinking Process)
+                法则 5: Verification-aware Completion
+                - ToolOutput.success=true 只能作为观察，不能直接代表任务完成。对有副作用或最终产物的节点，优先声明 outputSchema。
+                - 节点可以声明 verification：stages (DURING/SKILL_END/FINAL)、predicates、evidence，以及 onFail/onInconclusive (RETRY/REPLAN/OBSERVE/ASK_USER/ABORT)。
+                - 关键步骤使用 required_step/upstream_success；状态变化使用 state_changed；最终回答必须由有来源的 evidence 覆盖。
+
+                法则 6: 强制思考过程 (Mandatory Thinking Process)
                 - 在输出最终的 JSON 之前，你必须先使用 %s 标签，详细写出你的"数据流转倒推逻辑"。
                 - 在 %s 标签内，你必须按以下格式思考：
                   1) 领域判定：这是什么领域的任务？（代码/调研/创作/运维/邮件/数学/翻译/...）
@@ -598,7 +603,7 @@ public class TopologyCompiler {
                 - %s 标签内的内容不会被解析为 JSON，你可以自由思考。
                 - 完成思考后，紧接着输出纯 JSON（不要包裹在 %s 中，直接以 { 开头）。
 
-                法则 6: 去偏指令 (Anti-Anchoring Bias) — 极度重要，违反即重编译
+                法则 7: 去偏指令 (Anti-Anchoring Bias) — 极度重要，违反即重编译
                 - 严禁把用户输入中的"环境"一词默认锚定到 AIOS 系统环境或操作系统环境。
                 - 中文"环境"有歧义：可能是"生态环境/市场环境/政策环境/投资环境"等科研主题，也可能是"开发环境/运行环境"等系统主题。
                 - 当用户意图是科研/调研/分析/综述（如"做XX的科研"、"调研XX环境问题"、"研究XX的环境政策"），必须走 WebSearch → WebScrape → 总结对比 → 生成报告 的 ETL 路径。

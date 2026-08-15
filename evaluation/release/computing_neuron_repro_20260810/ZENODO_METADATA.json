@@ -1,0 +1,28 @@
+{
+  "metadata": {
+    "title": "Neuron: Resource-Aware Permission Governance for Dependable Multi-Tenant LLM Agent Runtimes (Computing replication package)",
+    "upload_type": "dataset",
+    "description": "Replication package for the Computing manuscript on resource pressure, permission-decision availability, and cross-layer coupling in a Java 21 multi-tenant agent runtime. Includes source, raw JSONL observations, environment records, analysis scripts, generated values, and a flat Springer submission tree. The permission-service deployment is same-host loopback only and does not represent WAN or multi-node behavior.",
+    "creators": [
+      {
+        "name": "Xie, Mingyuan",
+        "affiliation": "Qingdao University of Technology"
+      },
+      {
+        "name": "Wu, Zhengxun",
+        "affiliation": "Qingdao University of Technology"
+      }
+    ],
+    "keywords": [
+      "dependable computing",
+      "multi-tenant runtime",
+      "permission governance",
+      "resource-aware security",
+      "LLM agents",
+      "Java"
+    ],
+    "publication_date": "2026-08-10",
+    "access_right": "open",
+    "license": "other-open"
+  }
+}

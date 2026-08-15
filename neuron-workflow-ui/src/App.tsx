@@ -36,7 +36,8 @@ export default function App() {
     sessions.find((s) => s.id === activeSessionId)?.title ?? "New Chat";
 
   // overlay 工具面（null = 不显示 overlay，回到对话）
-  const [activeTool, setActiveTool] = useState<Surface | null>(null);
+  // The control console is the operational home; chat remains one click away.
+  const [activeTool, setActiveTool] = useState<Surface | null>("missions");
 
   const [debugCode, setDebugCode] = useState<string | null>(null);
   // ── 人机审批门：修复指令输入 + 恢复中状态 ──

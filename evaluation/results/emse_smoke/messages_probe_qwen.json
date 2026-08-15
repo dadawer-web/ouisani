@@ -1,0 +1,8 @@
+{
+  "model": "qwen3.7-plus",
+  "timeout_s": 30,
+  "http_status": 403,
+  "ok": false,
+  "error": "error code: 1010\n",
+  "latency_ms": 3918.5
+}

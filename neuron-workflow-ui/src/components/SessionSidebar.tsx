@@ -8,9 +8,13 @@ import {
   Brain,
   FolderOpen,
   MessageSquare,
+  Activity,
+  Sparkles,
+  BookOpen,
+  ShieldCheck,
 } from "lucide-react";
 import { useSessionStore } from "@/store/sessionStore";
-import { TOOL_DEFS, type Surface } from "@/components/ToolsOverlay";
+import { TOOL_DEFS, type Surface } from "@/components/toolDefs";
 import { cn } from "@/lib/utils";
 
 // ════════════════════════════════════════════════════════════════
@@ -23,11 +27,15 @@ interface SessionSidebarProps {
 }
 
 const TOOL_ICONS: Record<Surface, typeof Workflow> = {
+  missions: Sparkles,
+  runs: Activity,
   workflow: Workflow,
   kernel: Monitor,
   telemetry: Radar,
   memory: Brain,
+  wiki: BookOpen,
   vfs: FolderOpen,
+  capabilities: ShieldCheck,
 };
 
 export default function SessionSidebar({ onOpenTool }: SessionSidebarProps) {

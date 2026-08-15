@@ -2,6 +2,12 @@ package com.ouisani.aios.user.apps.omnifactory;
 
 import com.ouisani.aios.core.network.GatewayJsonParser;
 import com.ouisani.aios.core.tool.Port;
+import com.ouisani.aios.core.verification.CorrectiveAction;
+import com.ouisani.aios.core.verification.EvidenceRequirement;
+import com.ouisani.aios.core.verification.EvidenceType;
+import com.ouisani.aios.core.verification.GoalPredicate;
+import com.ouisani.aios.core.verification.VerificationContract;
+import com.ouisani.aios.core.verification.VerificationStage;
 import com.ouisani.aios.user.sdk.AiosSdk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -326,6 +332,18 @@ final class TopologyJsonParser {
             }
         }
 
+        // ── Verification-aware completion contract ──
+        // The declarative form keeps workflow JSON portable while the Java API
+        // still supports application-defined GoalPredicate implementations.
+        String verificationObject = GatewayJsonParser.extractJsonObject(obj, "verification");
+        if (verificationObject == null) {
+            verificationObject = GatewayJsonParser.extractJsonObject(obj, "verificationContract");
+        }
+        VerificationContract verificationContract = parseVerificationContract(verificationObject);
+        if (verificationContract != null && verificationContract.enabled()) {
+            node.setVerificationContract(verificationContract);
+        }
+
         // ── 迭代节点专属字段解析 ──
         String isIterationStr = extractJsonValue(obj, "isIteration");
         if ("true".equalsIgnoreCase(isIterationStr)) {
@@ -358,6 +376,201 @@ final class TopologyJsonParser {
         }
 
         return node;
+    }
+
+    /** Parse the portable JSON subset of a verification contract. */
+    static VerificationContract parseVerificationContract(String jsonObject) {
+        if (jsonObject == null || jsonObject.isBlank()) return null;
+
+        VerificationContract.Builder builder = VerificationContract.builder();
+        String stagesArray = GatewayJsonParser.extractJsonArray(jsonObject, "stages");
+        String singleStage = GatewayJsonParser.extractJsonField(jsonObject, "stage");
+        List<String> stageValues = stagesArray == null
+                ? (singleStage == null ? List.of() : List.of(singleStage))
+                : quotedValues(stagesArray);
+        if (!stageValues.isEmpty()) {
+            for (String raw : stageValues) {
+                if (raw == null || raw.isBlank()) continue;
+                try {
+                    VerificationStage stage = VerificationStage.valueOf(normalizeType(raw));
+                    switch (stage) {
+                        case DURING -> builder.during();
+                        case SKILL_END -> builder.skillEnd();
+                        case FINAL -> builder.finalStage();
+                    }
+                } catch (IllegalArgumentException ignored) {
+                    log.warn("[TopologyCompiler] Ignore unknown verification stage: {}", raw);
+                }
+            }
+        }
+
+        CorrectiveAction onFail = parseCorrectiveAction(
+                GatewayJsonParser.extractJsonField(jsonObject, "onFail"));
+        if (onFail != null) builder.onFail(onFail);
+        CorrectiveAction onInconclusive = parseCorrectiveAction(
+                GatewayJsonParser.extractJsonField(jsonObject, "onInconclusive"));
+        if (onInconclusive != null) builder.onInconclusive(onInconclusive);
+
+        String predicatesArray = GatewayJsonParser.extractJsonArray(jsonObject, "predicates");
+        if (predicatesArray != null) {
+            for (String predicateObject : GatewayJsonParser.splitJsonObjectsSafe(predicatesArray)) {
+                GoalPredicate predicate = parsePredicate(predicateObject);
+                if (predicate != null) builder.predicate(predicate);
+            }
+        }
+
+        String evidenceArray = GatewayJsonParser.extractJsonArray(jsonObject, "evidence");
+        if (evidenceArray == null) {
+            evidenceArray = GatewayJsonParser.extractJsonArray(jsonObject, "evidenceRequirements");
+        }
+        if (evidenceArray != null) {
+            for (String evidenceObject : GatewayJsonParser.splitJsonObjectsSafe(evidenceArray)) {
+                EvidenceRequirement requirement = parseEvidenceRequirement(evidenceObject);
+                if (requirement != null) builder.require(requirement);
+            }
+        }
+
+        VerificationContract contract = builder.build();
+        return contract.enabled() ? contract : null;
+    }
+
+    private static GoalPredicate parsePredicate(String jsonObject) {
+        String type = normalizeType(GatewayJsonParser.extractJsonField(jsonObject, "type"));
+        String key = firstNonBlank(
+                GatewayJsonParser.extractJsonField(jsonObject, "key"),
+                GatewayJsonParser.extractJsonField(jsonObject, "reference"),
+                GatewayJsonParser.extractJsonField(jsonObject, "stepId"));
+        if ("FINAL_RESPONSE_CONTAINS".equals(type)) {
+            key = firstNonBlank(GatewayJsonParser.extractJsonField(jsonObject, "token"), key);
+        }
+        if (type == null || key == null) return null;
+        return switch (type) {
+            case "OUTPUT_PRESENT", "OUTPUT_KEY" -> GoalPredicate.outputPresent(key);
+            case "OUTPUT_EQUALS", "OUTPUT_EQUAL" ->
+                    GoalPredicate.outputEquals(key, parseScalar(GatewayJsonParser.extractJsonField(jsonObject, "value")));
+            case "STATE_CHANGED", "STATE_CHANGE" -> GoalPredicate.stateChanged(key);
+            case "REQUIRED_STEP", "STEP_COMPLETED" -> GoalPredicate.requiredStepCompleted(key);
+            case "UPSTREAM_SUCCEEDED", "UPSTREAM_SUCCESS" -> GoalPredicate.upstreamSucceeded(key);
+            case "FINAL_RESPONSE_CONTAINS" -> GoalPredicate.finalResponseContains(key);
+            default -> {
+                log.warn("[TopologyCompiler] Ignore unknown verification predicate: {}", type);
+                yield null;
+            }
+        };
+    }
+
+    private static EvidenceRequirement parseEvidenceRequirement(String jsonObject) {
+        String type = normalizeType(GatewayJsonParser.extractJsonField(jsonObject, "type"));
+        if (type == null) return null;
+        String reference = firstNonBlank(
+                GatewayJsonParser.extractJsonField(jsonObject, "reference"),
+                GatewayJsonParser.extractJsonField(jsonObject, "key"),
+                GatewayJsonParser.extractJsonField(jsonObject, "stepId"),
+                GatewayJsonParser.extractJsonField(jsonObject, "path"),
+                GatewayJsonParser.extractJsonField(jsonObject, "evidenceId"));
+        boolean required = parseBoolean(GatewayJsonParser.extractJsonField(jsonObject, "required"), true);
+        if (!"PERMISSION_APPROVAL".equals(type) && !"PERMISSION_STILL_VALID".equals(type)
+                && (reference == null || reference.isBlank())) return null;
+        return switch (type) {
+            case "OUTPUT_KEY" -> new EvidenceRequirement(
+                    "output:" + reference, "output contains " + reference,
+                    EvidenceType.OUTPUT_KEY, reference, null, required);
+            case "OUTPUT_SCHEMA" -> new EvidenceRequirement(
+                    "output_schema", "output matches declared schema",
+                    EvidenceType.OUTPUT_SCHEMA, "output",
+                    parseOutputSchema(GatewayJsonParser.extractJsonArray(jsonObject, "fields")), required);
+            case "STATE_CHANGED", "STATE_CHANGE" -> new EvidenceRequirement(
+                    "state_changed:" + reference, "state[" + reference + "] changed",
+                    EvidenceType.STATE_CHANGE, reference, null, required);
+            case "REQUIRED_STEP", "STEP_COMPLETED" -> new EvidenceRequirement(
+                    "step:" + reference, "step " + reference + " completed",
+                    EvidenceType.REQUIRED_STEP, reference, null, required);
+            case "ARTIFACT_EXISTS", "ARTIFACT" -> new EvidenceRequirement(
+                    "artifact:" + reference, "artifact exists: " + reference,
+                    EvidenceType.ARTIFACT_EXISTS, reference, null, required);
+            case "UPSTREAM_SUCCESS", "UPSTREAM_SUCCEEDED" -> new EvidenceRequirement(
+                    "upstream:" + reference, "upstream step succeeded: " + reference,
+                    EvidenceType.UPSTREAM_SUCCESS, reference, null, required);
+            case "PERMISSION_APPROVAL", "PERMISSION_STILL_VALID" -> new EvidenceRequirement(
+                    "permission_still_valid", "permission approval remains valid",
+                    EvidenceType.PERMISSION_APPROVAL, "permission", null, required);
+            case "FINAL_RESPONSE_COVERAGE", "RESPONSE_COVERAGE" -> new EvidenceRequirement(
+                    "response_covered:" + reference, "final response is covered by evidence " + reference,
+                    EvidenceType.FINAL_RESPONSE_COVERAGE, reference, null, required);
+            default -> {
+                log.warn("[TopologyCompiler] Ignore unknown verification evidence: {}", type);
+                yield null;
+            }
+        };
+    }
+
+    private static Map<String, Class<?>> parseOutputSchema(String fieldsArray) {
+        if (fieldsArray == null) return Map.of();
+        Map<String, Class<?>> fields = new LinkedHashMap<>();
+        for (String fieldObject : GatewayJsonParser.splitJsonObjectsSafe(fieldsArray)) {
+            String name = firstNonBlank(
+                    GatewayJsonParser.extractJsonField(fieldObject, "name"),
+                    GatewayJsonParser.extractJsonField(fieldObject, "key"));
+            if (name == null) continue;
+            String type = normalizeType(GatewayJsonParser.extractJsonField(fieldObject, "type"));
+            fields.put(name, switch (type == null ? "ANY" : type) {
+                case "INTEGER", "INT", "FLOAT", "NUMBER" -> Number.class;
+                case "BOOLEAN", "BOOL" -> Boolean.class;
+                case "STRING", "TEXT", "FILE_PATH", "FILE", "PATH" -> String.class;
+                default -> Object.class;
+            });
+        }
+        return fields;
+    }
+
+    private static List<String> quotedValues(String arrayContent) {
+        List<String> values = new ArrayList<>();
+        if (arrayContent == null) return values;
+        Matcher matcher = Pattern.compile("\\\"([^\\\"]*)\\\"").matcher(arrayContent);
+        while (matcher.find()) values.add(matcher.group(1));
+        return values;
+    }
+
+    private static Object parseScalar(String raw) {
+        if (raw == null) return null;
+        String value = raw.trim();
+        if ("true".equalsIgnoreCase(value)) return true;
+        if ("false".equalsIgnoreCase(value)) return false;
+        try {
+            if (value.matches("-?\\d+")) return Long.valueOf(value);
+            if (value.matches("-?(?:\\d+\\.\\d*|\\d*\\.\\d+)(?:[eE][+-]?\\d+)?")) {
+                return Double.valueOf(value);
+            }
+        } catch (NumberFormatException ignored) {
+            // Keep the original token as a string when it is not numeric.
+        }
+        return value;
+    }
+
+    private static boolean parseBoolean(String raw, boolean fallback) {
+        return raw == null ? fallback : Boolean.parseBoolean(raw.trim());
+    }
+
+    private static CorrectiveAction parseCorrectiveAction(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return CorrectiveAction.valueOf(normalizeType(raw));
+        } catch (IllegalArgumentException ignored) {
+            log.warn("[TopologyCompiler] Ignore unknown verification corrective action: {}", raw);
+            return null;
+        }
+    }
+
+    private static String normalizeType(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        return raw.trim().replaceAll("([a-z])([A-Z])", "$1_$2")
+                .toUpperCase(Locale.ROOT).replace('-', '_').replace(' ', '_');
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) return null;
+        for (String value : values) if (value != null && !value.isBlank()) return value;
+        return null;
     }
 
     // ════════════════════════════════════════════════════════════════

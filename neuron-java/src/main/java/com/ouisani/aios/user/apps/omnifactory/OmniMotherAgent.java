@@ -956,6 +956,10 @@ public class OmniMotherAgent extends AbstractAgent {
         prompt.append("3. 节点之间流转的中间临时文件（如 `agent_1` 传给 `agent_2` 的数据），可以保存在当前工作目录（即 `/factory/`）。\n");
         prompt.append("4. 绝不允许使用相对路径（如 `./output.json`）或者写入任何沙箱之外的目录！\n");
 
+        String carryover = context == null ? "" : context.renderCarryoverState();
+        if (!carryover.isBlank()) {
+            prompt.append("\n\n").append(carryover);
+        }
         return prompt.toString();
     }
 

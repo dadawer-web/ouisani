@@ -1,0 +1,58 @@
+\documentclass[11pt]{letter}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{lmodern}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\setlength{\emergencystretch}{2em}
+
+\signature{Mingyuan Xie\\Zhengxun Wu\\
+Qingdao University of Technology\\
+Corresponding authors\\
+\href{mailto:jhj208436@gmail.com}{jhj208436@gmail.com}\\
+\href{mailto:2276815088@qq.com}{2276815088@qq.com}}
+\address{Qingdao University of Technology\\Qingdao, Shandong, China}
+\date{11 August 2026}
+
+\begin{document}
+\begin{letter}{Editor-in-Chief\\\emph{Concurrency and Computation: Practice and Experience}}
+
+\opening{Dear Editor-in-Chief,}
+
+We submit the manuscript entitled ``Concurrency-Aware Permission Decisions in
+Multi-Tenant LLM Agent Runtimes'' for consideration as a research article in
+\emph{Concurrency and Computation: Practice and Experience}.
+
+The manuscript studies a concurrency failure in a multi-tenant agent runtime:
+tenant work can fill a bounded executor and delay a permission decision until
+its deadline, while a permissive timeout fallback converts executor
+unavailability into unsafe admission. We present Neuron, a Java~21 runtime
+architecture that reserves permission capacity and exports a resource-pressure
+signal to the escalation policy. The paper's primary contribution is a
+systems characterization of executor contention, queueing, deadline semantics,
+and permission-verdict behavior; the security consequence is the measured
+failure mode rather than a claim of a new authorization theory.
+
+The evaluation compares shared fail-open, shared fail-closed, isolated, and
+coupled architectures. It contains five independent JVM runs on two recorded
+environments, deadline and attacker-pressure surfaces, capacity sweeps, mixed
+load QoS, fixed API-trace replay, a process-separated Java permission service,
+and an additional executor-focused Windows replication. Raw JSONL observations,
+environment records, analysis scripts, generated values, and reproduction
+instructions are publicly archived at
+\url{https://github.com/dadawer-web/ouisani/tree/ccpe-repro-20260811/ccpe-repro-20260811}.
+The process-separated service is explicitly a same-host loopback experiment;
+we do not claim WAN, multi-node, GPU, or live-production behavior.
+
+We believe the manuscript fits the journal's emphasis on practical concurrent
+and distributed systems because it reports an implemented Java runtime,
+executor-level measurements, architecture baselines, and reproducible
+engineering trade-offs. The manuscript is original, is not under consideration
+elsewhere, and has been approved by both authors.
+
+Thank you for your consideration.
+
+\closing{Sincerely,}
+\end{letter}
+\end{document}

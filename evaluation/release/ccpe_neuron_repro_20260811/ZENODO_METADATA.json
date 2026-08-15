@@ -1,0 +1,29 @@
+{
+  "metadata": {
+    "title": "Neuron: Concurrency-Aware Permission Decisions in Multi-Tenant LLM Agent Runtimes (CCPE replication package)",
+    "upload_type": "dataset",
+    "description": "Replication package for the CCPE manuscript on executor contention, permission-decision availability, and resource-aware coupling in a Java 21 multi-tenant agent runtime. Includes raw JSONL observations, the additional 3,840-observation CCPE executor replication, a 1,800-observation 2x2 capacity/signal ablation, source, analysis scripts, and a flat free-format submission tree. The permission-service experiment is same-host loopback only and does not represent WAN or multi-node behavior.",
+    "creators": [
+      {
+        "name": "Xie, Mingyuan",
+        "affiliation": "Qingdao University of Technology"
+      },
+      {
+        "name": "Wu, Zhengxun",
+        "affiliation": "Qingdao University of Technology"
+      }
+    ],
+    "keywords": [
+      "concurrent runtime",
+      "executor contention",
+      "multi-tenant systems",
+      "permission decisions",
+      "cloud services",
+      "LLM agents",
+      "Java"
+    ],
+    "publication_date": "2026-08-11",
+    "access_right": "open",
+    "license": "other-open"
+  }
+}

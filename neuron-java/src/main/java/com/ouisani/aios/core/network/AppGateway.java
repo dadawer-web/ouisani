@@ -427,7 +427,8 @@ public class AppGateway {
                                 manifest.nodes(),
                                 manifest.workflowName(),
                                 manifest.enabledSkills(),
-                                manifest.enabledRoles()
+                                manifest.enabledRoles(),
+                                manifest.missionId()
                         );
                         System.out.printf("[App Gateway] DAG 引擎执行完成，工作流: %s%n", manifest.workflowName());
                     } catch (Exception e) {
@@ -680,17 +681,30 @@ public class AppGateway {
         // 依赖 VersionedMemoryStore.setPrimaryStore 在启动时注入；未注入时端点返回 503
         MemoryViewerRoutes.attachTo(app);
 
+        // Wiki 编译层 — 从受治理 MemoryRecord 按需投影；不维护第二份正文存储
+        WikiRoutes.attachTo(app);
+
         // 普通对话 — POST /api/chat（SSE 逐 token，复用 LlmRouter + 记忆注入）
         ChatRoutes.attachTo(app);
 
         // 工作流产物 — GET /api/artifacts/{workflowId}[/file]（列出/读取 factory 产物文件）
         ArtifactRoutes.attachTo(app);
 
+        // Run 控制台 — 列表、节点快照、暂停/继续/取消和统一审计时间线
+        RunRoutes.attachTo(app);
+
+        // Mission 连续任务 — 目标、状态、审批、知识/产物、计划和完成汇报
+        MissionRoutes.attachTo(app);
+
         // 系统告警流 — WS /api/system/alerts（内核崩溃/紧急停止/死信队列/成本告警/工作流挂起/安全/心跳）
         SystemAlertRoutes.attachTo(app);
 
         // 工具权限审批流 — WS /api/permission/stream（桥接 PermissionChecker ASK 到前端弹窗，支持 standing scoped approvals）
         PermissionApprovalRoutes.attachTo(app);
+        SkillRoutes.attachTo(app);
+        DiffRoutes.attachTo(app);
+        BrowserWorkspaceRoutes.attachTo(app);
+        ChannelRoutes.attachTo(app);
         // ════════════════════════════════════════════════════════════════
         //  Cross-Validation — 多模型对抗与交叉审查（借鉴 OmniGent Debby & Polly）
         // ════════════════════════════════════════════════════════════════

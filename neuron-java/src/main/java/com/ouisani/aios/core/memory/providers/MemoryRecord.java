@@ -1,5 +1,9 @@
 package com.ouisani.aios.core.memory.providers;
 
+import com.ouisani.aios.core.memory.MemoryLayer;
+
+import java.util.Objects;
+
 /**
  * 记忆条目一等数据模型 — 把记忆从"裸字符串"升级为带元数据的结构化记录。
  * <p>
@@ -18,6 +22,8 @@ package com.ouisani.aios.core.memory.providers;
  *   <li>{@code timestamp}：写入时间戳（毫秒，{@link System#currentTimeMillis()}）。</li>
  *   <li>{@code confidence}：置信度 0.0-1.0。USER 域通常 1.0，AGENT 域由推理质量决定。</li>
  *   <li>{@code domain}：{@link MemoryDomain#USER} 或 {@link MemoryDomain#AGENT}。</li>
+ *   <li>{@code layer}：L0-L3 记忆生命周期层次。旧构造函数默认 L1；裸字符串
+ *       legacy 入口默认 L0。</li>
  *   <li>{@code version}：单调递增版本号，从 1 开始。同 key 新写入时由
  *       {@code VersionedMemoryStore} 自动 +1，旧版本保留为 history。</li>
  * </ul>
@@ -30,16 +36,28 @@ package com.ouisani.aios.core.memory.providers;
  * @param timestamp  写入时间戳（毫秒）
  * @param confidence 置信度 [0.0, 1.0]
  * @param domain     记忆域
+ * @param layer      L0-L3 生命周期层次
  * @param version    版本号（从 1 开始）
  */
-public record MemoryRecord(
+    public record MemoryRecord(
         String key,
         String content,
         String source,
         long timestamp,
         double confidence,
         MemoryDomain domain,
+        MemoryLayer layer,
         long version) {
+
+    public MemoryRecord {
+        Objects.requireNonNull(layer, "layer must not be null");
+    }
+
+    /** Full pre-layer constructor kept source-compatible with existing integrations. */
+    public MemoryRecord(String key, String content, String source, long timestamp,
+                        double confidence, MemoryDomain domain, long version) {
+        this(key, content, source, timestamp, confidence, domain, MemoryLayer.L1, version);
+    }
 
     /**
      * 创建一条 {@link MemoryDomain#AGENT} 域的旧式记忆 — 供 {@code store(String)} 默认实现使用。
@@ -57,7 +75,48 @@ public record MemoryRecord(
                 System.currentTimeMillis(),
                 1.0,
                 MemoryDomain.AGENT,
+                MemoryLayer.L0,
                 1L);
+    }
+
+    /** Create an explicitly layered record. */
+    public static MemoryRecord of(String key, String content, String source,
+                                  long timestamp, double confidence,
+                                  MemoryDomain domain, MemoryLayer layer,
+                                  long version) {
+        return new MemoryRecord(key, content, source, timestamp, confidence,
+                domain, layer, version);
+    }
+
+    /** Raw source evidence (L0), useful for capture hooks. */
+    public static MemoryRecord raw(String key, String content, String source,
+                                   long timestamp, MemoryDomain domain) {
+        return new MemoryRecord(key, content, source, timestamp, 1.0, domain,
+                MemoryLayer.L0, 1L);
+    }
+
+    /** Atomic fact/preference/constraint (L1). */
+    public static MemoryRecord atomic(String key, String content, String source,
+                                      long timestamp, double confidence,
+                                      MemoryDomain domain) {
+        return new MemoryRecord(key, content, source, timestamp, confidence,
+                domain, MemoryLayer.L1, 1L);
+    }
+
+    /** Scenario/project synthesis (L2). */
+    public static MemoryRecord scenario(String key, String content, String source,
+                                        long timestamp, double confidence,
+                                        MemoryDomain domain) {
+        return new MemoryRecord(key, content, source, timestamp, confidence,
+                domain, MemoryLayer.L2, 1L);
+    }
+
+    /** Durable persona/policy/stable rule (L3). */
+    public static MemoryRecord core(String key, String content, String source,
+                                    long timestamp, double confidence,
+                                    MemoryDomain domain) {
+        return new MemoryRecord(key, content, source, timestamp, confidence,
+                domain, MemoryLayer.L3, 1L);
     }
 
     /**
@@ -70,7 +129,7 @@ public record MemoryRecord(
      */
     public MemoryRecord withVersion(long newVersion) {
         return new MemoryRecord(
-                key, content, source, timestamp, confidence, domain, newVersion);
+                key, content, source, timestamp, confidence, domain, layer, newVersion);
     }
 
     /**
@@ -81,6 +140,12 @@ public record MemoryRecord(
      */
     public MemoryRecord withTimestamp(long newTimestamp) {
         return new MemoryRecord(
-                key, content, source, newTimestamp, confidence, domain, version);
+                key, content, source, newTimestamp, confidence, domain, layer, version);
+    }
+
+    /** Return the same record at a different lifecycle layer. */
+    public MemoryRecord withLayer(MemoryLayer newLayer) {
+        return new MemoryRecord(key, content, source, timestamp, confidence,
+                domain, newLayer, version);
     }
 }

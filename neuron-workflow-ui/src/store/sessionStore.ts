@@ -5,13 +5,26 @@ import { create } from "zustand";
 //  后端无对话/会话端点，活动流(activity)是临时流式，重开不回放
 // ════════════════════════════════════════════════════════════════
 
+export interface ChatMessageMeta {
+  status?: string;
+  paused?: boolean;
+  endedAt?: number;
+  workflowId?: string;
+  htmlPreview?: string;
+  topology?: {
+    nodes?: Array<{ id: string; role: string }>;
+    edges?: Array<{ source: string; target: string }>;
+  };
+  [key: string]: unknown;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "agent";
   kind: "prompt" | "plan" | "activity" | "artifact" | "error" | "system" | "chat";
   text: string;
   ts: number;
-  meta?: Record<string, any>;
+  meta?: ChatMessageMeta;
 }
 
 export interface Session {

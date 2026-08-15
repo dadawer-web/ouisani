@@ -23,6 +23,7 @@ dist-ssr/
 
 # ── Python ──
 .venv/
+evaluation/.venv_*/
 venv/
 __pycache__/
 *.pyc

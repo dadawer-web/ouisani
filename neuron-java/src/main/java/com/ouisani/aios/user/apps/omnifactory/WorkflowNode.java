@@ -1,12 +1,17 @@
 package com.ouisani.aios.user.apps.omnifactory;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.ouisani.aios.core.tool.Port;
+import com.ouisani.aios.core.verification.VerificationContract;
+import com.ouisani.aios.core.verification.VerificationResult;
 
 /**
  * 工作流节点实例 — DAG 状态机中的可执行顶点。
@@ -37,6 +42,13 @@ public class WorkflowNode {
 
     // 节点的内存输出：执行完毕后，结果存入此 Map 供下游节点读取
     private Map<String, Object> outputData = new ConcurrentHashMap<>();
+
+    // ── Verification-aware completion contract ──
+    // Explicit contracts are opt-in; a declared output schema is also promoted
+    // to a deterministic completion requirement by WorkflowEngine.
+    private volatile VerificationContract verificationContract;
+    private volatile VerificationResult lastVerificationResult;
+    private volatile Map<String, Object> verificationBaseline = Map.of();
 
     // ── 条件路由字段（借鉴 Langflow ConditionalRouter） ──
     // 当条件表达式求值为 false 时，此节点被标记为 SKIPPED
@@ -127,6 +139,53 @@ public class WorkflowNode {
 
     public Map<String, Object> getOutputData() { return outputData; }
     public void putOutput(String key, Object value) { this.outputData.put(key, value); }
+
+    /** Declarative business/evidence contract evaluated before SUCCESS. */
+    public VerificationContract verificationContract() { return verificationContract; }
+    public void setVerificationContract(VerificationContract contract) { this.verificationContract = contract; }
+
+    /** Last stage result, retained for the run console and recovery diagnostics. */
+    public VerificationResult lastVerificationResult() { return lastVerificationResult; }
+    public void setLastVerificationResult(VerificationResult result) { this.lastVerificationResult = result; }
+
+    /** Capture pre-execution state so state-change predicates have a real baseline. */
+    public void captureVerificationBaseline() {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : outputData.entrySet()) {
+            snapshot.put(entry.getKey(), snapshotValue(entry.getValue()));
+        }
+        this.verificationBaseline = Collections.unmodifiableMap(snapshot);
+    }
+
+    public Map<String, Object> verificationBaseline() { return verificationBaseline; }
+
+    private static Object snapshotValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<Object, Object> copy = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                copy.put(entry.getKey(), snapshotValue(entry.getValue()));
+            }
+            return Collections.unmodifiableMap(copy);
+        }
+        if (value instanceof List<?> list) {
+            List<Object> copy = new ArrayList<>(list.size());
+            for (Object item : list) copy.add(snapshotValue(item));
+            return Collections.unmodifiableList(copy);
+        }
+        if (value instanceof Set<?> set) {
+            return Collections.unmodifiableSet(new java.util.LinkedHashSet<>(
+                    set.stream().map(WorkflowNode::snapshotValue).toList()));
+        }
+        if (value != null && value.getClass().isArray()) {
+            int length = java.lang.reflect.Array.getLength(value);
+            List<Object> copy = new ArrayList<>(length);
+            for (int i = 0; i < length; i++) {
+                copy.add(snapshotValue(java.lang.reflect.Array.get(value, i)));
+            }
+            return Collections.unmodifiableList(copy);
+        }
+        return value;
+    }
 
     // ════════════════════════════════════════════════════════════════
     //  迭代节点访问器

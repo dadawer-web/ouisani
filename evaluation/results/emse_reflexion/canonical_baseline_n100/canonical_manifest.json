@@ -1,0 +1,150 @@
+{
+  "baseline_id": "reflexion_content_recovery_n100",
+  "generated_at_utc": "2026-08-09T10:54:45.580324+00:00",
+  "framework": "Reflexion",
+  "selection_rule": "One complete n=100/model result; standalone completed runs preferred; duplicates and partial runs excluded without deletion.",
+  "models": [
+    {
+      "model": "gpt-5.6-luna",
+      "framework": "Reflexion",
+      "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+      "protocol": "chat_completions",
+      "source_run": "full_n100_20260809T",
+      "source_dir": "evaluation\\results\\emse_reflexion\\full_n100_20260809T\\gpt-5.6-luna",
+      "canonical_dir": "evaluation\\results\\emse_reflexion\\canonical_baseline_n100\\gpt-5.6-luna",
+      "selection_reason": "Only complete GPT output; combined matrix was later stopped after baseline completion.",
+      "n_per_variant": 100,
+      "attack_successes": 166,
+      "attack_total": 500,
+      "attack_asr": 0.332,
+      "benign_successes": 0,
+      "benign_total": 500,
+      "benign_fpr": 0.0,
+      "attack_errors": 0,
+      "benign_errors": 0,
+      "artifacts_sha256": {
+        "paper_draft_reflexion_e2e_exploit.json": "dc35d535d2ed694a3148cf62911fb9b5b68d468894d2e0e6a300b2713a5154c1",
+        "paper_draft_reflexion_e2e_exploit.csv": "97f219a5b4841a49df17bd49e5e14627b1e91c68292f8ecb397a07c771ea12f8",
+        "paper_draft_reflexion_e2e_exploit.raw.jsonl": "895df9425591f779732e8a0602db73b871a6c82b666cd094a3c0df133ca5d012"
+      }
+    },
+    {
+      "model": "glm-5.2",
+      "framework": "Reflexion",
+      "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+      "protocol": "chat_completions",
+      "source_run": "full_n100_glm52",
+      "source_dir": "evaluation\\results\\emse_reflexion\\full_n100_glm52\\glm-5.2",
+      "canonical_dir": "evaluation\\results\\emse_reflexion\\canonical_baseline_n100\\glm-5.2",
+      "selection_reason": "Standalone run with manifest status complete; excludes duplicate combined-matrix run.",
+      "n_per_variant": 100,
+      "attack_successes": 215,
+      "attack_total": 500,
+      "attack_asr": 0.43,
+      "benign_successes": 0,
+      "benign_total": 500,
+      "benign_fpr": 0.0,
+      "attack_errors": 0,
+      "benign_errors": 0,
+      "artifacts_sha256": {
+        "paper_draft_reflexion_e2e_exploit.json": "47083b33b01ce854e3b06c84a768fc1a4a55129886f187a2d83de92fd71c79b0",
+        "paper_draft_reflexion_e2e_exploit.csv": "4e1d611ad9e72f2bd5ae9d043a7203bea0f58133f71b70889c75cbfadb07120e",
+        "paper_draft_reflexion_e2e_exploit.raw.jsonl": "aab5919de880133d4c23c255306f2cff2102c2c150160ea9a8178c830b8978b9"
+      }
+    },
+    {
+      "model": "kimi-k2.6",
+      "framework": "Reflexion",
+      "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+      "protocol": "chat_completions",
+      "source_run": "full_n100_kimi_k26",
+      "source_dir": "evaluation\\results\\emse_reflexion\\full_n100_kimi_k26\\kimi-k2.6",
+      "canonical_dir": "evaluation\\results\\emse_reflexion\\canonical_baseline_n100\\kimi-k2.6",
+      "selection_reason": "Standalone run with manifest status complete; excludes duplicate combined-matrix run.",
+      "n_per_variant": 100,
+      "attack_successes": 398,
+      "attack_total": 500,
+      "attack_asr": 0.796,
+      "benign_successes": 0,
+      "benign_total": 500,
+      "benign_fpr": 0.0,
+      "attack_errors": 0,
+      "benign_errors": 0,
+      "artifacts_sha256": {
+        "paper_draft_reflexion_e2e_exploit.json": "20b572c285ca4dfbcf6e1185b0536dffd2f1b702d0bf679871c88708ea6aee26",
+        "paper_draft_reflexion_e2e_exploit.csv": "05814234c2245e5e65a5ba7e77c19bb4d0079d2d02a450379b604a53ae8fae98",
+        "paper_draft_reflexion_e2e_exploit.raw.jsonl": "7b95e659ce762c4d4b3a4b8b0bc4f1cd6e6c4956897a23e749f56a2219f0845e"
+      }
+    },
+    {
+      "model": "deepseek-v4-flash",
+      "framework": "Reflexion",
+      "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+      "protocol": "chat_completions",
+      "source_run": "full_n100_deepseek_v4_flash",
+      "source_dir": "evaluation\\results\\emse_reflexion\\full_n100_deepseek_v4_flash\\deepseek-v4-flash",
+      "canonical_dir": "evaluation\\results\\emse_reflexion\\canonical_baseline_n100\\deepseek-v4-flash",
+      "selection_reason": "Standalone run with manifest status complete.",
+      "n_per_variant": 100,
+      "attack_successes": 204,
+      "attack_total": 500,
+      "attack_asr": 0.408,
+      "benign_successes": 0,
+      "benign_total": 500,
+      "benign_fpr": 0.0,
+      "attack_errors": 0,
+      "benign_errors": 0,
+      "artifacts_sha256": {
+        "paper_draft_reflexion_e2e_exploit.json": "a351da7086b3dc6ad8fbf0299f16b76ed09b427033bcdabcadfc394756260467",
+        "paper_draft_reflexion_e2e_exploit.csv": "0c6dd0919ca6e19b30854351b60571e68ba05f6714c65ccd8583180546dde5b4",
+        "paper_draft_reflexion_e2e_exploit.raw.jsonl": "066603a903441c3b240755fcd8527a4282e758cb85042ad170739d100b23c05f"
+      }
+    },
+    {
+      "model": "mimo-v2.5",
+      "framework": "Reflexion",
+      "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+      "protocol": "chat_completions",
+      "source_run": "full_n100_mimo_v25",
+      "source_dir": "evaluation\\results\\emse_reflexion\\full_n100_mimo_v25\\mimo-v2.5",
+      "canonical_dir": "evaluation\\results\\emse_reflexion\\canonical_baseline_n100\\mimo-v2.5",
+      "selection_reason": "Standalone run with manifest status complete; excludes stopped duplicate checkpoint.",
+      "n_per_variant": 100,
+      "attack_successes": 87,
+      "attack_total": 500,
+      "attack_asr": 0.174,
+      "benign_successes": 0,
+      "benign_total": 500,
+      "benign_fpr": 0.0,
+      "attack_errors": 0,
+      "benign_errors": 0,
+      "artifacts_sha256": {
+        "paper_draft_reflexion_e2e_exploit.json": "ca21077529f5f094161667db190773bbc9dbac2df3e89d40ab1c01b4669239d2",
+        "paper_draft_reflexion_e2e_exploit.csv": "f41467a984efcc66d140a9746b3b1d5d570b36552b02eac804021492dc97d9bd",
+        "paper_draft_reflexion_e2e_exploit.raw.jsonl": "d6cc4983834ab3f92d95d6fd155fb4ac8b210ac4a849a24d5f69660672d65401"
+      }
+    }
+  ],
+  "excluded_runs": [
+    {
+      "run": "full_n100_20260809T/glm-5.2",
+      "reason": "Duplicate GLM full run; standalone complete run selected."
+    },
+    {
+      "run": "full_n100_20260809T/kimi-k2.6",
+      "reason": "Duplicate Kimi full run; standalone complete run selected."
+    },
+    {
+      "run": "full_n100_20260809T/mimo-v2.5",
+      "reason": "Partial duplicate stopped manually; checkpoint retained but not pooled."
+    },
+    {
+      "run": "full_n100_minimax_m3/minimax-m3",
+      "reason": "Partial run stopped on provider response-schema failure (72 attack trials)."
+    },
+    {
+      "run": "pilot_n1_20260809T045528Z/qwen3.7-plus",
+      "reason": "System-bearing messages probe rejected by provider (HTTP 403); no valid full baseline."
+    }
+  ]
+}

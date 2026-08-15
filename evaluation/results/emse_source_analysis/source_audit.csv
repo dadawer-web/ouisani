@@ -1,0 +1,7 @@
+framework,commit,revision_label,fetched,required_patterns_present,source_origin_provenance,error_status_metadata,recovery_action_frame,trampoline_signature
+Reflexion,218cf0ef1df84b05ce379dd4a8e47f17766733a0,pinned commit used by the native experiment,True,True,False,False,True,yes
+MetaGPT,c036574507e7616c02512e7c8ad88dd847783afa,v0.8.1,True,True,False,False,True,yes
+Aider,253f0368b873ba30d8ee26e463718f0c03614ddf,v0.86.2,True,True,False,False,True,yes
+OpenHands,41a78ca768afd21bb05e2e9c41a14b08739884f1,0.48.0,True,True,False,True,False,no
+AutoGen,b04775f3dc7a5c9a437c49f97b2cb42684b5b38e,python-v0.4.7,True,True,False,True,True,yes
+LangGraph,d56666f7fbf0d380ad84cdf0cbe5aa48ab0cc086,repository HEAD fixed at retrieval,True,True,False,True,False,no

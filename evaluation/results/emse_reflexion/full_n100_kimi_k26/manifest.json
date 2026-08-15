@@ -1,0 +1,20 @@
+{
+  "run_id": "full_n100_kimi_k26",
+  "run_at_utc": "2026-08-09T05:16:03.364813+00:00",
+  "framework": "Reflexion",
+  "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+  "n_per_variant": 100,
+  "temperature": 0.7,
+  "status": "complete",
+  "models": [
+    {
+      "model": "kimi-k2.6",
+      "protocol": "chat_completions",
+      "returncode": 0,
+      "ok": true,
+      "output_dir": "evaluation\\results\\emse_reflexion\\full_n100_kimi_k26\\kimi-k2.6",
+      "log": "evaluation\\results\\emse_reflexion\\full_n100_kimi_k26\\kimi-k2.6.log"
+    }
+  ],
+  "completed_at_utc": "2026-08-09T07:58:54.042301+00:00"
+}

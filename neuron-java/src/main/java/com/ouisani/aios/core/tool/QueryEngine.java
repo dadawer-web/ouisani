@@ -2,12 +2,19 @@ package com.ouisani.aios.core.tool;
 
 import com.ouisani.aios.core.middleware.Middleware;
 import com.ouisani.aios.core.middleware.MiddlewareRegistry;
+import com.ouisani.aios.core.memory.MemoryLifecycleRuntime;
+import com.ouisani.aios.core.memory.MemoryRecallHook;
+import com.ouisani.aios.core.memory.MemoryLifecyclePipeline.ToolObservation;
+import com.ouisani.aios.core.memory.ContextInjector;
 import com.ouisani.aios.core.network.AiosEventSchema;
 import com.ouisani.aios.core.network.AiosEventSchema.AiosEvent;
 import com.ouisani.aios.core.network.EventBus;
 import com.ouisani.aios.core.ipc.TraceContext;
 import com.ouisani.aios.core.ipc.CallerContext;
 import com.ouisani.aios.core.audit.UnifiedAuditLog;
+import com.ouisani.aios.core.continuation.ContinuationManager;
+import com.ouisani.aios.core.action.ActionEnvelope;
+import com.ouisani.aios.core.action.ActionGate;
 import com.ouisani.aios.core.llm.StreamCancellationHook;
 import com.ouisani.aios.core.permission.EscalationPolicy;
 import com.ouisani.aios.core.permission.PermissionChecker;
@@ -90,6 +97,12 @@ public class QueryEngine {
 
     /** 当前运行 ID（每次 query() 调用生成一个新的） */
     private String currentRunId;
+    private volatile int currentToolRound;
+    /** Tool observations collected for the current turn and handed to L0/L1. */
+    private volatile List<ToolObservation> currentTurnToolObservations =
+            java.util.Collections.synchronizedList(new ArrayList<>());
+    /** Per-invocation result status; parallel read tools must not race on it. */
+    private final ThreadLocal<Boolean> lastToolSuccess = new ThreadLocal<>();
 
     // ── 三层历史压缩（借鉴 Agent Zero bulks/topics/current） ──
     private HistoryCompressor historyCompressor;
@@ -233,6 +246,7 @@ public class QueryEngine {
      */
     public void requestInterrupt() {
         interruptRequested = true;
+        ContinuationManager.instance().captureInterruption(currentRunId, "user_interrupt");
         StreamCancellationHook hook = streamHook;
         if (hook != null) {
             log.info("[QueryEngine] 用户请求中断 — 取消 LLM 流式请求");
@@ -245,6 +259,24 @@ public class QueryEngine {
     /** 查询是否被用户中断 */
     public boolean isInterruptRequested() {
         return interruptRequested;
+    }
+
+    /** Run id of the currently executing (or most recently interrupted) query. */
+    public String currentRunId() {
+        return currentRunId;
+    }
+
+    /**
+     * Continue an interrupted in-process agent turn with a new user instruction.
+     * The old run remains immutable; safe read results are supplied as context,
+     * while every new side effect goes through ActionGate again.
+     */
+    public String continueQuery(String instruction) {
+        String previousRun = currentRunId;
+        String prompt = previousRun == null
+                ? (instruction == null ? "" : instruction)
+                : ContinuationManager.instance().continuationPrompt(previousRun, instruction);
+        return query(prompt);
     }
 
     /**
@@ -301,7 +333,29 @@ public class QueryEngine {
             traceIdEstablishedHere = true;
         }
         try {
-            return doQuery(userMessage, systemContext, taskSpan);
+            String response = doQuery(userMessage, systemContext, taskSpan);
+            if (interruptRequested) {
+                MemoryLifecycleRuntime.turnFailed(
+                        tenantId, currentWorkflowId(), currentSessionId(), agentId,
+                        currentRunId, userMessage, response,
+                        new IllegalStateException("user_interrupt"));
+            } else {
+                MemoryLifecycleRuntime.turnCompleted(
+                        tenantId, currentWorkflowId(), currentSessionId(), agentId,
+                        currentRunId, userMessage, response,
+                        snapshotTurnToolObservations());
+            }
+            return response;
+        } catch (RuntimeException e) {
+            MemoryLifecycleRuntime.turnFailed(
+                    tenantId, currentWorkflowId(), currentSessionId(), agentId,
+                    currentRunId, userMessage, null, e);
+            throw e;
+        } catch (Error e) {
+            MemoryLifecycleRuntime.turnFailed(
+                    tenantId, currentWorkflowId(), currentSessionId(), agentId,
+                    currentRunId, userMessage, null, e);
+            throw e;
         } finally {
             if (traceIdEstablishedHere) {
                 // 清理本 query 注入的 traceId，避免污染线程池后续复用
@@ -321,7 +375,23 @@ public class QueryEngine {
     private String doQuery(String userMessage, String systemContext, TraceSpan taskSpan) {
         // ── 标准化事件协议：RUN_STARTED ──
         currentRunId = UUID.randomUUID().toString();
+        currentTurnToolObservations = java.util.Collections.synchronizedList(new ArrayList<>());
         AiosEventSchema.emit(AiosEventSchema.runStarted(agentId, currentRunId, userMessage));
+        MemoryLifecycleRuntime.turnStarted(
+                tenantId, currentWorkflowId(), currentSessionId(), agentId,
+                currentRunId, userMessage);
+
+        // Recall before prompt construction.  The result is a bounded,
+        // low-trust external-memory block kept in ephemeral user context;
+        // it never becomes part of the system prompt or Action Gate.
+        final MemoryRecallHook.RecallResult memoryRecall = MemoryLifecycleRuntime.recall(
+                tenantId, currentWorkflowId(), currentSessionId(), agentId, userMessage,
+                currentRunId);
+        final ContextInjector contextInjector = ContextInjector.getInstance();
+        final String stableMemoryContext = contextInjector.ensureExternalMemoryBoundary(
+                memoryRecall.stableContext());
+        final String dynamicMemoryContext = contextInjector.ensureExternalMemoryBoundary(
+                memoryRecall.dynamicContext());
 
         // 将 run_id 关联到 TASK span，便于 Span 树与 AiosEvent 交叉查询
         if (taskSpan != null) {
@@ -367,8 +437,10 @@ public class QueryEngine {
         int reviewFixCycles = 0; // ReviewGate soft/hard 修复轮次计数
 
         for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            currentToolRound = round + 1;
             // ── 中断检查点：每轮开始时检查用户是否按了 Stop ──
             if (interruptRequested) {
+                ContinuationManager.instance().captureInterruption(currentRunId, "user_interrupt");
                 log.info("[QueryEngine] 用户中断请求 — 在第 {} 轮开始时退出", round + 1);
                 return fireOnReplyBestEffort("查询已被用户中断。");
             }
@@ -411,7 +483,8 @@ public class QueryEngine {
                 final String currentPrompt = fullPrompt;
                 // 【P1 ephemeral context】每轮重算 ephemeral 上下文（send-time only，永不持久化）。
                 // 当前 = systemContext（如 RAG 结果）；预留扩展点：未来可加入当前时间/git/todo/plan-mode 提醒。
-                final String currentEphemeral = buildEphemeralContext(systemContext);
+                final String currentEphemeral = buildEphemeralContext(
+                        systemContext, stableMemoryContext, dynamicMemoryContext);
                 // ── on_model_call 洋葱中间件 ── LEAF = sdk.thinkStream（含 delta 流式回调）
                 // on_reasoning 折叠进此 hook（D2）——代码库无独立 reasoning 阶段，
                 // sdk.thinkStream 返回的 token 流混合 reasoning 与 content。
@@ -772,6 +845,24 @@ public class QueryEngine {
         return finalOut;
     }
 
+    private String currentWorkflowId() {
+        DelegationToken token = DelegationGuard.currentToken();
+        return token != null ? token.workflowId() : null;
+    }
+
+    private String currentSessionId() {
+        String workflowId = currentWorkflowId();
+        return workflowId != null && !workflowId.isBlank() ? workflowId : agentId;
+    }
+
+    private List<ToolObservation> snapshotTurnToolObservations() {
+        List<ToolObservation> observations = currentTurnToolObservations;
+        if (observations == null || observations.isEmpty()) return List.of();
+        synchronized (observations) {
+            return List.copyOf(observations);
+        }
+    }
+
     /**
      * 带扩展点的查询 — 借鉴 Agent Zero 的 @extensible 机制。
      * <p>
@@ -902,9 +993,33 @@ public class QueryEngine {
      * @return ephemeral 上下文字符串；空串表示无 ephemeral 块
      */
     private String buildEphemeralContext(String systemContext) {
+        return buildEphemeralContext(systemContext, "");
+    }
+
+    /** Compose dynamic context without moving external memory into the system role. */
+    private String buildEphemeralContext(String systemContext, String externalMemoryContext) {
+        return buildEphemeralContext(systemContext, "", externalMemoryContext);
+    }
+
+    /**
+     * Compose cache-friendly ephemeral context. Stable L3 memory is kept as a
+     * distinct prefix, while L1/L2 recall and caller RAG remain dynamic. All
+     * sections are still sent through the low-trust ephemeral channel and
+     * never become system instructions.
+     */
+    private String buildEphemeralContext(String systemContext, String stableMemoryContext,
+                                         String dynamicMemoryContext) {
         StringBuilder sb = new StringBuilder();
+        if (stableMemoryContext != null && !stableMemoryContext.isBlank()) {
+            sb.append(stableMemoryContext);
+        }
         if (systemContext != null && !systemContext.isBlank()) {
+            if (!sb.isEmpty()) sb.append("\n\n");
             sb.append(systemContext);
+        }
+        if (dynamicMemoryContext != null && !dynamicMemoryContext.isBlank()) {
+            if (!sb.isEmpty()) sb.append("\n\n");
+            sb.append(dynamicMemoryContext);
         }
         // ── 未来扩展点（每轮重算的易变上下文）──
         // sb.append("\nCurrent time: ").append(LocalDateTime.now().format(...));
@@ -927,8 +1042,58 @@ public class QueryEngine {
      * 查找顺序：先从当前引擎的 availableTools（含扩展工具）查找，
      * 再回退到全局 ToolRegistry 查找。
      */
+    /**
+     * Tool execution wrapper.  Keeping this outside the ActionGate-heavy
+     * implementation guarantees that every serial and parallel invocation is
+     * checkpointed, including denials and failures.
+     */
     @SuppressWarnings("unchecked")
     private String executeTool(ToolCall tc) {
+        String result;
+        lastToolSuccess.remove();
+        try {
+            result = executeToolInternal(tc);
+        } catch (Exception e) {
+            result = "工具执行错误: " + e.getMessage();
+        }
+        boolean readOnly = false;
+        String target = "";
+        String actionType = "execute";
+        String digest = "";
+        try {
+            Optional<Tool<ToolInput>> opt = availableTools.stream()
+                    .filter(t -> t.name().equals(tc.toolName))
+                    .map(t -> (Tool<ToolInput>) t)
+                    .findFirst();
+            if (opt.isEmpty()) opt = ToolRegistry.instance().get(tc.toolName);
+            if (opt.isPresent()) {
+                Tool<ToolInput> tool = opt.get();
+                readOnly = isReadOnlyAction(tool);
+                actionType = readOnly ? "read" : "execute";
+                try {
+                    ToolInput input = parseInput(tc.paramsJson(), tool);
+                    target = PermissionChecker.extractTarget(input);
+                    DelegationToken token = DelegationGuard.currentToken();
+                    digest = ActionEnvelope.forTool(tenantId, currentRunId, currentRunId,
+                            TraceContext.getCurrentTraceId(), agentId,
+                            token == null ? null : token.parentAgentId(),
+                            token == null ? null : token.tokenId(), null, 0,
+                            tc.toolName, actionType, target, input.toJson()).actionDigest();
+                } catch (Exception ignored) { }
+            }
+        } catch (Exception ignored) { }
+        Boolean status = lastToolSuccess.get();
+        boolean success = status != null && status;
+        lastToolSuccess.remove();
+        currentTurnToolObservations.add(new ToolObservation(tc.toolName, result));
+        ContinuationManager.instance().recordToolResult(currentRunId, tc.toolName, tc.paramsJson,
+                target, actionType, digest, result, success, readOnly, currentToolRound);
+        return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private String executeToolInternal(ToolCall tc) {
+        lastToolSuccess.set(false);
         // ── Tracing Span：FUNCTION 级，覆盖单次工具调用 ──
         TraceSpan toolSpan = TracingManager.instance().startSpan("tool." + tc.toolName, TraceSpan.SpanType.FUNCTION);
         long toolStartMs = System.currentTimeMillis();
@@ -961,6 +1126,11 @@ public class QueryEngine {
         }
 
         Tool<ToolInput> tool = opt.get();
+        String delegationDenial = DelegationGuard.checkToolAllowed(tc.toolName());
+        if (delegationDenial != null) {
+            log.warn("[QueryEngine] delegation token denied tool '{}': {}", tc.toolName(), delegationDenial);
+            return "权限被委托令牌拒绝: " + delegationDenial;
+        }
         // 构造 ToolContext 携带继承的 tenantId（Gap B）— 使 PermissionChecker.checkTenantOwnership
         // 对子 agent 也生效。backend=null 保持懒加载（LocalBackend.instance()）。
         ToolContext context = new ToolContext(agentId, sdk, workingDir, null, this.tenantId);
@@ -975,62 +1145,30 @@ public class QueryEngine {
         try {
             ToolInput input = parseInput(tc.paramsJson(), tool);
 
-            // ── 权限检查 ──
-            PermissionDecision decision = permissionChecker.checkPermission(tool, input, context);
-            if (decision.isDenied()) {
-                log.warn("[QueryEngine] 工具 '{}' 被拒绝: {}", tc.toolName, decision.message());
-                return "权限被拒绝: " + decision.message();
+            // ── 统一 Action Gate：身份绑定 → 权限/审批 → digest 边界 ──
+            String target = PermissionChecker.extractTarget(input);
+            ActionEnvelope action = ActionEnvelope.forTool(
+                    tenantId,
+                    currentRunId,
+                    currentRunId,
+                    TraceContext.getCurrentTraceId(),
+                    agentId,
+                    DelegationGuard.currentToken() == null ? null : DelegationGuard.currentToken().parentAgentId(),
+                    DelegationGuard.currentToken() == null ? null : DelegationGuard.currentToken().tokenId(),
+                    null,
+                    0,
+                    tc.toolName,
+                    isReadOnlyAction(tool) ? "read" : "execute",
+                    target,
+                    input.toJson());
+            ActionGate.GateResult gate = ActionGate.instance().authorize(
+                    action, tool, input, context, permissionChecker);
+            if (gate.denied()) {
+                log.warn("[QueryEngine] Action Gate 拒绝工具 '{}': {}", tc.toolName, gate.reason());
+                return "权限被拒绝: " + gate.reason();
             }
-            if (decision.needsPrompt()) {
-                // ASK 决策 → 经 ToolPermissionChannel 询问人类（借鉴 OpenWorker standing scoped approvals）
-                // 无前端订阅时 fallback ALLOW_ONCE（零回归，行为同原「Agent 模式下自动允许」）
-                String target = PermissionChecker.extractTarget(input);
-
-                // ── LIM 攻击面闭合：spawn 树上下文（Gap C）──
-                // 传统 cgroup/capability 模型未考虑动态 spawn 的子 agent 经子链请求升级。
-                // 这里采集请求者在 spawn 树的位置，供深度感知策略预判 + ASK payload 携带。
-                int depth = DelegationGuard.currentDepth();
-                Set<String> chain = DelegationGuard.currentChain();
-                boolean isSubAgent = depth > 0 || !chain.isEmpty();
-
-                // ── 深度感知升级策略（Gap C-c）：深层子 agent 对破坏性工具直接 auto-deny ──
-                // 不询问人类，避免社会工程骗过审批；走 recordDenial 三写（SemanticEtw+UnifiedAuditLog+Ledger）
-                EscalationPolicy.Verdict escalationVerdict = EscalationPolicy.evaluate(depth, tc.toolName);
-                if (escalationVerdict == EscalationPolicy.Verdict.DENY_DEPTH) {
-                    PermissionDecision denyDepth = PermissionDecision.deny(
-                            "Escalation denied: destructive tool '" + tc.toolName
-                                    + "' at spawn depth " + depth
-                                    + " (>= AIOS_MAX_ESCALATION_DEPTH="
-                                    + EscalationPolicy.maxEscalationDepth() + ")",
-                            "escalation_depth",
-                            List.of());
-                    permissionChecker.recordDenial(tc.toolName, input, denyDepth, context);   // 三写审计
-                    UnifiedAuditLog.append(UnifiedAuditLog.LAYER_PERMISSION,
-                            "ESCALATION_DENIED_DEPTH", agentId,
-                            tc.toolName + ":" + target,
-                            "depth=" + depth + " chain=" + chain + " tool=" + tc.toolName);
-                    log.warn("[QueryEngine] 深度升级被拒: tool={}, depth={}, chain={}",
-                            tc.toolName, depth, chain);
-                    return "权限被拒绝: " + denyDepth.message();
-                }
-
-                // ── ASK 审计（Gap C-d）：记录升级请求 + spawn 树上下文到统一审计链 ──
-                UnifiedAuditLog.append(UnifiedAuditLog.LAYER_PERMISSION, "ASK", agentId,
-                        tc.toolName + ":" + target,
-                        decision.message() + " depth=" + depth + " chain=" + chain);
-
-                ToolPermissionChannel.ApprovalResponse resp = ToolPermissionChannel.requestApproval(
-                        agentId, tc.toolName, target, decision.message(),
-                        depth, List.copyOf(chain), isSubAgent);
-                switch (resp) {
-                    case ALWAYS_TARGET -> permissionChecker.grantTargetApproval(tc.toolName, target);
-                    case DENY -> {
-                        log.warn("[QueryEngine] 工具 '{}' 被用户拒绝: {}", tc.toolName, decision.message());
-                        return "权限被拒绝: " + decision.message();
-                    }
-                    case ALLOW_ONCE -> log.info("[QueryEngine] 工具 '{}' 获用户本次放行 (depth={})",
-                            tc.toolName, depth);
-                }
+            if (!ActionGate.instance().validateDigest(action, input.toJson())) {
+                return "权限被拒绝: action_digest_invalid";
             }
 
             // ── on_acting 洋葱中间件（核心边界修复）──
@@ -1045,6 +1183,7 @@ public class QueryEngine {
                     () -> tool.call(input, context)   // LEAF — 异常向上传播（D7 LEAF 不 catch）
             );
             long duration = System.currentTimeMillis() - startTime;
+            ActionGate.instance().recordExecution(action, output, duration);
 
             // ── 遥测记录（洋葱外）── duration 含洋葱全程（PRE/POST hook + leaf），与原语义一致
             TelemetryService.instance().recordToolUsage(tc.toolName, duration);
@@ -1059,6 +1198,7 @@ public class QueryEngine {
                 log.warn("[QueryEngine] ToolGuardrail 触发 (tool={}): {}",
                         tc.toolName, toolGuardrailResult.outputInfo());
                 if (toolGuardrailResult.action() == Guardrail.GuardrailAction.RAISE_EXCEPTION) {
+                    lastToolSuccess.set(false);
                     return "工具输出被护栏拦截: " + toolGuardrailResult.outputInfo();
                 }
                 // REJECT_CONTENT: 替换为拦截信息，阻止敏感内容流入对话历史
@@ -1074,6 +1214,7 @@ public class QueryEngine {
             // ── 收敛检测：记录文件写入（best-effort，异常不阻塞工具执行）──
             recordWriteForConvergence(tc.toolName, input);
 
+            lastToolSuccess.set(output.success());
             return outputText;
         } catch (Exception e) {
             if (toolSpan != null) {
@@ -1111,6 +1252,19 @@ public class QueryEngine {
         return ToolRegistry.instance().get(toolName)
                 .map(Tool::readOnly)
                 .orElse(false);
+    }
+
+    /**
+     * 工具元数据缺失时仍识别内核只读工具。部分扩展/测试工具没有覆写
+     * {@link Tool#readOnly()}，但其稳定的工具名仍可安全归类为 read。
+     */
+    private static boolean isReadOnlyAction(Tool<?> tool) {
+        if (tool == null) return false;
+        if (tool.readOnly()) return true;
+        return switch (tool.name()) {
+            case "file_read", "grep", "glob", "web_fetch", "web_search", "memory_read" -> true;
+            default -> false;
+        };
     }
 
     /**
@@ -1256,7 +1410,12 @@ public class QueryEngine {
                     extractJsonString(paramsJson, "prompt"),
                     extractJsonString(paramsJson, "subagent_type", ""),
                     extractJsonBool(paramsJson, "run_in_background", false),
-                    extractJsonString(paramsJson, "description", ""));
+                    extractJsonString(paramsJson, "description", ""),
+                    extractJsonStringSet(paramsJson, "capabilities"),
+                    extractJsonLong(paramsJson, "delegation_ttl_ms", 0L),
+                    extractJsonInt(paramsJson, "delegation_max_calls", 0),
+                    extractJsonStringSet(paramsJson, "memory_assets"),
+                    extractJsonString(paramsJson, "memory_role", ""));
             case "todo_write" -> new com.ouisani.aios.user.apps.omnifactory.tools.TodoWriteTool.Input(List.of()); // 简化：完整解析需 Jackson
             // ask_user_question 已删除 — 阻塞式人类 I/O 违反异步 IPC 原则
             // 智能体如需与人类交互，必须通过 send_message 发送 type:user_prompt 到 EventBus UI 频道
@@ -1341,6 +1500,44 @@ public class QueryEngine {
         } catch (NumberFormatException e) {
             return defaultVal;
         }
+    }
+
+    private static long extractJsonLong(String json, String key, long defaultVal) {
+        String value = extractJsonString(json, key, "");
+        if (!value.isBlank()) {
+            try { return Long.parseLong(value); } catch (NumberFormatException ignored) { }
+        }
+        String searchKey = "\"" + key + "\"";
+        int keyIdx = json.indexOf(searchKey);
+        if (keyIdx < 0) return defaultVal;
+        int colonIdx = json.indexOf(':', keyIdx + searchKey.length());
+        if (colonIdx < 0) return defaultVal;
+        int start = colonIdx + 1;
+        while (start < json.length() && Character.isWhitespace(json.charAt(start))) start++;
+        int end = start;
+        while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '-')) end++;
+        if (end == start) return defaultVal;
+        try { return Long.parseLong(json.substring(start, end)); } catch (NumberFormatException e) { return defaultVal; }
+    }
+
+    private static Set<String> extractJsonStringSet(String json, String key) {
+        String searchKey = "\"" + key + "\"";
+        int keyIdx = json.indexOf(searchKey);
+        if (keyIdx < 0) return Set.of();
+        int colonIdx = json.indexOf(':', keyIdx + searchKey.length());
+        if (colonIdx < 0) return Set.of();
+        int start = json.indexOf('[', colonIdx + 1);
+        int end = start < 0 ? -1 : json.indexOf(']', start + 1);
+        if (start < 0 || end < 0) return Set.of();
+        String body = json.substring(start + 1, end);
+        Set<String> values = new LinkedHashSet<>();
+        for (String item : body.split(",")) {
+            String value = item.trim();
+            if (value.startsWith("\"") && value.endsWith("\"") && value.length() >= 2) {
+                values.add(value.substring(1, value.length() - 1).replace("\\\"", "\""));
+            }
+        }
+        return Set.copyOf(values);
     }
 
     private static boolean extractJsonBool(String json, String key, boolean defaultVal) {

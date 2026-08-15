@@ -26,6 +26,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Scanner;
 
 /**
@@ -392,7 +393,20 @@ public class AiosShell extends AbstractAgent {
 
         while (true) {
             System.out.print(ANSI_YELLOW + "aios> " + ANSI_RESET);
-            String input = scanner.nextLine().trim();
+            final String input;
+            try {
+                if (!scanner.hasNextLine()) {
+                    System.out.println("\nstdin closed; stopping AIOS.");
+                    break;
+                }
+                input = scanner.nextLine().trim();
+            } catch (NoSuchElementException | IllegalStateException e) {
+                // EOF/console interrupt should follow the same shutdown path
+                // as the explicit `exit` command instead of leaking an
+                // uncaught exception from the entrypoint.
+                System.out.println("\nconsole closed; stopping AIOS.");
+                break;
+            }
 
             if (input.equalsIgnoreCase("exit")) {
                 System.out.println("正在执行系统停机... 再见。");
@@ -442,6 +456,19 @@ public class AiosShell extends AbstractAgent {
             }
         }
         scanner.close();
+
+        // The shell owns the bootstrap services in this standalone entrypoint.
+        // Stop them on both `exit` and stdin EOF so a CLI smoke test (and a
+        // real operator session) can terminate without leaving Jetty or
+        // scheduler threads alive.
+        try {
+            com.ouisani.aios.core.lifecycle.HeartbeatScheduler.instance().stop();
+            com.ouisani.aios.core.telemetry.SystemMonitorDaemon.getInstance().stop();
+            syscallServer.stop();
+            scheduler.shutdown();
+        } catch (Exception e) {
+            System.err.println("AIOS shutdown incomplete: " + e.getMessage());
+        }
     }
 
     private static Map<String, String> loadDotEnv(Path dotEnvPath) {

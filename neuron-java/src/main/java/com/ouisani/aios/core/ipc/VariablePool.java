@@ -217,6 +217,11 @@ public class VariablePool {
         return entry.value;
     }
 
+    /** Remove a cached value when a continuation explicitly invalidates a step. */
+    public synchronized void cacheRemove(String key) {
+        if (key != null) lruCache.remove(key);
+    }
+
     /**
      * 类型安全的缓存读取。
      */

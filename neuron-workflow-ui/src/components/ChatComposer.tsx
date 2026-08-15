@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from "react";
 import { ArrowUp, Loader2, Sparkles, MessageSquare, Workflow } from "lucide-react";
 import { useSessionStore } from "@/store/sessionStore";
-import { useWorkflowStore } from "@/store/workflowStore";
+import { useWorkflowStore, type AgentNodeData } from "@/store/workflowStore";
 import { streamChat, type ChatTurnMessage } from "@/lib/chatStream";
 import SkillRolePopover from "@/components/SkillRolePopover";
 import { cn } from "@/lib/utils";
+import { useMissionStore } from "@/store/missionStore";
 
 // ════════════════════════════════════════════════════════════════
 //  ChatComposer —— 常驻底部输入条，顶部 Chat/Workflow 模式开关
@@ -39,6 +40,8 @@ export default function ChatComposer({ mode, onModeChange }: ChatComposerProps) 
   const enabledSkills = useWorkflowStore((s) => s.enabledSkills);
 
   const autoCompile = useWorkflowStore((s) => s.autoCompile);
+  const setMissionId = useWorkflowStore((s) => s.setMissionId);
+  const createMission = useMissionStore((s) => s.createMission);
 
   const disabled = !!streamingMessageId || busy;
   const canSend = idea.trim().length > 0 && !disabled;
@@ -57,7 +60,6 @@ export default function ChatComposer({ mode, onModeChange }: ChatComposerProps) 
   }, []);
   useEffect(() => {
     abortRef.current?.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId, mode]);
 
   /** 确保有 active session，返回 sid；首条消息同步标题 */
@@ -125,8 +127,21 @@ export default function ChatComposer({ mode, onModeChange }: ChatComposerProps) 
   const handleSendWorkflow = async (text: string, sid: string) => {
     addMessage(sid, { role: "user", kind: "prompt", text });
 
+    // Start the continuity record before compiling. The eventual deploy
+    // carries this ID in WorkflowManifest so the run attaches to the same
+    // user goal instead of creating a disconnected run-only mission.
+    const mission = await createMission(text);
+    setMissionId(mission?.missionId ?? null);
+
     const ok = await autoCompile(text);
     if (!ok) {
+      if (mission) {
+        await useMissionStore.getState().updateMission(mission.missionId, {
+          status: "BLOCKED",
+          currentState: "Topology planning failed",
+          nextStep: "Retry the workflow plan",
+        });
+      }
       addMessage(sid, {
         role: "agent",
         kind: "error",
@@ -135,10 +150,18 @@ export default function ChatComposer({ mode, onModeChange }: ChatComposerProps) 
       return;
     }
 
+    if (mission) {
+      await useMissionStore.getState().updateMission(mission.missionId, {
+        status: "PLANNED",
+        currentState: "Workflow plan is ready for review",
+        nextStep: "Review the topology and deploy",
+      });
+    }
+
     const { nodes, edges } = useWorkflowStore.getState();
     const labels = nodes
       .map((n) => {
-        const d = n.data as any;
+        const d = n.data as AgentNodeData;
         return `${n.id}(${d?.role || "?"})`;
       })
       .join(" · ");
@@ -148,7 +171,7 @@ export default function ChatComposer({ mode, onModeChange }: ChatComposerProps) 
       text: `已规划 ${nodes.length} 个节点：${labels}。确认无误后点击「部署到内核」运行。`,
       meta: {
         topology: {
-          nodes: nodes.map((n) => ({ id: n.id, role: (n.data as any)?.role })),
+          nodes: nodes.map((n) => ({ id: n.id, role: (n.data as AgentNodeData)?.role })),
           edges: edges.map((e) => ({ source: e.source, target: e.target })),
         },
         status: "pending_deploy",

@@ -1,0 +1,20 @@
+{
+  "run_id": "full_n100_glm52",
+  "run_at_utc": "2026-08-09T05:16:03.189570+00:00",
+  "framework": "Reflexion",
+  "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+  "n_per_variant": 100,
+  "temperature": 0.7,
+  "status": "complete",
+  "models": [
+    {
+      "model": "glm-5.2",
+      "protocol": "chat_completions",
+      "returncode": 0,
+      "ok": true,
+      "output_dir": "evaluation\\results\\emse_reflexion\\full_n100_glm52\\glm-5.2",
+      "log": "evaluation\\results\\emse_reflexion\\full_n100_glm52\\glm-5.2.log"
+    }
+  ],
+  "completed_at_utc": "2026-08-09T06:33:09.307391+00:00"
+}

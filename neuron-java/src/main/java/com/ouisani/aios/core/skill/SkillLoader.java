@@ -166,10 +166,12 @@ public class SkillLoader {
         loadClasspathSkills(skills);
 
         // 3. USER — ~/.aios/skills 优先，回退 ~/.claude/skills
+        // Controlled managed copies are loaded before user-local skills so an
+        // approved install is effective without shadowing project/bundled skills.
+        loadSkillsFromDir(skills, Path.of(AiosPaths.aiosHome(), "var", "skills", "managed"), SkillSource.MANAGED);
         String userHome = System.getProperty("user.home");
         loadSkillsFromDir(skills, Path.of(userHome, ".aios", "skills"), SkillSource.USER);
         loadSkillsFromDir(skills, Path.of(userHome, ".claude", "skills"), SkillSource.USER);
-
         // 4. LEARNED — /var/db/memory/learned-skills（懒加载：仅索引 frontmatter，body 首次使用才读）
         loadLearnedSkills(skills);
 

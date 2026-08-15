@@ -2,6 +2,7 @@ package com.ouisani.aios.core.skill;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
 
@@ -120,8 +121,25 @@ public record SkillCap(
     /** 解析 URL，非法/空 → null（best-effort，不抛）。仅允许 http/https/file scheme。 */
     private static URI parseUriBestEffort(String raw) {
         if (raw == null || raw.isBlank()) return null;
+        String value = raw.trim();
+
+        // A common Windows frontmatter form is "file://C:\\path\\skill.py".
+        // It is not RFC-compliant (the backslashes make URI.create reject the
+        // authority), but it is an unambiguous local path. Normalize it before
+        // falling back to the strict URI parser used for network URLs.
+        if (value.regionMatches(true, 0, "file://", 0, "file://".length())) {
+            String candidate = value.substring("file://".length());
+            if (candidate.length() >= 2 && Character.isLetter(candidate.charAt(0))
+                    && candidate.charAt(1) == ':') {
+                try {
+                    return Path.of(candidate).toUri();
+                } catch (RuntimeException ignored) {
+                    return null;
+                }
+            }
+        }
         try {
-            URI u = URI.create(raw.trim());
+            URI u = URI.create(value);
             String scheme = u.getScheme();
             if (scheme == null) return null;
             scheme = scheme.toLowerCase();

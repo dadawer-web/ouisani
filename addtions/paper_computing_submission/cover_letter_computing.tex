@@ -1,0 +1,62 @@
+\documentclass[11pt]{letter}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{lmodern}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\setlength{\emergencystretch}{2em}
+
+\signature{Mingyuan Xie\\Zhengxun Wu\\
+Qingdao University of Technology\\
+Corresponding authors\\
+\href{mailto:jhj208436@gmail.com}{jhj208436@gmail.com}\\
+\href{mailto:2276815088@qq.com}{2276815088@qq.com}}
+\address{Qingdao University of Technology\\Qingdao, Shandong, China}
+\date{10 August 2026}
+
+\begin{document}
+
+\begin{letter}{Editor-in-Chief\\\emph{Computing}}
+
+\opening{Dear Editor-in-Chief,}
+
+We submit the manuscript entitled
+\emph{``Resource-Aware Permission Governance for Dependable Multi-Tenant LLM
+Agent Runtimes''} for consideration as a regular research article in
+\emph{Computing}.
+
+The manuscript addresses a systems dependability problem at the intersection
+of resource admission and permission governance. Under hostile resource
+pressure, a shared policy executor can miss its decision deadline; if the
+runtime fails open, this availability failure becomes an unsafe admission. We
+present Neuron, a Java runtime architecture that reserves permission
+capacity and couples a resource-pressure signal to the escalation policy.
+The central contribution is the experimentally separable distinction between
+capacity isolation and cross-layer coupling; identity propagation,
+privilege non-increase, and correlated auditing are supporting mechanisms.
+
+The evaluation uses production Java~21 token-bucket and escalation-policy
+code, four predeclared architectures, independent JVM runs on Windows and an
+Ubuntu/KVM VPS, deadline and attacker-pressure sweeps, capacity sensitivity,
+process-separated permission-service fault injection, API-derived trace
+replay, and a post-selection holdout on six previously unused workload
+profiles. The frozen data and one-click replication package contain the raw
+JSONL observations, environment records, analysis scripts, generated values,
+and source code. The process-separated VPS experiment is explicitly a
+same-host loopback study; we do not claim WAN or multi-node behavior.
+
+We believe the manuscript fits \emph{Computing}'s interest in dependable,
+adaptive, and trustworthy computing systems because it provides a systematic
+runtime foundation and a controlled architectural comparison rather than a
+feature-only security prototype. The work is original, is not under
+consideration elsewhere, and has been approved by all authors. Both authors
+are corresponding authors. We have no competing interests and received no
+funding for this study.
+
+Thank you for your consideration.
+
+\closing{Sincerely,}
+
+\end{letter}
+\end{document}

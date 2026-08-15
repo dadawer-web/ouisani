@@ -3,6 +3,9 @@ package com.ouisani.aios.core.tool;
 import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.cgroup.CgroupManager;
 import com.ouisani.aios.core.cgroup.CgroupNode;
+import com.ouisani.aios.core.ipc.MemoryAccessContext;
+import com.ouisani.aios.core.memory.MemoryAssetLoadout;
+import com.ouisani.aios.core.memory.MemoryAssetRegistry;
 import com.ouisani.aios.core.permission.PermissionProfile;
 import com.ouisani.aios.core.permission.SpawnPrivilegeContext;
 import com.ouisani.aios.core.task.TaskScheduler;
@@ -10,6 +13,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import java.util.Set;
+import java.util.LinkedHashSet;
+import java.util.Locale;
 
 /**
  * Agent 工具 — 对标 Claude Code 的 AgentTool。
@@ -47,21 +53,60 @@ public class AgentTool implements Tool<AgentTool.Input> {
             String prompt,
             String blueprintPath,
             boolean runInBackground,
-            String description
+            String description,
+            Set<String> requestedCapabilities,
+            long delegationTtlMs,
+            int delegationMaxCalls,
+            Set<String> requestedMemoryAssets,
+            String memoryRole
     ) implements ToolInput {
         public Input {
             if (prompt == null || prompt.isBlank()) throw new IllegalArgumentException("prompt required");
             if (blueprintPath == null) blueprintPath = "";
             if (description == null) description = "";
+            requestedCapabilities = requestedCapabilities == null ? Set.of() : Set.copyOf(requestedCapabilities);
+            requestedMemoryAssets = requestedMemoryAssets == null ? Set.of() : Set.copyOf(requestedMemoryAssets);
+            if (memoryRole == null) memoryRole = "";
+            if (delegationTtlMs < 0) throw new IllegalArgumentException("delegationTtlMs must be >= 0");
+            if (delegationMaxCalls < 0) throw new IllegalArgumentException("delegationMaxCalls must be >= 0");
         }
 
-        public Input(String prompt) { this(prompt, "", false, ""); }
+        public Input(String prompt) { this(prompt, "", false, "", Set.of(), 0L, 0, Set.of(), ""); }
+
+        public Input(String prompt, String blueprintPath, boolean runInBackground, String description) {
+            this(prompt, blueprintPath, runInBackground, description, Set.of(), 0L, 0, Set.of(), "");
+        }
+
+        /** Source-compatible constructor with the pre-loadout fields. */
+        public Input(String prompt, String blueprintPath, boolean runInBackground,
+                     String description, Set<String> requestedCapabilities,
+                     long delegationTtlMs, int delegationMaxCalls) {
+            this(prompt, blueprintPath, runInBackground, description, requestedCapabilities,
+                    delegationTtlMs, delegationMaxCalls, Set.of(), "");
+        }
+
+        public Input(String prompt, String blueprintPath, boolean runInBackground,
+                     String description, Set<String> requestedCapabilities,
+                     long delegationTtlMs, int delegationMaxCalls,
+                     Set<String> requestedMemoryAssets) {
+            this(prompt, blueprintPath, runInBackground, description, requestedCapabilities,
+                    delegationTtlMs, delegationMaxCalls, requestedMemoryAssets, "");
+        }
 
         @Override public String toJson() {
             return "{\"prompt\":\"" + prompt.replace("\"", "\\\"")
                     + "\",\"blueprint_path\":\"" + blueprintPath.replace("\"", "\\\"")
                     + "\",\"run_in_background\":" + runInBackground
-                    + ",\"description\":\"" + description.replace("\"", "\\\"") + "\"}";
+                    + ",\"description\":\"" + description.replace("\"", "\\\"") + "\""
+                    + ",\"capabilities\":[" + requestedCapabilities.stream()
+                    .map(value -> "\"" + value.replace("\"", "\\\"") + "\"")
+                    .reduce((a, b) -> a + "," + b).orElse("") + "]"
+                    + ",\"delegation_ttl_ms\":" + delegationTtlMs
+                    + ",\"delegation_max_calls\":" + delegationMaxCalls
+                    + ",\"memory_assets\":[" + requestedMemoryAssets.stream()
+                    .map(value -> "\"" + value.replace("\"", "\\\"") + "\"")
+                    .reduce((a, b) -> a + "," + b).orElse("") + "]"
+                    + ",\"memory_role\":\"" + memoryRole.replace("\"", "\\\"") + "\"}";
         }
     }
 
@@ -76,7 +121,12 @@ public class AgentTool implements Tool<AgentTool.Input> {
                 + "\"prompt\":{\"type\":\"string\",\"description\":\"The task description for the sub-agent\"},"
                 + "\"blueprint_path\":{\"type\":\"string\",\"description\":\"VFS blueprint path (e.g. /factory/blueprints/spider.json) or Docker image name. If empty, a generic agent is spawned.\"},"
                 + "\"run_in_background\":{\"type\":\"boolean\",\"description\":\"Run asynchronously (default false)\"},"
-                + "\"description\":{\"type\":\"string\",\"description\":\"Short description of the task\"}"
+                + "\"description\":{\"type\":\"string\",\"description\":\"Short description of the task\"},"
+                + "\"capabilities\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Optional child capability subset, e.g. tool:file_read\"},"
+                + "\"delegation_ttl_ms\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"Delegation lifetime in milliseconds (0 uses default)\"},"
+                + "\"delegation_max_calls\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"Maximum child tool calls (0 uses default)\"},"
+                + "\"memory_assets\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Exact Memory Asset ids to mount in the child\"},"
+                + "\"memory_role\":{\"type\":\"string\",\"enum\":[\"researcher\",\"writer\",\"reviewer\"],\"description\":\"Role preset for a bounded memory loadout\"}"
                 + "},\"required\":[\"prompt\"]}";
     }
 
@@ -89,6 +139,49 @@ public class AgentTool implements Tool<AgentTool.Input> {
         String parentAgentId = context.agentId() != null ? context.agentId() : "unknown_parent";
 
         int currentDepth = DelegationGuard.currentDepth();
+
+        // Profile 约束必须在签发令牌前应用：只读父 Agent 不能请求 write/exec 子能力。
+        Set<String> delegatedCapabilities;
+        boolean explicitMemoryLoadout = !input.requestedMemoryAssets().isEmpty()
+                || !input.memoryRole().isBlank();
+        Set<String> delegatedMemoryAssets = null;
+        if (explicitMemoryLoadout) {
+            try {
+                DelegationToken parentToken = DelegationGuard.currentToken();
+                MemoryAccessContext parentAccess = MemoryAccessContext.of(parentAgentId,
+                        parentToken != null && parentToken.tenantId() != null
+                                ? parentToken.tenantId() : context.tenantId(),
+                        parentToken != null && parentToken.workflowId() != null
+                                ? parentToken.workflowId() : null,
+                        context.teamId(), parentToken, context.userId(), context.roles());
+                MemoryAssetRegistry registry = MemoryAssetRegistry.global();
+                MemoryAssetLoadout loadout = input.memoryRole().isBlank()
+                        ? registry.createLoadout(parentAgentId, agentId,
+                        input.requestedMemoryAssets(), parentAccess)
+                        : registry.createRoleLoadout(parentAgentId, agentId,
+                        input.memoryRole(), parentAccess);
+                if (loadout.hasDeniedAssets()) {
+                    return ToolOutput.fail("Memory Asset loadout rejected: " + loadout.denialReasons());
+                }
+                delegatedMemoryAssets = loadout.assetIds();
+            } catch (RuntimeException e) {
+                return ToolOutput.fail("Memory Asset loadout rejected: " + e.getMessage());
+            }
+        }
+        try {
+            delegatedCapabilities = effectiveCapabilities(input.requestedCapabilities(),
+                    SpawnPrivilegeContext.current());
+            if (explicitMemoryLoadout) {
+                // Mounting an asset is still bounded by the parent capability
+                // token, but a successful loadout must carry the read-side
+                // memory capability into the child execution context.
+                Set<String> withMemoryRead = new LinkedHashSet<>(delegatedCapabilities);
+                withMemoryRead.add("memory:read:memory");
+                delegatedCapabilities = Set.copyOf(withMemoryRead);
+            }
+        } catch (IllegalArgumentException e) {
+            return ToolOutput.fail("委托令牌拒绝: " + e.getMessage());
+        }
 
         // ── 派生预算预检查（深度 + 广度 + 全局总数，借鉴 1 优雅降级）──
         // 三维超限都返回原因字符串，AgentTool 据此降级为 in-context（不拒绝、不 spawn）。
@@ -114,7 +207,15 @@ public class AgentTool implements Tool<AgentTool.Input> {
         // 统一降级为 in-context（借鉴 1 精神：任何无法派生的情况都返回 ok 让母体自己干）。
         DelegationGuard.DelegationContext delegationCtx;
         try {
-            delegationCtx = DelegationGuard.enter(parentAgentId, agentId);
+            PermissionProfile parentProfile = SpawnPrivilegeContext.current();
+            Set<String> parentCapabilities = parentProfile == null ? null
+                    : effectiveCapabilities(Set.of(), parentProfile);
+            delegationCtx = delegatedMemoryAssets == null
+                    ? DelegationGuard.enter(parentAgentId, agentId,
+                    delegatedCapabilities, input.delegationTtlMs(), input.delegationMaxCalls(), parentCapabilities)
+                    : DelegationGuard.enter(parentAgentId, agentId, delegatedCapabilities,
+                    delegatedMemoryAssets, input.delegationTtlMs(), input.delegationMaxCalls(),
+                    parentCapabilities, context.tenantId());
         } catch (DelegationGuard.DelegationException e) {
             log.warn("[AgentTool] enter 兜底拒绝，降级为 in-context: {}", e.getMessage());
             return degradeToInContext(input, currentDepth, "enter-guard");
@@ -133,7 +234,7 @@ public class AgentTool implements Tool<AgentTool.Input> {
         if (input.runInBackground()) {
             // 异步执行 — 强制沙箱隔离
             TaskScheduler.SandboxAgentTask task = TaskScheduler.instance().submitAgentTask(
-                    effectivePrompt, agentId, context.workingDir(), context.sdk());
+                    effectivePrompt, agentId, context.workingDir(), context.sdk(), delegationCtx);
 
             return ToolOutput.ok("Agent launched in SANDBOX. Task ID: " + task.taskId()
                     + "\nBlueprint: " + (input.blueprintPath().isEmpty() ? "(generic)" : input.blueprintPath())
@@ -231,6 +332,58 @@ public class AgentTool implements Tool<AgentTool.Input> {
                 + "请勿再次调用 agent 工具，直接使用 bash/file_write/web_search 等工具"
                 + "在当前上下文内完成以下子任务：\n\n"
                 + input.prompt());
+    }
+
+    /** Bound requested child capabilities by the effective parent PermissionProfile. */
+    private static Set<String> effectiveCapabilities(Set<String> requested, PermissionProfile profile) {
+        Set<String> normalizedRequested = requested == null ? Set.of() : Set.copyOf(requested);
+        if (profile == null) return normalizedRequested;
+
+        Set<String> bounded = new LinkedHashSet<>();
+        if (profile.mode() == com.ouisani.aios.core.permission.PermissionMode.PLAN) {
+            ToolRegistry.instance().all().stream()
+                    .filter(Tool::readOnly)
+                    .forEach(tool -> bounded.add("tool:" + tool.name().toLowerCase(Locale.ROOT)));
+        }
+        profile.allowRules().forEach(rule -> {
+            if (rule.toolName() != null && (rule.ruleContent() == null || rule.ruleContent().isBlank())) {
+                bounded.add("tool:" + rule.toolName().toLowerCase(Locale.ROOT));
+            }
+        });
+
+        // A profile that has explicit rules but no allowlist must not silently
+        // turn into an unrestricted delegation root.
+        if (bounded.isEmpty() && (!profile.denyRules().isEmpty() || !profile.askRules().isEmpty())) {
+            ToolRegistry.instance().all().stream()
+                    .filter(Tool::readOnly)
+                    .forEach(tool -> bounded.add("tool:" + tool.name().toLowerCase(Locale.ROOT)));
+        }
+
+        if (!normalizedRequested.isEmpty()) {
+            for (String capability : normalizedRequested) {
+                if (!profileAllowsCapability(capability, profile, bounded)) {
+                    throw new IllegalArgumentException("parent permission profile does not allow " + capability);
+                }
+            }
+            return normalizedRequested;
+        }
+        return bounded.isEmpty() ? normalizedRequested : Set.copyOf(bounded);
+    }
+
+    private static boolean profileAllowsCapability(String capability, PermissionProfile profile,
+                                                   Set<String> bounded) {
+        String value = capability == null ? "" : capability.toLowerCase(Locale.ROOT).trim();
+        String tool = value.startsWith("tool:") ? value.substring(5) : value;
+        if (!bounded.isEmpty()) {
+            return bounded.contains("tool:" + tool) || bounded.contains("*");
+        }
+        for (var rule : profile.denyRules()) {
+            String name = rule.toolName() == null ? "" : rule.toolName().toLowerCase(Locale.ROOT);
+            if ("*".equals(name) || name.equals(tool) || name.replaceAll("[^a-z0-9]", "").equals(tool.replaceAll("[^a-z0-9]", ""))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

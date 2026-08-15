@@ -13,7 +13,7 @@ import {
   Folder,
   FileText,
 } from "lucide-react";
-import { useSessionStore, type ChatMessage } from "@/store/sessionStore";
+import { useSessionStore, type ChatMessage, type ChatMessageMeta } from "@/store/sessionStore";
 import { useWorkflowStore } from "@/store/workflowStore";
 import { useTurnStream } from "@/hooks/useTurnStream";
 import AgentViewport from "@/components/AgentViewport";
@@ -22,6 +22,7 @@ import SystemLogRail from "@/components/SystemLogRail";
 import PermissionApprovalPopup from "@/components/PermissionApprovalPopup";
 import { AIOS_API_URL } from "@/config";
 import { cn } from "@/lib/utils";
+import { useMissionStore } from "@/store/missionStore";
 
 // ════════════════════════════════════════════════════════════════
 //  ChatSurface —— 对话主画布
@@ -51,6 +52,7 @@ export default function ChatSurface({
   const setStreamingMessageId = useSessionStore((s) => s.setStreamingMessageId);
   const streamingMessageId = useSessionStore((s) => s.streamingMessageId);
   const deploy = useWorkflowStore((s) => s.deploy);
+  const missionId = useWorkflowStore((s) => s.missionId);
 
   // 对话优先：默认 chat 模式直连 LLM；切到 workflow 走 autoCompile+deploy+事件流
   const [mode, setMode] = useState<ComposerMode>("chat");
@@ -68,6 +70,11 @@ export default function ChatSurface({
 
     const deployed = await deploy();
     if (!deployed) {
+      if (missionId) void useMissionStore.getState().updateMission(missionId, {
+        status: "BLOCKED",
+        currentState: "Deployment failed",
+        nextStep: "Check the run configuration and retry",
+      });
       // 回滚为待部署，便于重试
       updateMessage(sid, planMessage.id, (p) => ({
         meta: { ...p.meta, status: "pending_deploy" },
@@ -79,6 +86,12 @@ export default function ChatSurface({
       });
       return;
     }
+
+    if (missionId) void useMissionStore.getState().updateMission(missionId, {
+      status: "ACTIVE",
+      currentState: "Workflow run started",
+      nextStep: "Observe node progress and approvals",
+    });
 
     // 标记已部署（按钮转成「已部署」徽章）
     updateMessage(sid, planMessage.id, (p) => ({
@@ -297,7 +310,7 @@ function PlanCard({
   onDeploy,
 }: {
   text: string;
-  meta?: Record<string, any>;
+  meta?: ChatMessageMeta;
   onDeploy?: () => void;
 }) {
   const deploying = useWorkflowStore((s) => s.deploying);
@@ -422,7 +435,7 @@ function ActivityBlock({
   streaming: boolean;
   paused?: boolean;
   status?: string;
-  meta?: Record<string, any>;
+  meta?: ChatMessageMeta;
 }) {
   const ended = !!status;
   return (
@@ -489,6 +502,10 @@ function formatSize(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)}M`;
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function ArtifactsCard({ workflowId }: { workflowId: string }) {
   const [files, setFiles] = useState<ArtifactFile[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -538,8 +555,8 @@ function ArtifactsCard({ workflowId }: { workflowId: string }) {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       setContent(d.content ?? "");
-    } catch (e: any) {
-      setContent(`✗ ${e?.message ?? e}`);
+    } catch (e) {
+      setContent(`✗ ${errorMessage(e)}`);
     } finally {
       setContentLoading(false);
     }

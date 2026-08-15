@@ -7,6 +7,7 @@ import { AIOS_API_URL } from "../config";
 // ════════════════════════════════════════════════════════════════
 
 export type MemoryDomain = "USER" | "AGENT";
+export type MemoryLayer = "L0" | "L1" | "L2" | "L3";
 
 export interface MemoryRecord {
   key: string;
@@ -15,6 +16,7 @@ export interface MemoryRecord {
   timestamp: number;
   confidence: number;
   domain: MemoryDomain;
+  layer: MemoryLayer;
   version: number;
 }
 
@@ -29,11 +31,6 @@ interface MemoryListResponse {
 interface MemoryPatchResponse {
   ok: boolean;
   record?: MemoryRecord;
-}
-
-interface MemoryDeleteResponse {
-  ok: boolean;
-  deletedKey?: string;
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -62,6 +59,7 @@ interface MemoryState {
   fetchMemories: () => Promise<void>;
   updateConfidence: (key: string, confidence: number) => Promise<void>;
   updateDomain: (key: string, domain: MemoryDomain) => Promise<void>;
+  updateLayer: (key: string, layer: MemoryLayer) => Promise<void>;
   deleteMemory: (key: string) => Promise<void>;
 }
 
@@ -199,6 +197,45 @@ export const useMemoryStore = create<MemoryState>((set, get) => ({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ domain }),
+      });
+      if (!resp.ok) {
+        set({ memories: snapshot, pendingKey: null, error: await parseError(resp) });
+        return;
+      }
+      const data: MemoryPatchResponse = await resp.json();
+      if (data.record) {
+        set({
+          memories: get().memories.map((m) =>
+            m.key === key ? { ...data.record! } : m
+          ),
+          pendingKey: null,
+          lastUpdated: Date.now(),
+        });
+      } else {
+        set({ pendingKey: null, lastUpdated: Date.now() });
+      }
+    } catch (e) {
+      set({
+        memories: snapshot,
+        pendingKey: null,
+        error: e instanceof Error ? e.message : "network error",
+      });
+    }
+  },
+
+  updateLayer: async (key, layer) => {
+    const state = get();
+    const snapshot = state.memories;
+    const next = state.memories.map((m) =>
+      m.key === key ? { ...m, layer } : m
+    );
+    set({ memories: next, pendingKey: key, error: null });
+    try {
+      const url = `${AIOS_API_URL}/api/memory/${encodeURIComponent(state.agentId)}/${encodeURIComponent(key)}?token=${TOKEN}`;
+      const resp = await fetch(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ layer }),
       });
       if (!resp.ok) {
         set({ memories: snapshot, pendingKey: null, error: await parseError(resp) });

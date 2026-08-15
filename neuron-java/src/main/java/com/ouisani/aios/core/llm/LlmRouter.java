@@ -346,6 +346,14 @@ public class LlmRouter implements LlmProvider {
     @Override
     public String thinkWithHistoryStream(List<ChatMessage> messages, String systemPrompt,
                                          java.util.function.Consumer<String> onDelta) {
+        return thinkWithHistoryStream(messages, systemPrompt, "", onDelta);
+    }
+
+    /** Streaming history call with send-time-only ephemeral context. */
+    @Override
+    public String thinkWithHistoryStream(List<ChatMessage> messages, String systemPrompt,
+                                         String ephemeralContext,
+                                         java.util.function.Consumer<String> onDelta) {
         String lastUserMsg = messages.stream()
                 .filter(m -> "user".equals(m.role()))
                 .map(ChatMessage::contentAsString)
@@ -368,11 +376,11 @@ public class LlmRouter implements LlmProvider {
         log.debug("[LlmRouter] thinkWithHistoryStream 路由到: {} (core={})", provider.name(), provider.computeCore());
 
         try {
-            return provider.thinkWithHistoryStream(messages, systemPrompt, onDelta);
+            return provider.thinkWithHistoryStream(messages, systemPrompt, ephemeralContext, onDelta);
         } catch (Exception e) {
             log.error("[LlmRouter] thinkWithHistoryStream 异常: {}", e.getMessage());
             // 降级到同步模式
-            String result = provider.thinkWithHistory(messages, systemPrompt);
+            String result = provider.thinkWithHistory(messages, systemPrompt, ephemeralContext);
             onDelta.accept(result);
             return result;
         }

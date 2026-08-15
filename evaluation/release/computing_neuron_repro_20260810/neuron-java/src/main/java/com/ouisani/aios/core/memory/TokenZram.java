@@ -1,0 +1,346 @@
+package com.ouisani.aios.core.memory;
+
+import com.ouisani.aios.core.AgentTask;
+import com.ouisani.aios.core.cgroup.CgroupNode;
+import com.ouisani.aios.core.llm.LlmProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
+
+/**
+ * Token ZRAM — AIOS 的内存压缩引擎。
+ * <p>
+ * 类比 Linux 的 ZRAM（压缩内存设备）：当物理内存不足时，
+ * Linux 将内存页压缩后存入 ZRAM 设备，以 CPU 时间换取内存空间。
+ * AIOS 的 TokenZram 做同样的事情，但操作对象是 Token 而非字节：
+ * <ul>
+ *   <li>将 Agent 上下文中的"冷数据"（较早的对话历史）压缩</li>
+ *   <li>压缩方式：LLM 摘要压缩（高质量）或截断压缩（快速回退）</li>
+ *   <li>压缩后退还 Token 配额到 Cgroup</li>
+ *   <li>如果压缩后仍超限，触发 kswapd 将数据换出到磁盘</li>
+ * </ul>
+ *
+ * <h3>OS 类比</h3>
+ * <table>
+ *   <tr><th>Linux</th><th>AIOS TokenZram</th><th>说明</th></tr>
+ *   <tr><td>ZRAM 设备</td><td>TokenZram</td><td>内存压缩存储</td></tr>
+ *   <tr><td>页面压缩</td><td>compressMemory()</td><td>压缩冷数据</td></tr>
+ *   <tr><td>kswapd</td><td>swapOutToDisk()</td><td>压缩后仍超限则换出</td></tr>
+ *   <tr><td>SWAP_THRESHOLD</td><td>SWAP_THRESHOLD_RATIO</td><td>触发换出的水位线</td></tr>
+ * </table>
+ *
+ * @see SomWindowController
+ * @see SwapManager
+ */
+public class TokenZram {
+
+    private static final Logger log = LoggerFactory.getLogger(TokenZram.class);
+
+    /**
+     * After ZRAM compression, if the cgroup is still above this ratio of its
+     * hard limit, trigger disk swap-out (kswapd).
+     */
+    private static final double SWAP_THRESHOLD_RATIO = 0.95;
+
+    private static final class Holder {
+        static final TokenZram INSTANCE = new TokenZram();
+    }
+
+    private volatile LlmProvider llmProvider;
+
+    /** ZRAM 压缩存储：handle → 压缩后的二进制数据 */
+    private final ConcurrentHashMap<String, byte[]> zramStore = new ConcurrentHashMap<>();
+
+    /** ZRAM 元数据：handle → ZramEntry */
+    private final ConcurrentHashMap<String, ZramEntry> zramMeta = new ConcurrentHashMap<>();
+
+    private TokenZram() {}
+
+    public static TokenZram instance() {
+        return Holder.INSTANCE;
+    }
+
+    public void configureLlmProvider(LlmProvider provider) {
+        this.llmProvider = provider;
+    }
+
+    /**
+     * 压缩 Agent 的上下文记忆 — 类比 Linux ZRAM 的页面压缩。
+     * <p>
+     * 将 Agent 上下文历史的前半部分（冷数据）压缩为摘要，
+     * 退还节省的 Token 到 Cgroup。如果压缩后 Cgroup 仍超限，
+     * 则触发 kswapd 将数据换出到磁盘。
+     *
+     * @param task   当前 Agent 任务
+     * @param cgroup Cgroup 节点（Token 配额信息）
+     */
+    public void compressMemory(AgentTask task, CgroupNode cgroup) {
+        List<String> history = task.contextHistory();
+        if (history.size() < 2) {
+            log.info("[Token ZRAM] Agent#{} 历史记录不足（{} 条），跳过压缩",
+                    task.pid(), history.size());
+            return;
+        }
+
+        int splitPoint = history.size() / 2;
+
+        List<String> coldEntries = new ArrayList<>(history.subList(0, splitPoint));
+
+        StringBuilder coldData = new StringBuilder();
+        for (int i = 0; i < coldEntries.size(); i++) {
+            coldData.append(coldEntries.get(i));
+            if (i < coldEntries.size() - 1) coldData.append("\n");
+        }
+
+        long coldTokens = Math.max(1, coldData.length() / 4);
+
+        String compressed;
+        if (llmProvider != null && llmProvider.isAvailable()) {
+            log.info("[Token ZRAM] 正在压缩 Agent#{} 冷内存（{} 条，~{} tokens）...",
+                    task.pid(), splitPoint, coldTokens);
+            try {
+                compressed = llmProvider.think(
+                        "Please summarize the following context compactly, preserving all key information:\n" + coldData,
+                        "System: Compression Engine");
+            } catch (Exception e) {
+                log.warn("[Token ZRAM] LLM 压缩失败，使用截断: {}", e.getMessage());
+                compressed = truncateCompress(coldData.toString());
+            }
+        } else {
+            log.info("[Token ZRAM] 无可用 LLM，使用截断压缩 Agent#{}", task.pid());
+            compressed = truncateCompress(coldData.toString());
+        }
+
+        String zramBlock = "<ZRAM_COMPRESSED>" + compressed + "</ZRAM_COMPRESSED>";
+        long compressedTokens = Math.max(1, zramBlock.length() / 4);
+        long savedTokens = coldTokens - compressedTokens;
+
+        task.replaceHistoryRange(0, splitPoint, zramBlock);
+
+        if (savedTokens > 0 && cgroup != null) {
+            long refunded = cgroup.refundTokens(savedTokens);
+            log.info("[Token ZRAM] Agent#{} 已压缩: cold={} 条（~{} tokens），compressed=~{} tokens，refunded={} 至 cgroup '{}'",
+                    task.pid(), splitPoint, coldTokens, compressedTokens, refunded, cgroup.name());
+        } else {
+            log.info("[Token ZRAM] Agent#{} 已压缩但未节省 Token (cold={}, compressed={})",
+                    task.pid(), coldTokens, compressedTokens);
+        }
+
+        // --- Kswapd: if still above hard limit after compression, swap out to disk ---
+        if (cgroup != null && isStillOverHardLimit(cgroup)) {
+            swapOutToDisk(task, cgroup);
+        }
+    }
+
+    /**
+     * Check whether the cgroup is still consuming above the swap threshold
+     * ratio of its hard limit after ZRAM compression.
+     */
+    private boolean isStillOverHardLimit(CgroupNode cgroup) {
+        long quota = cgroup.tokenQuota();
+        long consumed = cgroup.tokenConsumed();
+        long swapThreshold = (long) (quota * SWAP_THRESHOLD_RATIO);
+        boolean over = consumed > swapThreshold;
+        if (over) {
+            log.warn("[Token ZRAM] Cgroup '{}' 压缩后仍为 {}/{}（{}%），触发 kswapd 换出",
+                    cgroup.name(), consumed, quota, (consumed * 100 / quota));
+        }
+        return over;
+    }
+
+    /**
+     * Evict the oldest (non-pointer) history entries to disk via SwapManager,
+     * replacing them with a short swap pointer to free Token budget.
+     */
+    private void swapOutToDisk(AgentTask task, CgroupNode cgroup) {
+        List<String> history = task.contextHistory();
+
+        // Collect swappable entries: skip entries that are already ZRAM blocks or swap pointers
+        List<String> swappable = new ArrayList<>();
+        List<Integer> swappableIndices = new ArrayList<>();
+        for (int i = 0; i < history.size(); i++) {
+            String entry = history.get(i);
+            if (!entry.startsWith("<ZRAM_COMPRESSED>") && !SwapManager.isSwapPointer(entry)) {
+                swappable.add(entry);
+                swappableIndices.add(i);
+            }
+        }
+
+        if (swappable.isEmpty()) {
+            log.warn("[Token ZRAM] kswapd：Agent#{} 无可换出条目，无法换出", task.pid());
+            return;
+        }
+
+        // Swap out the first half of swappable entries
+        int swapCount = Math.max(1, swappable.size() / 2);
+        List<String> toSwap = swappable.subList(0, swapCount);
+
+        String pointer = SwapManager.instance().swapOut(String.valueOf(task.pid()), toSwap);
+
+        if (pointer.isEmpty()) {
+            log.error("[Token ZRAM] kswapd：Agent#{} swapOut 失败", task.pid());
+            return;
+        }
+
+        // Calculate tokens freed by the swap
+        long swappedTokens = 0;
+        for (String entry : toSwap) {
+            swappedTokens += Math.max(1, entry.length() / 4);
+        }
+        long pointerTokens = Math.max(1, pointer.length() / 4);
+        long netSaved = swappedTokens - pointerTokens;
+
+        // Replace the swapped entries in history with the pointer
+        // We replace from the end to keep indices valid
+        for (int i = swapCount - 1; i >= 0; i--) {
+            int histIdx = swappableIndices.get(i);
+            task.contextHistory().remove(histIdx);
+        }
+        task.contextHistory().add(swappableIndices.get(0), pointer);
+
+        if (netSaved > 0) {
+            long refunded = cgroup.refundTokens(netSaved);
+            log.info("[Token ZRAM] kswapd：Agent#{} 已换出 {} 条至磁盘，pointer='{}'，释放={} tokens，refunded={} 至 cgroup '{}'",
+                    task.pid(), swapCount, pointer, netSaved, refunded, cgroup.name());
+        } else {
+            log.info("[Token ZRAM] kswapd：Agent#{} 已换出 {} 条至磁盘，pointer='{}'",
+                    task.pid(), swapCount, pointer);
+        }
+    }
+
+    /** 截断压缩 — 不依赖 LLM 的快速压缩回退方案。保留首尾各100字符。 */
+    private String truncateCompress(String text) {
+        if (text.length() <= 200) return text;
+        return text.substring(0, 100) + "...[TRUNCATED]..." + text.substring(text.length() - 100);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  SOM 集成：语义对象压缩存储与解压恢复
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 将语义对象的完整内容压缩存入 ZRAM — 类比 Linux ZRAM 的页面压缩。
+     * <p>
+     * 当 SomWindowController 折叠一个 SemanticObject 时，原始数据
+     * 通过 GZIP 压缩后存入 zramStore。返回一个句柄（handle），
+     * 后续可通过 {@link #decompressFromZram} 解压恢复。
+     *
+     * @param pid      Agent PID
+     * @param objectId 语义对象 ID
+     * @param content  完整内容
+     * @return ZRAM 句柄
+     */
+    public String compressToZram(int pid, String objectId, String content) {
+        String handle = "zram://" + pid + "/" + objectId;
+
+        try {
+            // GZIP 压缩
+            byte[] rawBytes = content.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            try (GZIPOutputStream gzip = new GZIPOutputStream(baos)) {
+                gzip.write(rawBytes);
+            }
+            byte[] compressed = baos.toByteArray();
+
+            // 存入 ZRAM
+            zramStore.put(handle, compressed);
+            zramMeta.put(handle, new ZramEntry(
+                    handle, pid, objectId,
+                    rawBytes.length, compressed.length,
+                    System.currentTimeMillis()
+            ));
+
+            double ratio = (double) compressed.length / rawBytes.length * 100;
+            log.info("[TokenZram] 已压缩：handle={}, original={}B, compressed={}B, ratio={:.1f}%",
+                    handle, rawBytes.length, compressed.length, ratio);
+
+            return handle;
+
+        } catch (IOException e) {
+            log.error("[TokenZram] 压缩失败: {}", e.getMessage());
+            // 回退：直接存储未压缩数据
+            byte[] rawBytes = content.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            zramStore.put(handle, rawBytes);
+            zramMeta.put(handle, new ZramEntry(handle, pid, objectId,
+                    rawBytes.length, rawBytes.length, System.currentTimeMillis()));
+            return handle;
+        }
+    }
+
+    /**
+     * 从 ZRAM 解压恢复语义对象的完整内容 — 类比 Page Fault 的换入。
+     * <p>
+     * 当 LLM 在推理中需要展开某个"语义指针"时，
+     * 调用此方法从 ZRAM 中解压恢复完整内容。
+     *
+     * @param handle ZRAM 句柄
+     * @return 解压后的完整内容，如果句柄无效返回 null
+     */
+    public String decompressFromZram(String handle) {
+        byte[] compressed = zramStore.get(handle);
+        if (compressed == null) {
+            log.warn("[TokenZram] Handle 未找到: {}", handle);
+            return null;
+        }
+
+        try {
+            // GZIP 解压
+            ByteArrayInputStream bais = new ByteArrayInputStream(compressed);
+            try (GZIPInputStream gzip = new GZIPInputStream(bais)) {
+                byte[] decompressed = gzip.readAllBytes();
+                return new String(decompressed, java.nio.charset.StandardCharsets.UTF_8);
+            }
+        } catch (IOException e) {
+            // 可能是未压缩的数据，直接返回
+            return new String(compressed, java.nio.charset.StandardCharsets.UTF_8);
+        }
+    }
+
+    /**
+     * 删除 ZRAM 中的压缩数据。
+     */
+    public boolean removeFromZram(String handle) {
+        byte[] removed = zramStore.remove(handle);
+        zramMeta.remove(handle);
+        return removed != null;
+    }
+
+    /**
+     * 获取 ZRAM 存储统计。
+     */
+    public int zramEntryCount() {
+        return zramStore.size();
+    }
+
+    public long zramTotalOriginalBytes() {
+        return zramMeta.values().stream().mapToLong(e -> e.originalSize).sum();
+    }
+
+    public long zramTotalCompressedBytes() {
+        return zramMeta.values().stream().mapToLong(e -> e.compressedSize).sum();
+    }
+
+    public double zramCompressionRatio() {
+        long original = zramTotalOriginalBytes();
+        long compressed = zramTotalCompressedBytes();
+        return original > 0 ? (double) compressed / original : 0;
+    }
+
+    /**
+     * ZRAM 条目元数据。
+     */
+    record ZramEntry(
+            String handle,
+            int pid,
+            String objectId,
+            int originalSize,
+            int compressedSize,
+            long timestamp
+    ) {}
+}

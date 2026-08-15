@@ -123,7 +123,9 @@ export const useSystemStore = create<SystemState>((set, get) => ({
               payloadStr = JSON.stringify(data.payload);
             } else {
               // 无 payload 字段：用整个 message（剔除冗余的 type/timestamp 字段）
-              const { type, timestamp, ...rest } = data;
+              const rest = { ...data };
+              delete rest.type;
+              delete rest.timestamp;
               payloadStr = Object.keys(rest).length ? JSON.stringify(rest) : JSON.stringify(data);
             }
             const newLog: EventBusLog = {

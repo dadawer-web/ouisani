@@ -1,10 +1,12 @@
 package com.ouisani.aios.user.apps.omnifactory;
 
 import com.ouisani.aios.core.VfsManager;
+import com.ouisani.aios.core.continuation.ContinuationManager;
 import com.ouisani.aios.core.importance.ImportanceBackwardPass;
 import com.ouisani.aios.core.importance.ImportanceRecord;
 import com.ouisani.aios.core.importance.ImportanceStore;
 import com.ouisani.aios.core.ipc.VariablePool;
+import com.ouisani.aios.core.mission.MissionManager;
 import com.ouisani.aios.core.network.EventBus;
 import com.ouisani.aios.core.role.RoleBlueprint;
 import com.ouisani.aios.core.role.RoleBlueprintLoader;
@@ -17,6 +19,14 @@ import com.ouisani.aios.core.snapshot.NodeOutputSection;
 import com.ouisani.aios.core.state.BoulderCheckpoint;
 import com.ouisani.aios.core.state.BoulderStateManager;
 import com.ouisani.aios.core.tool.Port;
+import com.ouisani.aios.core.verification.CorrectiveAction;
+import com.ouisani.aios.core.verification.EvidenceRequirement;
+import com.ouisani.aios.core.verification.Observation;
+import com.ouisani.aios.core.verification.VerificationContract;
+import com.ouisani.aios.core.verification.VerificationEngine;
+import com.ouisani.aios.core.verification.VerificationFailureException;
+import com.ouisani.aios.core.verification.VerificationResult;
+import com.ouisani.aios.core.verification.VerificationStage;
 import com.ouisani.aios.user.sdk.AiosSdk;
 import com.ouisani.aios.user.sdk.AbstractAgent;
 import org.slf4j.Logger;
@@ -67,8 +77,13 @@ public class WorkflowEngine {
 
     /** 活跃工作流注册表 — 节点映射与上下文的共享状态 */
     private final WorkflowRegistry registry = new WorkflowRegistry();
+    /** Recent run snapshots used by the control console (active + completed). */
+    private final ConcurrentHashMap<String, RunRecord> runRecords = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, RunControlState> runControls = new ConcurrentHashMap<>();
+    private static final int MAX_RUN_HISTORY = 100;
     /** 自愈器 — 故障恢复与拓扑突变 */
     private final WorkflowHealer healer = new WorkflowHealer(this, registry);
+    private final VerificationEngine verificationEngine = new VerificationEngine();
 
     // 默认注册的 Layer
     private static final List<GraphEngineLayer> DEFAULT_LAYERS = List.of(
@@ -87,6 +102,256 @@ public class WorkflowEngine {
     /** Alias for getInstance() — used by RecoveryStrategy implementations */
     public static WorkflowEngine instance() {
         return getInstance();
+    }
+
+    public record RunNodeSnapshot(String nodeId, String role, String executor,
+                                  String status, long startedAt, long endedAt,
+                                  long durationMs, String error) {}
+
+    public record RunSnapshot(String runId, String workflowId, String traceId,
+                              String status, long startedAt, long endedAt,
+                              int totalNodes, int succeeded, int failed,
+                              int running, int skipped, int suspended,
+                              List<RunNodeSnapshot> nodes) {}
+
+    private static final class RunControlState {
+        volatile boolean pauseRequested;
+        volatile boolean cancelRequested;
+    }
+
+    private static final class RunNodeState {
+        final String nodeId;
+        volatile String role = "";
+        volatile String executor = "omni";
+        volatile String status = "PENDING";
+        volatile long startedAt;
+        volatile long endedAt;
+        volatile long durationMs;
+        volatile String error;
+
+        RunNodeState(String nodeId) { this.nodeId = nodeId; }
+
+        RunNodeSnapshot snapshot() {
+            return new RunNodeSnapshot(nodeId, role, executor, status,
+                    startedAt, endedAt, durationMs, error);
+        }
+    }
+
+    private static final class RunRecord {
+        final String runId;
+        final String workflowId;
+        final String traceId;
+        final long startedAt;
+        final ConcurrentHashMap<String, RunNodeState> nodes = new ConcurrentHashMap<>();
+        volatile String status = "QUEUED";
+        volatile long endedAt;
+
+        RunRecord(String runId, String workflowId, String traceId, List<WorkflowNode> initialNodes) {
+            this.runId = runId;
+            this.workflowId = workflowId;
+            this.traceId = traceId;
+            this.startedAt = System.currentTimeMillis();
+            if (initialNodes != null) {
+                for (WorkflowNode node : initialNodes) nodes.put(node.instanceId(), new RunNodeState(node.instanceId()));
+            }
+        }
+
+        void apply(GraphEngineEvent event) {
+            if (event instanceof GraphEngineEvent.GraphRunStartedEvent) {
+                // The graph event may arrive before all node futures are registered.
+                status = "RUNNING";
+                return;
+            }
+            if (event instanceof GraphEngineEvent.GraphRunSucceededEvent) {
+                boolean suspended = nodes.values().stream().anyMatch(node -> "SUSPENDED".equals(node.status));
+                status = suspended ? "PAUSED" : "SUCCEEDED";
+                endedAt = suspended ? 0L : event.timestamp();
+                return;
+            }
+            if (event instanceof GraphEngineEvent.GraphRunFailedEvent) {
+                status = "FAILED";
+                endedAt = event.timestamp();
+                return;
+            }
+            if (event instanceof GraphEngineEvent.GraphRunAbortedEvent) {
+                status = "CANCELLED";
+                endedAt = event.timestamp();
+                return;
+            }
+            if (!(event instanceof GraphEngineEvent.GraphNodeEvent nodeEvent)) return;
+            RunNodeState node = nodes.computeIfAbsent(nodeEvent.nodeId(), RunNodeState::new);
+            node.executor = nodeEvent.executor();
+            if (nodeEvent instanceof GraphEngineEvent.GraphNodeEvent.NodeRunStartedEvent started) {
+                node.role = started.role();
+                node.status = "RUNNING";
+                node.startedAt = event.timestamp();
+            } else if (nodeEvent instanceof GraphEngineEvent.GraphNodeEvent.NodeRunSucceededEvent succeeded) {
+                node.status = "SUCCESS";
+                node.endedAt = event.timestamp();
+                node.durationMs = succeeded.durationMs();
+            } else if (nodeEvent instanceof GraphEngineEvent.GraphNodeEvent.NodeRunFailedEvent failed) {
+                node.status = "FAILED";
+                node.endedAt = event.timestamp();
+                node.durationMs = failed.durationMs();
+                node.error = failed.error();
+            } else if (nodeEvent instanceof GraphEngineEvent.GraphNodeEvent.NodeRunSkippedEvent skipped) {
+                node.status = "SKIPPED";
+                node.endedAt = event.timestamp();
+                node.error = skipped.reason();
+            }
+        }
+
+        RunSnapshot snapshot(RunControlState control) {
+            String effectiveStatus = status;
+            if (!("SUCCEEDED".equals(status) || "FAILED".equals(status) || "CANCELLED".equals(status))) {
+                if (control != null && control.cancelRequested) effectiveStatus = "CANCEL_REQUESTED";
+                else if (control != null && control.pauseRequested) effectiveStatus = "PAUSED";
+            }
+            List<RunNodeSnapshot> nodeSnapshots = nodes.values().stream()
+                    .map(RunNodeState::snapshot)
+                    .sorted(java.util.Comparator.comparing(RunNodeSnapshot::nodeId))
+                    .toList();
+            int success = (int) nodeSnapshots.stream().filter(n -> "SUCCESS".equals(n.status())).count();
+            int failed = (int) nodeSnapshots.stream().filter(n -> "FAILED".equals(n.status())).count();
+            int running = (int) nodeSnapshots.stream().filter(n -> "RUNNING".equals(n.status())).count();
+            int skipped = (int) nodeSnapshots.stream().filter(n -> "SKIPPED".equals(n.status())).count();
+            int suspended = (int) nodeSnapshots.stream().filter(n -> "SUSPENDED".equals(n.status())).count();
+            return new RunSnapshot(runId, workflowId, traceId, effectiveStatus, startedAt, endedAt,
+                    nodeSnapshots.size(), success, failed, running, skipped, suspended, nodeSnapshots);
+        }
+    }
+
+    private void beginRun(String workflowId, String traceId, List<WorkflowNode> nodes) {
+        runRecords.put(workflowId, new RunRecord(workflowId, workflowId, traceId, nodes));
+        runControls.put(workflowId, new RunControlState());
+        while (runRecords.size() > MAX_RUN_HISTORY) {
+            runRecords.entrySet().stream()
+                    .min(java.util.Comparator.comparingLong(e -> e.getValue().startedAt))
+                    .ifPresent(old -> { runRecords.remove(old.getKey(), old.getValue()); runControls.remove(old.getKey()); });
+        }
+    }
+
+    public List<RunSnapshot> listRunSnapshots() {
+        return runRecords.values().stream()
+                .map(record -> record.snapshot(runControls.get(record.runId)))
+                .sorted(java.util.Comparator.comparingLong(RunSnapshot::startedAt).reversed())
+                .toList();
+    }
+
+    public Optional<RunSnapshot> runSnapshot(String runId) {
+        RunRecord record = runId == null ? null : runRecords.get(runId);
+        return record == null ? Optional.empty() : Optional.of(record.snapshot(runControls.get(runId)));
+    }
+
+    public boolean controlRun(String runId, String action) {
+        RunRecord record = runId == null ? null : runRecords.get(runId);
+        RunControlState control = runId == null ? null : runControls.get(runId);
+        if (record == null || control == null || action == null) return false;
+        String normalized = action.trim().toUpperCase(Locale.ROOT);
+        if ("SUCCEEDED".equals(record.status) || "FAILED".equals(record.status) || "CANCELLED".equals(record.status)) return false;
+        switch (normalized) {
+            case "PAUSE" -> control.pauseRequested = true;
+            case "RESUME" -> control.pauseRequested = false;
+            case "CANCEL" -> control.cancelRequested = true;
+            default -> { return false; }
+        }
+        String missionStatus = switch (normalized) {
+            case "PAUSE" -> "PAUSED";
+            case "CANCEL" -> "CANCEL_REQUESTED";
+            default -> "ACTIVE";
+        };
+        try {
+            MissionManager.instance().observeRun(runId, record.workflowId, record.traceId,
+                    missionStatus,
+                    "PAUSE".equals(normalized) ? "Run paused by operator" :
+                            "CANCEL".equals(normalized) ? "Cancellation requested" : "Run resumed",
+                    "PAUSE".equals(normalized) ? "Resume when ready" :
+                            "CANCEL".equals(normalized) ? "Wait for cancellation" : "Observe the next node result",
+                    null);
+        } catch (Throwable ignored) { }
+        try {
+            com.ouisani.aios.core.network.EventBus.instance().broadcast(
+                    "sys.workflow.control", "{\"workflowId\":\"" + json(runId)
+                            + "\",\"action\":\"" + json(normalized) + "\"}");
+        } catch (Throwable ignored) { }
+        return true;
+    }
+
+    /**
+     * Continue a paused/interrupted run with a new user instruction.  Active
+     * runs are resumed in place; completed runs still return the durable plan
+     * so the UI can show what is retained before the caller redeploys it.
+     */
+    public Optional<ContinuationManager.ContinueResult> continueRun(String runId, String instruction) {
+        RunRecord record = runId == null ? null : runRecords.get(runId);
+        if (record == null) return Optional.empty();
+        ContinuationManager manager = ContinuationManager.instance();
+        ContinuationManager.ContinuationPlan plan = manager.prepare(runId, instruction);
+        RunControlState existingControl = runControls.get(runId);
+        boolean requestedInterruption = existingControl != null
+                && (existingControl.pauseRequested || existingControl.cancelRequested);
+        if (!requestedInterruption && ("RUNNING".equals(record.status) || "QUEUED".equals(record.status))) {
+            return Optional.of(new ContinuationManager.ContinueResult(
+                    plan, false, "Pause or interrupt the run before continuing it."));
+        }
+        Map<String, WorkflowNode> nodeMap = registry.findNodeMapForWorkflow(runId);
+        WorkflowContext context = registry.getActiveWorkflowContext(runId);
+        if (nodeMap == null || context == null) {
+            return Optional.of(new ContinuationManager.ContinueResult(
+                    plan, false, "Run is no longer active; redeploy the retained plan to continue."));
+        }
+
+        for (ContinuationManager.PlanStep invalidated : plan.invalidatedSteps()) {
+            WorkflowNode node = nodeMap.get(invalidated.stepId());
+            if (node != null) {
+                node.setStatus(WorkflowNode.Status.PENDING);
+                node.getOutputData().clear();
+                context.removeNodeOutput(node.instanceId());
+                BoulderStateManager.deleteCheckpoint(runId, node.instanceId());
+                VariablePool.getInstance().cacheRemove("frozen:" + node.instanceId());
+            }
+        }
+        context.updateTaskFocus("continuation_instruction", instruction);
+        String reusable = manager.reusableResultsSummary(runId);
+        if (!reusable.isBlank()) context.updateTaskFocus("reusable_tool_results", reusable);
+        RunControlState control = runControls.computeIfAbsent(runId, ignored -> new RunControlState());
+        boolean controlInterruption = control.pauseRequested || control.cancelRequested;
+        control.pauseRequested = false;
+        control.cancelRequested = false;
+        manager.prepare(runId, instruction);
+        // The original DAG thread is waiting at executeNode's control gate.
+        // Releasing it in place avoids running two copies of the same node.
+        if (controlInterruption && !"CANCELLED".equals(record.status)
+                && !"FAILED".equals(record.status) && !"SUCCEEDED".equals(record.status)) {
+            return Optional.of(new ContinuationManager.ContinueResult(
+                    manager.prepare(runId, instruction), true, "Continuation resumed the paused run."));
+        }
+        Thread.startVirtualThread(() -> executeDagInternal(
+                new ArrayList<>(nodeMap.values()), runId, context, plan.missionId()));
+        return Optional.of(new ContinuationManager.ContinueResult(
+                manager.prepare(runId, instruction), true, "Continuation started."));
+    }
+
+    boolean isPauseRequested(String runId) {
+        RunControlState state = runControls.get(runId);
+        return state != null && state.pauseRequested && !state.cancelRequested;
+    }
+
+    boolean isCancelRequested(String runId) {
+        RunControlState state = runControls.get(runId);
+        return state != null && state.cancelRequested;
+    }
+
+    private static String json(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static boolean isPotentiallyDangerousNode(WorkflowNode node) {
+        String text = ((node.executor() == null ? "" : node.executor()) + " "
+                + (node.role() == null ? "" : node.role())).toLowerCase(Locale.ROOT);
+        return text.contains("operator") || text.contains("write") || text.contains("deploy")
+                || text.contains("delete") || text.contains("execute") || text.contains("modify")
+                || text.contains("publish");
     }
 
     /** 包内可见 — 快照所有活跃工作流节点映射,供 OmnifactoryTaskQueueProvider 枚举。 */
@@ -191,7 +456,7 @@ public class WorkflowEngine {
         // 借鉴 DyLAN listwise agent team selection：把 manifest 的 selectionPolicy 塞进 context，
         // executeDagInternal 开头据此裁剪未选中 role 的节点。null = 未声明（零行为变化）。
         rootContext.setSelectionPolicy(manifest.selectionPolicy());
-        executeDagInternal(nodes, workspaceDirName, rootContext);
+        executeDagInternal(nodes, workspaceDirName, rootContext, manifest.missionId());
     }
 
     /**
@@ -226,7 +491,7 @@ public class WorkflowEngine {
         // "时间戳_安全名" 目录不一致，会导致前端拉产物 404、Healer 路径错乱。
         String workspaceDirName = containerDir.getFileName().toString();
         WorkflowContext rootContext = new WorkflowContext(workspaceDirName);
-        executeDagInternal(nodes, workspaceDirName, rootContext);
+        executeDagInternal(nodes, workspaceDirName, rootContext, null);
     }
 
     /**
@@ -237,11 +502,34 @@ public class WorkflowEngine {
         executeDag(nodes, workflowId);
     }
 
+    /** Deploy a workflow while preserving the user's Mission association. */
+    public void executeDag(List<WorkflowNode> nodes, String workflowId,
+                           List<String> enabledSkills, List<String> enabledRoles,
+                           String missionId) {
+        String containerBase = com.ouisani.aios.core.config.AiosPaths
+                .workspaceForWorkflow(workflowId, workflowId);
+        java.nio.file.Path containerDir = java.nio.file.Path.of(containerBase);
+        java.nio.file.Path physicalFactory = containerDir.resolve("factory");
+        java.nio.file.Path physicalOutputs = containerDir.resolve("outputs");
+        try {
+            java.nio.file.Files.createDirectories(physicalFactory);
+            java.nio.file.Files.createDirectories(physicalOutputs);
+            log.info("[DAG Engine] 集装箱目录已创建: {} (factory + outputs)", containerBase);
+        } catch (java.io.IOException e) {
+            log.error("[DAG Engine] 集装箱目录创建失败: {}", e.getMessage());
+        }
+        VfsManager.instance().registerPhysicalWorkspace("/factory", physicalFactory.toString());
+        buildDependencyGraph(nodes);
+        String workspaceDirName = containerDir.getFileName().toString();
+        WorkflowContext rootContext = new WorkflowContext(workspaceDirName);
+        executeDagInternal(nodes, workspaceDirName, rootContext, missionId);
+    }
+
     /**
      * 支持外部注入 WorkflowContext 的公开入口（子引擎 / ChildEngineBuilder 使用）。
      */
     public void executeDagWithContext(List<WorkflowNode> nodes, String workflowId, WorkflowContext context) {
-        executeDagInternal(nodes, workflowId, context);
+        executeDagInternal(nodes, workflowId, context, null);
     }
 
     /**
@@ -258,8 +546,26 @@ public class WorkflowEngine {
      * </pre>
      */
     private void executeDagInternal(List<WorkflowNode> nodes, String workflowId, WorkflowContext context) {
+        executeDagInternal(nodes, workflowId, context, null);
+    }
+
+    private void executeDagInternal(List<WorkflowNode> nodes, String workflowId, WorkflowContext context, String missionId) {
         // ── 端到端 Trace ID 注入 ──
         String traceId = com.ouisani.aios.core.ipc.TraceContext.ensureTraceId(workflowId);
+        runRecords.computeIfAbsent(workflowId, ignored -> {
+            RunRecord record = new RunRecord(workflowId, workflowId, traceId, nodes);
+            runControls.putIfAbsent(workflowId, new RunControlState());
+            return record;
+        });
+        // A run is the execution detail of a continuous Mission.  Creating the
+        // lightweight read-model here keeps the homepage useful even when a
+        // workflow was started by an API/CLI rather than the UI.
+        if (missionId != null && !missionId.isBlank()) {
+            MissionManager.instance().attachRun(missionId, workflowId)
+                    .orElseGet(() -> MissionManager.instance().ensureForRun(workflowId, workflowId, traceId, workflowId));
+        } else {
+            MissionManager.instance().ensureForRun(workflowId, workflowId, traceId, workflowId);
+        }
         log.info("[DAG Engine] 工作流 {} 启动, TraceID={}", workflowId, traceId);
 
         log.info("[DAG Engine] 正在启动工作流 '{}'，共 {} 个节点。", workflowId, nodes.size());
@@ -283,6 +589,16 @@ public class WorkflowEngine {
 
         // 注册活跃工作流（供 resumeNode 查找节点和上下文）
         registry.registerActiveWorkflow(workflowId, nodeMap, context);
+        List<ContinuationManager.PlanStep> continuationSteps = nodes.stream()
+                .map(node -> {
+                    boolean dangerous = isPotentiallyDangerousNode(node);
+                    return new ContinuationManager.PlanStep(
+                            node.instanceId(), node.role(), "PENDING", null,
+                            List.copyOf(node.getUpstreamDependencies()), null,
+                            dangerous ? "execute" : null, null, dangerous);
+                })
+                .toList();
+        ContinuationManager.instance().registerPlan(workflowId, workflowId, missionId, traceId, continuationSteps);
 
         // 构建有向无环图的 CompletableFuture 依赖链
         // ── 容错隔离：使用 handleAsync 替代 thenRunAsync，防止单节点失败级联传播 ──
@@ -329,6 +645,10 @@ public class WorkflowEngine {
             log.error("[DAG Engine] 工作流被中断: {}", e.getMessage());
         }
 
+        // ── FINAL verification: validate final answers/artifacts before the
+        // graph-level success envelope is emitted. ──
+        applyFinalVerifications(nodes, nodeMap, context, workflowId);
+
         // ── 发出工作流结束事件 ──
         // 修复：支持"部分成功"——独立分支的成功结果不应被丢弃
         long successCount = nodes.stream().filter(n -> n.getStatus() == WorkflowNode.Status.SUCCESS).count();
@@ -344,7 +664,9 @@ public class WorkflowEngine {
             }
         }
 
-        if (suspendedCount > 0) {
+        if (isCancelRequested(workflowId)) {
+            emitEvent(new GraphEngineEvent.GraphRunAbortedEvent(workflowId, "cancel_requested"));
+        } else if (suspendedCount > 0) {
             // 有挂起节点 → 发出带挂起信息的事件，前端需要知道工作流在等待恢复
             log.info("[DAG Engine] 工作流有 {} 个挂起节点，等待恢复", suspendedCount);
             emitEvent(new GraphEngineEvent.GraphRunSucceededEvent(workflowId, outputs));
@@ -439,7 +761,11 @@ public class WorkflowEngine {
             });
         } else {
             // 注销活跃工作流
-            registry.unregisterActiveWorkflow(workflowId);
+            if (!isCancelRequested(workflowId)) {
+                registry.unregisterActiveWorkflow(workflowId);
+            } else {
+                log.info("[DAG Engine] Run {} cancelled; retaining graph/context for continuation", workflowId);
+            }
         }
     }
 
@@ -449,6 +775,20 @@ public class WorkflowEngine {
      */
     void executeNode(WorkflowNode node, Map<String, WorkflowNode> nodeMap,
                              WorkflowContext context, String workflowId) {
+        while (isPauseRequested(workflowId) && !isCancelRequested(workflowId)) {
+            try {
+                Thread.sleep(200L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        if (isCancelRequested(workflowId)) {
+            node.setStatus(WorkflowNode.Status.SKIPPED);
+            emitEvent(new GraphEngineEvent.GraphNodeEvent.NodeRunSkippedEvent(
+                    workflowId, node.instanceId(), node.executor(), "cancel_requested", null));
+            return;
+        }
         // A. 检查依赖节点的健康状态 — 容错分支隔离
         // ── 借鉴 Kubernetes 的 Pod 故障隔离：只有直接依赖的分支失败才跳过 ──
         // 修复：之前要求所有上游都是 SUCCESS，导致一个节点失败整条链雪崩
@@ -497,12 +837,14 @@ public class WorkflowEngine {
 
         // A2. 【Boulder 断点恢复拦截】— 检查是否有已完成的检查点
         Optional<BoulderCheckpoint> pastState = BoulderStateManager.loadCheckpoint(workflowId, node.instanceId());
-        if (pastState.isPresent() && pastState.get().isCompleted()) {
+        if (pastState.isPresent() && pastState.get().isCompleted()
+                && effectiveVerificationContract(node) == null) {
             log.info("[DAG Engine] Boulder 已恢复。Node {} 已 SUCCESS。跳过执行。",
                     node.instanceId());
             node.setStatus(WorkflowNode.Status.SUCCESS);
             // 将过去保存的输出强行注回当前内存总线
             context.commitNodeOutput(node.instanceId(), pastState.get().getOutputSnapshot());
+            ContinuationManager.instance().markStepCompleted(workflowId, node.instanceId(), true);
             // 发出跳过事件（已通过检查点恢复）
             emitEvent(new GraphEngineEvent.GraphNodeEvent.NodeRunSkippedEvent(
                     workflowId, node.instanceId(), node.executor(),
@@ -510,9 +852,17 @@ public class WorkflowEngine {
             return; // 直接短路跳过执行！
         }
 
+        // Capture the pre-skill state before any tool/agent mutates the node.
+        // State-change predicates use this snapshot instead of the agent's
+        // self-reported success flag.
+        node.captureVerificationBaseline();
+
         // A3. 【Frozen 缓存恢复】— 借鉴 Langflow 的 Frozen Vertex 机制
         // 如果节点标记为 frozen 且 VariablePool LRU 缓存中有其输出，直接恢复
-        if (node.isFrozen() && VariablePool.getInstance().cacheGet("frozen:" + node.instanceId()) != null) {
+        // Verification-aware nodes bypass the shortcut so the cached result
+        // cannot silently skip schema/business/final evidence checks.
+        if (node.isFrozen() && effectiveVerificationContract(node) == null
+                && VariablePool.getInstance().cacheGet("frozen:" + node.instanceId()) != null) {
             @SuppressWarnings("unchecked")
             Map<String, Object> cachedOutput = VariablePool.getInstance().cacheGet("frozen:" + node.instanceId(), Map.class);
             if (cachedOutput != null && !cachedOutput.isEmpty()) {
@@ -594,10 +944,33 @@ public class WorkflowEngine {
                 }
             }
 
-            // C. 成功完成
+            // AbstractAgent deliberately swallows onStart exceptions so its
+            // mailbox can shut down cleanly. Preserve the failure at the DAG
+            // boundary instead of turning a FAILED worker into SUCCESS merely
+            // because the completion receipt was delivered.
+            if (node.getStatus() == WorkflowNode.Status.FAILED) {
+                VerificationResult workerVerification = node.lastVerificationResult();
+                if (workerVerification != null && workerVerification.configured()
+                        && !workerVerification.isPass()) {
+                    throw new VerificationFailureException(workerVerification);
+                }
+                Object toolError = node.getOutputData().get("_tool_error");
+                throw new RuntimeException("worker execution failed"
+                        + (toolError == null ? "" : ": " + toolError));
+            }
+
+            // C. Verification-aware completion gate. A tool/agent reaching this
+            // point only means execution returned; the contract decides whether
+            // the environment and business goal actually support SUCCESS.
+            VerificationResult skillEndVerification = verifyNodeObservation(
+                    workflowId, node, nodeMap, context, VerificationStage.SKILL_END, true, null);
+            enforceVerification(node, skillEndVerification);
+
+            // D. 成功完成
             long durationMs = System.currentTimeMillis() - startTime;
             node.setStatus(WorkflowNode.Status.SUCCESS);
             context.commitNodeOutput(node.instanceId(), node.getOutputData());
+            ContinuationManager.instance().markStepCompleted(workflowId, node.instanceId(), false);
 
             // ── 端口级数据路由（借鉴 Langflow Edge 路由） ──
             // 根据 Edge 定义，将本节点的输出端口数据精确路由到下游节点的输入端口
@@ -662,6 +1035,20 @@ public class WorkflowEngine {
         } catch (Exception e) {
             long durationMs = System.currentTimeMillis() - startTime;
 
+            // ABORT is terminal: do not send it through the recoverable
+            // SUSPENDED path. Other corrective actions remain recoverable and
+            // are handed to the existing recovery/orchestration pipeline.
+            if (e instanceof VerificationFailureException verificationFailure
+                    && verificationFailure.result().correctiveAction() == CorrectiveAction.ABORT) {
+                node.setStatus(WorkflowNode.Status.FAILED);
+                node.putOutput("_verification_error", verificationFailure.getMessage());
+                emitEvent(new GraphEngineEvent.GraphNodeEvent.NodeRunFailedEvent(
+                        workflowId, node.instanceId(), node.executor(),
+                        verificationFailure.getMessage(), durationMs, null));
+                invokeLayers(layer -> layer.onNodeRunEnd(node, verificationFailure));
+                return;
+            }
+
             // ════════════════════════════════════════════════════════════════
             //  事件驱动自愈 — 引擎只负责"抛出中断"（Fail & Trap）
             //
@@ -683,6 +1070,14 @@ public class WorkflowEngine {
 
             // ── Step 2: 挂起节点（SUSPENDED） ──
             node.setStatus(WorkflowNode.Status.SUSPENDED);
+            RunRecord run = runRecords.get(workflowId);
+            if (run != null) {
+                RunNodeState state = run.nodes.computeIfAbsent(node.instanceId(), RunNodeState::new);
+                state.status = "SUSPENDED";
+                state.error = e.getMessage();
+                state.endedAt = System.currentTimeMillis();
+                state.durationMs = durationMs;
+            }
             node.putOutput("_crash_dump_path", dumpFilePath);
             node.putOutput("_crash_duration_ms", durationMs);
             node.putOutput("_crash_error", e.getMessage());
@@ -1018,6 +1413,273 @@ public class WorkflowEngine {
         return header.toString();
     }
 
+    /**
+     * Tool/skill observation bridge used by workers that can expose a
+     * turn-level result. A configured DURING contract can stop a worker before
+     * the node is allowed to report success.
+     */
+    public VerificationResult observeToolResult(String workflowId, WorkflowNode node,
+                                                WorkflowContext context, String toolName,
+                                                com.ouisani.aios.core.syscall.SyscallResponse response) {
+        if (node == null) return VerificationResult.notConfigured(VerificationStage.DURING);
+        if (response != null) {
+            node.putOutput("_tool_success", response.success());
+            node.putOutput("_tool_result_state", response.resultState() == null
+                    ? "UNKNOWN" : response.resultState().name());
+            if (response.errorMessage() != null) node.putOutput("_tool_error", response.errorMessage());
+        }
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("toolName", toolName == null ? "" : toolName);
+        if (response != null && response.resultState() != null) {
+            metadata.put("resultState", response.resultState().name());
+        }
+        Map<String, WorkflowNode> nodeMap = registry.findNodeMapForWorkflow(workflowId);
+        if (nodeMap == null || nodeMap.isEmpty()) nodeMap = Map.of(node.instanceId(), node);
+        VerificationResult result = verifyNodeObservation(
+                workflowId, node, nodeMap, context,
+                VerificationStage.DURING, false,
+                response == null ? null : response.data(), metadata);
+        enforceVerification(node, result);
+        return result;
+    }
+
+    private VerificationResult verifyNodeObservation(String workflowId, WorkflowNode node,
+                                                     Map<String, WorkflowNode> nodeMap,
+                                                     WorkflowContext context,
+                                                     VerificationStage stage,
+                                                     boolean executionCompleted,
+                                                     String finalResponse) {
+        return verifyNodeObservation(workflowId, node, nodeMap, context, stage,
+                executionCompleted, finalResponse, Map.of());
+    }
+
+    private VerificationResult verifyNodeObservation(String workflowId, WorkflowNode node,
+                                                     Map<String, WorkflowNode> nodeMap,
+                                                     WorkflowContext context,
+                                                     VerificationStage stage,
+                                                     boolean executionCompleted,
+                                                     String finalResponse,
+                                                     Map<String, Object> metadata) {
+        VerificationContract contract = effectiveVerificationContract(node);
+        if (contract == null || !contract.appliesTo(stage)) {
+            return VerificationResult.notConfigured(stage);
+        }
+        Observation observation = buildObservation(workflowId, node, nodeMap, stage,
+                executionCompleted, finalResponse, metadata);
+        VerificationResult result = verificationEngine.verify(contract, observation);
+        node.setLastVerificationResult(result);
+        recordVerification(workflowId, node, result);
+        return result;
+    }
+
+    private void enforceVerification(WorkflowNode node, VerificationResult result) {
+        if (result == null || !result.configured() || result.isPass()) return;
+        throw new VerificationFailureException(result);
+    }
+
+    private void applyFinalVerifications(List<WorkflowNode> nodes,
+                                         Map<String, WorkflowNode> nodeMap,
+                                         WorkflowContext context,
+                                         String workflowId) {
+        for (WorkflowNode node : nodes) {
+            if (node.getStatus() != WorkflowNode.Status.SUCCESS) continue;
+            String finalResponse = finalResponse(node.getOutputData());
+            VerificationResult result = verifyNodeObservation(workflowId, node, nodeMap, context,
+                    VerificationStage.FINAL, true, finalResponse);
+            if (!result.configured() || result.isPass()) continue;
+
+            node.putOutput("_verification_error", verificationDetails(result));
+            if (result.correctiveAction() == CorrectiveAction.ABORT) {
+                VerificationFailureException failure = new VerificationFailureException(result);
+                node.setStatus(WorkflowNode.Status.FAILED);
+                emitEvent(new GraphEngineEvent.GraphNodeEvent.NodeRunFailedEvent(
+                        workflowId, node.instanceId(), node.executor(),
+                        failure.getMessage(), 0L, null));
+                invokeLayers(layer -> layer.onNodeRunEnd(node, failure));
+            } else {
+                // RETRY/REPLAN/OBSERVE/ASK_USER all require the run to remain
+                // recoverable instead of emitting a false graph success. Route
+                // the failure through the same semantic-crash channel used by
+                // ordinary node failures so RecoveryOrchestrator can act on it.
+                suspendForVerification(workflowId, node, context, result);
+            }
+        }
+    }
+
+    private void suspendForVerification(String workflowId, WorkflowNode node,
+                                        WorkflowContext context, VerificationResult result) {
+        VerificationFailureException failure = new VerificationFailureException(result);
+        String dumpPath = healer.generateSemanticCoreDump(node, failure, context, workflowId, 0L);
+        node.setStatus(WorkflowNode.Status.SUSPENDED);
+        node.putOutput("_crash_dump_path", dumpPath);
+        node.putOutput("_crash_error", failure.getMessage());
+        emitEvent(new GraphEngineEvent.GraphNodeEvent.NodeRunFailedEvent(
+                workflowId, node.instanceId(), node.executor(), failure.getMessage(), 0L, null));
+        invokeLayers(layer -> layer.onNodeRunEnd(node, failure));
+        EventBus.instance().broadcast("sys.semantic.crash", semanticCrashPayload(
+                workflowId, node, dumpPath, failure.getMessage()));
+    }
+
+    private static String semanticCrashPayload(String workflowId, WorkflowNode node,
+                                               String dumpPath, String error) {
+        return "{\"eventType\":\"SEMANTIC_CRASH\",\"nodeId\":\""
+                + escape(node.instanceId()) + "\",\"workflowId\":\""
+                + escape(workflowId) + "\",\"dumpPath\":\""
+                + escape(dumpPath) + "\",\"error\":\""
+                + escape(error) + "\",\"durationMs\":0,\"role\":\""
+                + escape(node.role()) + "\",\"blueprintId\":\""
+                + escape(node.blueprintId()) + "\",\"timestamp\":"
+                + System.currentTimeMillis() + "}";
+    }
+
+    private static String verificationDetails(VerificationResult result) {
+        if (result == null) return "verification result unavailable";
+        String failures = String.join(" | ", result.failures());
+        return failures.isBlank() ? String.join(" | ", result.evidence()) : failures;
+    }
+
+    private VerificationContract effectiveVerificationContract(WorkflowNode node) {
+        if (node == null) return null;
+        VerificationContract contract = node.verificationContract();
+        SchemaDefinition schema = node.outputSchema();
+        if (schema == null || schema.requiredFields().isEmpty()) {
+            return contract == null || !contract.enabled() ? null : contract;
+        }
+
+        Map<String, Class<?>> required = new LinkedHashMap<>();
+        for (String field : schema.requiredFields()) {
+            SchemaDefinition.SchemaType type = schema.fields().get(field);
+            required.put(field, schemaClass(type));
+        }
+        // A declared output schema is itself a completion contract. This keeps
+        // schema useful at runtime even when a node has no custom business
+        // predicate, while remaining backwards-compatible for nodes without a
+        // schema. Explicit contracts receive the schema requirement in addition
+        // to their own predicates/evidence.
+        if (contract == null || !contract.enabled()) {
+            return VerificationContract.builder()
+                    .require(EvidenceRequirement.outputSchema(required))
+                    .build();
+        }
+        return contract.withEvidenceRequirement(EvidenceRequirement.outputSchema(required));
+    }
+
+    private Observation buildObservation(String workflowId, WorkflowNode node,
+                                         Map<String, WorkflowNode> nodeMap,
+                                         VerificationStage stage,
+                                         boolean executionCompleted,
+                                         String finalResponse,
+                                         Map<String, Object> metadata) {
+        Map<String, String> upstreamStatuses = new LinkedHashMap<>();
+        Set<String> completed = new LinkedHashSet<>();
+        Set<String> attempted = new LinkedHashSet<>();
+        if (nodeMap != null) {
+            for (WorkflowNode candidate : nodeMap.values()) {
+                String status = candidate.getStatus().name();
+                // Keep the complete workflow status view so predicates can verify
+                // required steps and dependency outcomes without guessing graph shape.
+                upstreamStatuses.put(candidate.instanceId(), status);
+                if (candidate.getStatus() == WorkflowNode.Status.SUCCESS) completed.add(candidate.instanceId());
+                if (candidate.getStatus() != WorkflowNode.Status.PENDING) attempted.add(candidate.instanceId());
+            }
+        }
+        if (executionCompleted) {
+            completed.add(node.instanceId());
+            attempted.add(node.instanceId());
+        }
+
+        Map<String, Object> output = node.getOutputData();
+        Boolean permissionStillValid = null;
+        Object permission = output.get("_permission_still_valid");
+        if (permission instanceof Boolean value) permissionStillValid = value;
+
+        String resolvedFinalResponse = finalResponse == null || finalResponse.isBlank()
+                ? finalResponse(output) : finalResponse;
+        return new Observation(workflowId, node.instanceId(), stage, output,
+                node.verificationBaseline(), upstreamStatuses, completed, attempted,
+                extractEvidence(output), resolvedFinalResponse, permissionStillValid,
+                Boolean.TRUE.equals(output.get("_tool_success")), metadata);
+    }
+
+    private void recordVerification(String workflowId, WorkflowNode node, VerificationResult result) {
+        node.putOutput("_verification_stage", result.stage().name());
+        node.putOutput("_verification_verdict", result.verdict().name());
+        node.putOutput("_verification_action", result.correctiveAction() == null
+                ? "" : result.correctiveAction().name());
+        node.putOutput("_verification_evidence", result.evidence());
+        node.putOutput("_verification_failures", result.failures());
+        EventBus.instance().broadcast("sys.workflow.verification",
+                verificationPayload(workflowId, node, result));
+    }
+
+    private static String verificationPayload(String workflowId, WorkflowNode node,
+                                              VerificationResult result) {
+        String wf = workflowId == null ? "" : workflowId;
+        String failures = escape(String.join(" | ", result.failures()));
+        return "{\"workflowId\":\"" + escape(wf) + "\",\"nodeId\":\""
+                + escape(node.instanceId()) + "\",\"stage\":\"" + result.stage()
+                + "\",\"verdict\":\"" + result.verdict() + "\",\"correctiveAction\":\""
+                + (result.correctiveAction() == null ? "" : result.correctiveAction())
+                + "\",\"failures\":\"" + failures + "\"}";
+    }
+
+    private static List<Observation.Evidence> extractEvidence(Map<String, Object> output) {
+        if (output == null || output.isEmpty()) return List.of();
+        List<Observation.Evidence> result = new ArrayList<>();
+        Object raw = output.get("evidence");
+        if (raw instanceof Map<?, ?> map) {
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                String id = String.valueOf(entry.getKey());
+                result.add(new Observation.Evidence(id, id,
+                        String.valueOf(entry.getValue()), true));
+            }
+        } else if (raw instanceof Iterable<?> values) {
+            int index = 0;
+            for (Object value : values) {
+                String text = String.valueOf(value);
+                result.add(new Observation.Evidence("evidence-" + index++, "evidence", text, true));
+            }
+        } else if (raw != null) {
+            String text = String.valueOf(raw);
+            result.add(new Observation.Evidence("evidence", "evidence", text, true));
+        }
+        Object refs = output.get("evidenceRefs");
+        if (refs instanceof Iterable<?> values) {
+            for (Object value : values) {
+                String ref = String.valueOf(value);
+                result.add(new Observation.Evidence(ref, ref, ref, true));
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private static String finalResponse(Map<String, Object> output) {
+        if (output == null) return "";
+        for (String key : List.of("final_response", "response", "result")) {
+            Object value = output.get(key);
+            if (value != null) {
+                String text = String.valueOf(value);
+                if (!text.isBlank()) return text;
+            }
+        }
+        return "";
+    }
+
+    private static Class<?> schemaClass(SchemaDefinition.SchemaType type) {
+        if (type == null) return Object.class;
+        return switch (type) {
+            case STRING, FILE_PATH -> String.class;
+            case INTEGER, FLOAT -> Number.class;
+            case BOOLEAN -> Boolean.class;
+            case JSON, ANY -> Object.class;
+        };
+    }
+
+    private static String escape(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\")
+                .replace("\"", "\\\"").replace("\n", " ").replace("\r", " ");
+    }
+
     // ════════════════════════════════════════════════════════════════
     //  Layer 调度工具方法
     // ════════════════════════════════════════════════════════════════
@@ -1026,6 +1688,10 @@ public class WorkflowEngine {
      * 向所有已注册的 Layer 发送事件。
      */
     void emitEvent(GraphEngineEvent event) {
+        RunRecord record = runRecords.get(event.workflowId());
+        if (record != null) record.apply(event);
+        observeMission(event);
+        auditRunEvent(event);
         for (GraphEngineLayer layer : layers) {
             try {
                 layer.onEvent(event);
@@ -1034,6 +1700,108 @@ public class WorkflowEngine {
                         layer.name(), e.getMessage());
             }
         }
+    }
+
+    private void observeMission(GraphEngineEvent event) {
+        String runId = event.workflowId();
+        String traceId = com.ouisani.aios.core.ipc.TraceContext.getTraceIdForTask(runId);
+        String status = "ACTIVE";
+        String current = "Workflow is running";
+        String next = "Wait for the next node result";
+        String report = null;
+        if (event instanceof GraphEngineEvent.GraphRunSucceededEvent succeeded) {
+            // A suspended graph intentionally uses the historical
+            // GraphRunSucceeded envelope to retain partial outputs.  Do not
+            // turn that recoverable state into a completed Mission.
+            RunRecord currentRun = runRecords.get(runId);
+            if (currentRun != null && "PAUSED".equals(currentRun.status)) {
+                status = "PAUSED";
+                current = "Workflow is waiting for recovery";
+                next = "Resolve the suspended node and resume";
+                report = "Run has " + currentRun.nodes.values().stream().filter(n -> "SUSPENDED".equals(n.status)).count() + " suspended node(s)";
+            } else {
+                status = "SUCCEEDED";
+                current = "Workflow completed";
+                next = "Review outputs and completion report";
+                report = "Run succeeded with " + succeeded.outputs().size() + " output node(s)";
+            }
+        } else if (event instanceof GraphEngineEvent.GraphRunFailedEvent failed) {
+            status = "FAILED";
+            current = "Workflow failed";
+            next = "Inspect the failed node and choose recovery";
+            report = failed.error();
+        } else if (event instanceof GraphEngineEvent.GraphRunAbortedEvent aborted) {
+            status = "CANCELLED";
+            current = "Workflow cancelled";
+            next = "Resume or revise the mission";
+            report = aborted.reason();
+        } else if (event instanceof GraphEngineEvent.GraphRunPausedEvent paused) {
+            status = "PAUSED";
+            current = "Workflow is paused";
+            next = "Resume when the next action is approved";
+            report = paused.reason();
+        } else if (event instanceof GraphEngineEvent.GraphNodeEvent nodeEvent) {
+            current = "Running node " + nodeEvent.nodeId();
+            next = "Wait for node " + nodeEvent.nodeId() + " to finish";
+        }
+        try {
+            MissionManager.instance().observeRun(runId, event.workflowId(), traceId,
+                    status, current, next, report);
+        } catch (Throwable t) {
+            log.debug("[DAG Engine] Mission observation skipped: {}", t.getMessage());
+        }
+    }
+
+    private void auditRunEvent(GraphEngineEvent event) {
+        String decision;
+        String target = event.workflowId();
+        String reason = "";
+        String nodeId = null;
+        if (event instanceof GraphEngineEvent.GraphRunStartedEvent started) {
+            decision = "RUN_STARTED";
+            reason = "totalNodes=" + started.totalNodes();
+        } else if (event instanceof GraphEngineEvent.GraphRunSucceededEvent succeeded) {
+            decision = "RUN_SUCCEEDED";
+            reason = "outputs=" + succeeded.outputs().size();
+        } else if (event instanceof GraphEngineEvent.GraphRunFailedEvent failed) {
+            decision = "RUN_FAILED";
+            reason = failed.error();
+        } else if (event instanceof GraphEngineEvent.GraphRunAbortedEvent aborted) {
+            decision = "RUN_ABORTED";
+            reason = aborted.reason();
+        } else if (event instanceof GraphEngineEvent.GraphRunPausedEvent paused) {
+            decision = "RUN_PAUSED";
+            reason = paused.reason();
+        } else if (event instanceof GraphEngineEvent.GraphNodeEvent nodeEvent) {
+            nodeId = nodeEvent.nodeId();
+            target = event.workflowId() + "/" + nodeId;
+            if (nodeEvent instanceof GraphEngineEvent.GraphNodeEvent.NodeRunStartedEvent) decision = "NODE_STARTED";
+            else if (nodeEvent instanceof GraphEngineEvent.GraphNodeEvent.NodeRunSucceededEvent succeeded) {
+                decision = "NODE_SUCCEEDED";
+                reason = "durationMs=" + succeeded.durationMs();
+            } else if (nodeEvent instanceof GraphEngineEvent.GraphNodeEvent.NodeRunFailedEvent failed) {
+                decision = "NODE_FAILED";
+                reason = failed.error();
+            } else if (nodeEvent instanceof GraphEngineEvent.GraphNodeEvent.NodeRunSkippedEvent skipped) {
+                decision = "NODE_SKIPPED";
+                reason = skipped.reason();
+            } else if (nodeEvent instanceof GraphEngineEvent.GraphNodeEvent.NodeRunRetryEvent retry) {
+                decision = "NODE_RETRY";
+                reason = "retryIndex=" + retry.retryIndex() + ";" + retry.error();
+            } else {
+                decision = "NODE_ITERATION";
+            }
+        } else {
+            return;
+        }
+        com.ouisani.aios.core.audit.UnifiedAuditLog.append(
+                new com.ouisani.aios.core.audit.UnifiedAuditLog.TimelineEvent(
+                        com.ouisani.aios.core.audit.UnifiedAuditLog.LAYER_PERMISSION,
+                        "RUN", decision, null, target, reason,
+                        new com.ouisani.aios.core.audit.UnifiedAuditLog.AuditContext(
+                                null, event.workflowId(), event.workflowId(),
+                                com.ouisani.aios.core.ipc.TraceContext.getTraceIdForTask(event.workflowId()),
+                                null, null, null, nodeId, -1)));
     }
 
     /**

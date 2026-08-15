@@ -1,0 +1,188 @@
+\section{Neuron Architecture}
+\label{sec:arch}
+
+Neuron is middleware between an agent framework and host/container services.
+The architecture makes one research contribution---a coupled resource and
+permission decision path---and separates it from supporting safety
+invariants and prototype engineering. Figure-level breadth is deliberately
+avoided: quota trees, sandboxes, model routing, and audit storage are not
+presented as independent innovations.
+
+\subsection{Control-Plane Boundary}
+
+Tenant agents issue typed runtime requests containing a tenant identifier,
+agent identifier, turn/trace identifier, spawn depth, action, and payload.
+The dispatcher first applies resource admission, then evaluates permission,
+then dispatches an admitted operation to a tool or sandbox. The order is
+security-relevant: rejected tenant work should not occupy permission workers,
+and an action cannot execute before a permission verdict exists.
+
+Neuron distinguishes two execution domains:
+
+\begin{description}
+  \item[Tenant domain.] Agent turns, model callbacks, and tool preparation
+  may be concurrent and are assumed adversarial. Their executor and queues
+  are capacity limited.
+  \item[Policy domain.] Permission evaluation uses reserved workers and a
+  bounded queue. It consumes immutable request context plus authenticated
+  resource state. The core runtime prototype uses an independent JVM
+  executor; the fault-injection artifact also realizes this boundary as a
+  separately started Java process behind a loopback HTTP service.
+\end{description}
+
+Executor reservation is not coupling. It is a prerequisite for a dependable
+policy plane. Coupling occurs only when resource state becomes an input to
+the permission function.
+
+\subsection{Core Mechanism: Resource-Informed Permission}
+\label{sec:arch-coupling}
+
+Let $d$ be spawn depth, $a$ the requested action, $D$ the normal destructive
+action boundary, $r$ the resource-layer rejection count in the configured
+window, and $\tau$ the pressure threshold. Let
+$\mathit{destructive}(a)$ be the runtime's action classification. The static
+policy is
+
+\begin{equation}
+P_0(d,a)=
+\begin{cases}
+\textsc{deny-depth}, & d \ge D \land \mathit{destructive}(a),\\
+\textsc{ask-with-context}, & \text{otherwise}.
+\end{cases}
+\end{equation}
+
+Neuron adds a pressure-conditioned clause:
+
+\begin{equation}
+P_c(d,a,r)=
+\begin{cases}
+\textsc{deny-depth}, & \begin{array}{l}
+  \mathit{destructive}(a)\land d\ge D\\[-1pt]
+  {}\lor\mathit{destructive}(a)\land r>\tau\land d\ge D-1
+\end{array},\\
+\textsc{ask-with-context}, & \text{otherwise}.
+\end{cases}
+\end{equation}
+
+The rule tightens by one level; it never relaxes a static denial. In the
+prototype $D=2$. Thus a depth-2 destructive request is denied with or without
+coupling. A depth-1 request is the discriminating probe: it is
+\textsc{ask-with-context} when $r\le\tau$ and \textsc{deny-depth} when
+$r>\tau$. Non-destructive actions are unaffected by this rule.
+
+The Java runtime's \texttt{EscalationPolicy} implements this function. The
+resource signal is produced by the runtime's
+\texttt{RateLimitSyscallFilter}, a tenant-scoped token bucket. The current
+signal is deliberately simple and has limitations: a cumulative count
+requires an explicit reset/window policy, may not transfer across hardware,
+and may be diluted by Sybil tenants. The evaluation therefore freezes the
+counter semantics and treats $\tau$ as a deployment parameter.
+
+\subsection{Policy Availability and Timeout Semantics}
+
+A caller submits the immutable permission task to the policy executor and
+waits for a configured deadline. There are three possible outcomes:
+
+\begin{enumerate}
+  \item the queue accepts the task and the policy returns before the
+  deadline;
+  \item the queue rejects the task because it is full; or
+  \item the queue accepts the task but it does not finish before the
+  deadline.
+\end{enumerate}
+
+Outcomes 2 and 3 are distinct telemetry events but require the same explicit
+deployment choice. A fail-open wrapper returns a permissive result; a
+fail-closed wrapper denies. Neuron's recommended configuration is reserved
+capacity plus fail-closed timeout handling. The fail-open configuration is
+retained only as an experimental baseline because it exposes the security
+consequence under study.
+
+Reservation has two parameters: worker count and queue capacity. Too little
+capacity denies legitimate bursts; an unbounded queue converts overload into
+unbounded latency and memory consumption. The prototype consequently uses a
+bounded queue and records its depth with every observation. The process-
+separated fault-injection path provides a stronger CPU/memory boundary but
+introduces RPC and partition semantics; the current experiment keeps the
+service on loopback, so WAN-scale behavior remains outside the claim.
+
+\subsection{Causal Context and Audit Correlation}
+
+Admission and permission events carry the same trace identifier. A resource
+record includes tenant, action, bucket outcome, rejection count, and time. A
+permission record includes depth, action class, pressure value consumed,
+verdict, executor admission result, deadline outcome, and policy latency.
+The pair answers a question that separate logs cannot answer reliably:
+which resource state actually informed a particular verdict?
+
+Correlation is supporting infrastructure, not enforcement. If the resource
+counter is unauthenticated or a trace identifier can be replaced by tenant
+code, the joint rule becomes attacker-controlled. Neuron creates both inside
+the runtime boundary and propagates immutable copies to child tasks. Audit
+failure does not silently convert a denial to an allow; a deployed system
+must choose whether audit backpressure itself is fail-closed or buffered in
+reserved storage.
+
+\subsection{Supporting Invariant: Privilege Non-Increase}
+
+Dynamic spawn introduces a second way to cross the policy boundary. Let
+$\Pi(x)$ denote the effective capabilities of agent $x$. For every spawn edge
+$p\rightarrow c$, Neuron requires
+
+\begin{equation}
+\Pi(c) \subseteq \Pi(p).
+\end{equation}
+
+The spawn path captures the parent's effective profile before asynchronous
+dispatch, derives the child profile by intersection with the requested
+profile, and propagates tenant, trace, and depth in the same immutable spawn
+context. Missing parent context is not interpreted as a default permissive
+profile. Cleanup occurs in a \texttt{finally} block so pooled threads cannot
+leak identity to later tasks.
+
+The invariant supports coupled governance because the depth and tenant used
+by $P_c$ must describe the actual caller. It is nevertheless orthogonal to
+the starvation claim: a system can preserve privilege inheritance while its
+policy executor is unavailable. Neuron tests the invariant separately and
+does not fold those tests into the response-surface sample count.
+
+\subsection{Engineering Components and Trust Boundary}
+
+The broader prototype includes hierarchical quotas and sandbox providers.
+Quotas supply admission decisions; sandboxes contain tools after permission
+has been granted. Neither changes the equations above. For clarity:
+
+\begin{itemize}
+  \item token quotas and token buckets are resource-admission mechanisms;
+  \item a WASM or container provider is an execution-isolation mechanism;
+  \item identity propagation, privilege intersection, and correlated audit
+  are supporting security mechanisms; and
+  \item reserved policy capacity plus $P_c$ is the evaluated coupled
+  governance mechanism.
+\end{itemize}
+
+\label{sec:arch-sandbox}
+The container/JVM boundary remains trusted. This paper neither evaluates
+container escape nor claims that an in-process sandbox withstands arbitrary
+native code. Newly registered native tools must execute outside the policy
+JVM under an independently configured sandbox.
+
+\subsection{Request Flow}
+
+For a destructive tool request, the complete flow is:
+
+\begin{enumerate}
+  \item validate the runtime-authenticated tenant, trace, and spawn context;
+  \item apply tenant-scoped resource admission and update the pressure state;
+  \item submit a permission task to reserved capacity;
+  \item compute $P_c$ from depth, action class, and the captured pressure
+  value;
+  \item apply fail-closed handling if the task cannot be admitted or misses
+  its deadline;
+  \item append correlated resource and permission records; and
+  \item dispatch only an admitted operation to the configured sandbox/tool.
+\end{enumerate}
+
+The evaluation manipulates steps 2--5 while keeping the runtime admission
+and policy functions fixed. This is what permits attribution among load,
+isolation, fallback semantics, and coupling.

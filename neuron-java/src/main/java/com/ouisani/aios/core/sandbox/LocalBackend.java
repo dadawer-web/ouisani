@@ -185,6 +185,23 @@ public final class LocalBackend implements BackendBase {
     public String join_path(String base, String... child) {
         if (base == null) base = "";
         if (child == null || child.length == 0) return base;
+
+        // VFS namespaces are POSIX by contract even when the local backend
+        // runs on Windows.  Do not let Path.of turn /vfs/... into \vfs\...;
+        // physical host paths (C:\... or relative paths) keep native joining.
+        if (base.startsWith("/") && !base.matches("^/[A-Za-z]:.*")) {
+            String joined = base.replace('\\', '/');
+            for (String part : child) {
+                if (part == null || part.isEmpty()) continue;
+                String normalized = part.replace('\\', '/');
+                if (joined.isEmpty() || joined.endsWith("/")) {
+                    joined += normalized.startsWith("/") ? normalized.substring(1) : normalized;
+                } else {
+                    joined += "/" + (normalized.startsWith("/") ? normalized.substring(1) : normalized);
+                }
+            }
+            return joined;
+        }
         return Path.of(base, child).toString();
     }
 
@@ -206,7 +223,15 @@ public final class LocalBackend implements BackendBase {
                 log.debug("[LocalBackend] VFS 路径已翻译: '{}' → '{}'", command, translated);
             }
 
-            ProcessBuilder pb = new ProcessBuilder("bash", "-c", translated);
+            String shell = ShellExecutableResolver.resolve("bash");
+            // Git Bash understands POSIX paths, while Path/Windows APIs return
+            // backslash-separated paths.  Normalize only the translated
+            // command so native host paths remain usable by the shell.
+            if (ShellExecutableResolver.isGitBash(shell)) {
+                translated = translated.replace('\\', '/');
+            }
+            ProcessBuilder pb = new ProcessBuilder(shell, "-c", translated);
+            ShellExecutableResolver.configureEnvironment(pb, shell);
             if (options.workingDir() != null && !options.workingDir().isBlank()) {
                 pb.directory(new File(options.workingDir()));
             }

@@ -1,0 +1,21 @@
+{
+  "_comment": "AIOS Docker 沙箱 seccomp profile — 默认 ALLOW，黑名单拦截容器逃逸相关 syscall",
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "defaultErrnoRet": 1,
+  "architectures": ["SCMP_ARCH_X86_64", "SCMP_ARCH_X86", "SCMP_ARCH_X32"],
+  "syscalls": [
+    {
+      "names": [
+        "unshare", "ptrace", "kcmp", "process_vm_readv", "process_vm_writev",
+        "mount", "umount2", "pivot_root", "swapon", "swapoff", "reboot",
+        "kexec_load", "kexec_file_load", "init_module", "finit_module", "delete_module",
+        "iopl", "ioperm", "ioprio_set", "acct", "nfsservctl", "open_by_handle_at",
+        "perf_event_open", "personality", "settimeofday", "stime", "clock_settime",
+        "vmsplice", "bpf", "userfaultfd", "keyctl", "add_key", "request_key",
+        "setns", "migrate_pages", "move_pages", "mbind", "set_mempolicy"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    }
+  ]
+}

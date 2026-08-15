@@ -1,0 +1,363 @@
+\section{Evaluation}
+\label{sec:eval}
+\label{sec:eval-setup}
+\label{sec:eval-cross}
+\label{sec:eval-adaptive}
+\label{sec:eval-adaptive-threshold}
+\label{sec:eval-resource}
+\label{sec:eval-supplement}
+
+The evaluation is designed around the paper's causal claim rather than an
+inventory of Neuron features. We first reproduce policy-plane starvation in
+the Java runtime, then separate timeout semantics from executor isolation,
+and finally test capacity, benign quality of service (QoS), and an
+application-level trace replay. Quota, sandbox, privilege-propagation, and
+audit-correlation tests remain regression evidence in the artifact but are not
+counted as independent contributions.
+
+\subsection{Questions and Metrics}
+
+\paragraph{RQ1: failure conditions.}
+We measure the fraction of permission requests that do not return a verdict
+within the configured deadline. For the depth-2 destructive probe, a fail-open
+timeout is unsafe because it becomes \textsc{ask-with-context}; fail-closed
+handling returns \textsc{deny-timeout}. We report timeout rate, secure-decision
+rate, and p50/p95 latency.
+
+\paragraph{RQ2: isolation versus coupling.}
+Both reserved-capacity configurations use the same permission pool. If both
+meet their deadlines, reservation explains availability. A difference in the
+depth-1 destructive probe is attributed to coupling only when the policy code,
+capacity, and request are otherwise identical.
+
+\paragraph{RQ3: cross-environment and capacity sensitivity.}
+The unit of replication is an independently started JVM, not a request within
+one process. We report per-run summaries and ranges. A nine-cell local sweep
+varies permission-pool size in $\{1,2,4\}$ and queue capacity in
+$\{16,128,512\}$; the representative deadlines are 10 and 50\,ms.
+
+\paragraph{RQ4: process-separated policy-service behavior.}
+We measure the same safety and QoS metrics when permission evaluation runs in
+an independently started Java process behind HTTP, with injected service
+delay, queue pressure, and pause.
+
+\paragraph{RQ5: application QoS and residual risk.}
+We measure benign completion, attack security, error tightening, and p95
+latency for 100/0, 90/10, 75/25, and 50/50 benign/attack mixes. We also replay
+immutable tool-call traces produced by earlier real API sessions. This replay
+tests integration with application-shaped calls without claiming a new live
+deployment. Audit-queue exhaustion remains outside this evaluation.
+
+\subsection{JVM-Native Experimental Design}
+\label{sec:eval-starvation}
+
+\paragraph{Runtime path.}
+The benchmark is compiled with the Neuron Java~21 project. Virtual threads
+generate tenant requests; bounded platform-thread executors represent shared
+and reserved capacity. Attacker tasks occupy a worker for a configured hold
+time. Permission requests invoke the production
+\texttt{EscalationPolicy.evaluate}. Coupled runs additionally invoke the
+production \texttt{RateLimitSyscallFilter.preFilter} token bucket and pass
+its rejection count into the policy. Python is used only after execution to
+aggregate immutable JSONL observations.
+
+\paragraph{Architectures.}
+The four predeclared comparisons use identical request generation, policy
+code, and measurement logic.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Architectural baselines. ``Shared'' means that tenant and
+permission work use one bounded executor.}
+\label{tab:architectures}
+\begin{tabular}{llll}
+\toprule
+Configuration & Policy capacity & Timeout & Pressure signal \\
+\midrule
+Layer-separated + fail-open   & Shared   & Permissive & No \\
+Layer-separated + fail-closed & Shared   & Deny       & No \\
+Isolated, no coupling         & Reserved & Deny       & No \\
+Neuron coupled                & Reserved & Deny       & Yes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The core configuration uses a shared pool of four workers, a reserved
+permission pool of two workers, and a queue of 512. Each cell contains 30
+decisions after a 100\,ms warm-up. The core response surface has five
+independent runs per host; the capacity sweep is a separate local experiment
+with the same four architectures. The analysis scripts count
+\ComputingObservationCount{} core/capacity observations from
+\ComputingRunCount{} JVM runs on \ComputingHostCount{} hosts, including
+\ComputingCoreRunCount{} core runs and \ComputingCapacityConfigCount{} capacity
+configurations.
+
+\paragraph{Factor sweeps.}
+The cross-environment core run uses 3, 10, and 50\,ms deadlines, a fixed
+burst-lock workload, and attacker counts $\{1,4,16\}$. The response surface
+fixes 10\,ms and crosses attacker count, request rate
+$\{100,500,2000\}$ requests/s, and task hold time
+$\{0.5,2,5\}$\,ms. The local capacity sweep uses permission pools
+$\{1,2,4\}$ and queues $\{16,128,512\}$ at 10 and 50\,ms. Every verdict,
+admission failure, latency, queue depth, and rejection counter is retained.
+
+\paragraph{Reproducibility.}
+The entry point is
+\texttt{PermissionStarvationJvmBenchmark}; the Docker-compatible
+\texttt{BenchmarkLauncher} runs the same JUnit method without Maven. Each
+run receives a unique \texttt{run\_id}, writes a raw JSONL file and an
+environment record, and never overwrites an earlier run. The scripts
+\texttt{analyze\_computing\_experiments.py} and
+\texttt{analyze\_qos\_experiments.py} regenerate the CSV summaries and
+LaTeX macros used here; the cross-run CSV also reports 95\% $t$ intervals
+over independent JVM runs in addition to min/max ranges.
+\texttt{LlmTraceReplayRunner} and
+\texttt{analyze\_llm\_replay.py} perform the fixed-trace application replay.
+The process-separated experiment is launched with
+\path{python evaluation/run\_permission\_http\_fault\_injection.py}; it
+starts the Java~21 service as a child process, writes immutable raw JSONL, and
+is summarized by \path{python evaluation/analyze\_permission\_http.py}.
+
+\subsection{RQ1: Starvation and Timeout Semantics}
+
+Table~\ref{tab:ten-ms} reports the 10\,ms burst-lock point averaged over the
+five independent core runs on each host. Percentages are calculated per run
+before averaging; they are not 30 independent samples from one JVM.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Core burst-lock workload at a 10\,ms permission deadline.}
+\label{tab:ten-ms}
+\begin{tabular}{lrrrr}
+\toprule
+ & \multicolumn{2}{c}{Windows} & \multicolumn{2}{c}{Ubuntu/KVM VPS} \\
+Architecture & Timeout & Secure & Timeout & Secure \\
+\midrule
+Layer-separated + fail-open   & \ComputingwindowslocalFailOpenTimeout{} & \ComputingwindowslocalFailOpenSecure{} & \ComputingvpsubuntukvmFailOpenTimeout{} & \ComputingvpsubuntukvmFailOpenSecure{} \\
+Layer-separated + fail-closed & \ComputingwindowslocalFailClosedTimeout{} & \ComputingwindowslocalFailClosedSecure{} & \ComputingvpsubuntukvmFailClosedTimeout{} & \ComputingvpsubuntukvmFailClosedSecure{} \\
+Isolated, no coupling         & \ComputingwindowslocalIsolatedTimeout{} & \ComputingwindowslocalIsolatedSecure{} & \ComputingvpsubuntukvmIsolatedTimeout{} & \ComputingvpsubuntukvmIsolatedSecure{} \\
+Neuron coupled                & \ComputingwindowslocalCoupledTimeout{} & \ComputingwindowslocalCoupledSecure{} & \ComputingvpsubuntukvmCoupledTimeout{} & \ComputingvpsubuntukvmCoupledSecure{} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The two shared configurations have the same scheduling failure but different
+security meanings: fail-open converts a missed deadline into an unsafe
+admission, whereas fail-closed preserves safety by rejecting the request.
+Both reserved configurations avoid the measured timeout region on both
+hosts. This rejects the stronger claim that resource pressure alone defeats a
+permission layer; the failure requires a shared capacity bottleneck and a
+permissive timeout rule.
+
+\paragraph{Answer to RQ1.}
+The Java-native evidence reproduces a conditional policy-plane failure on
+two environments and across 3--50\,ms deadlines. Availability is governed by
+capacity isolation; safety under starvation is governed by the fallback
+semantics.
+
+\subsection{RQ2: What Coupling Adds Beyond Isolation}
+\label{sec:eval-joint}
+
+For the depth-1 destructive probe, the static policy returns
+\textsc{ask-with-context}. When the resource rejection count exceeds the
+frozen threshold of 50, the coupled call to
+\texttt{EscalationPolicy.evaluate} tightens the boundary and returns
+\textsc{deny-depth}; the isolated-but-uncoupled call retains \textsc{ask}.
+This is a policy effect beyond executor reservation. A deployment that is
+already statically fail-closed for the probe does not require this particular
+tightening rule for safety, although the correlated pressure signal remains
+useful for audit and incident response.
+
+\paragraph{Answer to RQ2.}
+Reservation explains timely decisions. Coupling changes one production-policy
+verdict under the same reserved capacity, so the two mechanisms are
+experimentally distinguishable.
+
+\subsection{RQ3: Independent Environment and Capacity Sensitivity}
+\label{sec:eval-threshold}
+
+The second environment is an Ubuntu~22.04 Java~21 container on a one-vCPU KVM
+VPS with a 512\,MB JVM heap limit. It is intentionally modest and is not
+presented as an independent physical server. The five core runs reproduce the
+same qualitative separation shown in Table~\ref{tab:ten-ms}. The local
+capacity sweep contains \ComputingCapacityConfigCount{} configurations. At
+10\,ms, coupled governance remains timeout-free across the sweep; its secure
+decision rate is 97.1\% in these stressed local capacity cells, while the
+isolated configuration is 93.3\% secure because capacity reduction can cause
+benign policy probes to be classified conservatively. The fail-open and
+fail-closed controls expose the expected safety/availability trade-off.
+
+These results show that the qualitative mechanism is not an artifact of one
+3\,ms setting or one host. They do not establish a universal optimal pool
+size: the VPS is a single virtualized environment and the capacity sweep is
+local.
+
+\paragraph{Independent threshold holdout.}
+The threshold was selected only from the training split using the preregistered
+candidate set and was then frozen at 50. As a low-cost post-selection check, we
+ran the production Java~21 benchmark again on the Ubuntu/KVM VPS with six
+previously unused profiles: three attack profiles (alternating burst,
+staggered ramp, and long-hold drip) and three benign trajectories (tenant
+batch, cooperative burst, and background ramp). Each profile contributes
+\ThresholdHoldoutPerProfileCount{} observations, for
+\ThresholdHoldoutObservationCount{} observations in total. The fixed threshold
+detected all \ThresholdHoldoutAttackCount{} attack observations
+(\ThresholdHoldoutAttackDetection{}, 95\% Wilson CI
+[\ThresholdHoldoutAttackCILow{},\,\ThresholdHoldoutAttackCIHigh{}]) and produced
+no false positives on \ThresholdHoldoutBenignCount{} benign observations
+(\ThresholdHoldoutBenignFP{}, upper 95\% Wilson bound
+\ThresholdHoldoutBenignFPCIHigh{}). This is an independent transfer check, not
+a claim that the threshold is universally optimal; the profiles are synthetic
+Java workload trajectories and remain subject to the VPS resource envelope.
+
+\paragraph{Answer to RQ3.}
+The failure/mitigation ordering is stable across the two recorded hosts and
+remains interpretable under nine capacity settings. Absolute latency and the
+secure-decision boundary remain deployment parameters.
+
+\subsection{RQ4: Process-Separated Permission Service}
+\label{sec:eval-remote-permission}
+
+The local executor experiment alone cannot distinguish a JVM scheduling
+failure from a failure at a service boundary. We therefore start a second,
+independent Java~21 JVM running the production
+\texttt{EscalationPolicy.evaluate} behind a bounded HTTP server. The client
+driver uses a direct loopback connection with proxy discovery disabled; the
+server and client are separate operating-system processes. Each cell contains
+80\% benign read requests and 20\% depth-2 destructive requests, plus a
+background pressure stream. The service has two worker threads and an
+8-entry queue in the pressure scenario and a 32-entry queue otherwise.
+
+The process-separated matrix contains eight scenarios: nominal 10 and
+50\,ms deadlines, CPU/queue pressure, 5\,ms service delay with a 10\,ms
+deadline, 20\,ms service delay with 10 and 50\,ms deadlines, 50\,ms delay at
+50\,ms, and a deterministic 1.5\,s service pause. Five independent driver
+runs on the Ubuntu/KVM VPS produce \PermissionHttpObservationCount{}
+observations. Raw JSONL files, environment records, and the analysis manifest
+are retained under
+\texttt{evaluation/target/permission\_http\_remote/}; earlier Windows runs
+are retained separately and are not pooled with this VPS result.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Process-separated permission service under a 20\,ms service delay and 50\,ms deadline. Values are means over five independent runs; each cell contains 16 benign and 4 attack requests.}
+\label{tab:http-delay}
+\begin{tabular}{lrrr}
+\toprule
+Architecture & Attack secure & Benign complete & Timeout \\
+\midrule
+Layer-separated + fail-open & \PermissionHttpdelayTwentymsFiftymsLAYERSEPARATEDFAILOPENAttackSecure{} & \PermissionHttpdelayTwentymsFiftymsLAYERSEPARATEDFAILOPENBenignComplete{} & \PermissionHttpdelayTwentymsFiftymsLAYERSEPARATEDFAILOPENTimeout{} \\
+Layer-separated + fail-closed & \PermissionHttpdelayTwentymsFiftymsLAYERSEPARATEDFAILCLOSEDAttackSecure{} & \PermissionHttpdelayTwentymsFiftymsLAYERSEPARATEDFAILCLOSEDBenignComplete{} & \PermissionHttpdelayTwentymsFiftymsLAYERSEPARATEDFAILCLOSEDTimeout{} \\
+Isolated, no coupling & \PermissionHttpdelayTwentymsFiftymsISOLATEDNOCOUPLINGAttackSecure{} & \PermissionHttpdelayTwentymsFiftymsISOLATEDNOCOUPLINGBenignComplete{} & \PermissionHttpdelayTwentymsFiftymsISOLATEDNOCOUPLINGTimeout{} \\
+Neuron coupled & \PermissionHttpdelayTwentymsFiftymsNEURONCOUPLEDAttackSecure{} & \PermissionHttpdelayTwentymsFiftymsNEURONCOUPLEDBenignComplete{} & \PermissionHttpdelayTwentymsFiftymsNEURONCOUPLEDTimeout{} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+At the 20\,ms/50\,ms point, fail-open secures only
+\PermissionHttpdelayTwentymsFiftymsLAYERSEPARATEDFAILOPENAttackSecure{} of attack
+requests, whereas all three fail-closed variants preserve the attack
+decision. Neuron's coupled path reduces the timeout rate to
+\PermissionHttpdelayTwentymsFiftymsNEURONCOUPLEDTimeout{} and retains an attack secure
+rate of \PermissionHttpdelayTwentymsFiftymsNEURONCOUPLEDAttackSecure{}, but its benign
+completion is \PermissionHttpdelayTwentymsFiftymsNEURONCOUPLEDBenignComplete{}.
+Coupling limits unsafe admission during pressure; it does not make a
+separated service faster than the deadline.
+
+The pause scenario gives the clearest semantic separation. Fail-open reaches
+only \PermissionHttpservicepauseFiftymsLAYERSEPARATEDFAILOPENAttackSecure{} attack
+security with \PermissionHttpservicepauseFiftymsLAYERSEPARATEDFAILOPENTimeout{}
+timeouts, while the isolated, fail-closed, and coupled configurations retain
+\PermissionHttpservicepauseFiftymsNEURONCOUPLEDAttackSecure{} attack security and
+\PermissionHttpservicepauseFiftymsNEURONCOUPLEDBenignComplete{} benign completion
+in this controlled pause. These results support a process-boundary claim, but
+not a claim that coupling eliminates service partitions.
+
+\paragraph{Answer to RQ4.}
+The independent service experiment confirms that the safety result is not an
+artifact of the retired Python lock model or an in-process-only policy call.
+It also exposes the required trade-off: service delay and pause require
+capacity reservation and explicit fail-closed semantics; coupling is an
+additional admission guard, not a substitute for service availability.
+
+\subsection{RQ5: Benign QoS and API-Trace Replay}
+\label{sec:eval-e2e}
+
+\paragraph{Mixed-load QoS.}
+The dedicated QoS mode sends 100 permission requests per cell at a 10\,ms
+deadline and controls the benign fraction at 100, 90, 75, or 50\%. The
+1,600 observations are from one Windows run and are reported separately from
+the cross-host core count. At the 90/10 mix, isolated and coupled governance
+complete 100\% of benign requests and securely handle 100\% of attack
+requests; both shared controls suffer policy timeouts. At the 50/50 mix, the
+same separation remains, while fail-open exposes unsafe attack admissions and
+fail-closed preserves attack safety by sacrificing benign completion. This
+directly measures QoS rather than treating rejection count as a security
+benefit.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Mixed-load QoS on Windows (100 requests per architecture/mix cell).}
+\label{tab:qos}
+\begin{tabular}{lrrrr}
+\toprule
+ & \multicolumn{2}{c}{90\% benign / 10\% attack} & \multicolumn{2}{c}{50\% benign / 50\% attack} \\
+Architecture & Benign complete & Attack secure & Benign complete & Attack secure \\
+\midrule
+Fail-open  & \ComputingQosFailOpenBninetyBenignCompletion{} & \ComputingQosFailOpenBninetyAttackSecure{} & \ComputingQosFailOpenBfiftyBenignCompletion{} & \ComputingQosFailOpenBfiftyAttackSecure{} \\
+Fail-closed & \ComputingQosFailClosedBninetyBenignCompletion{} & \ComputingQosFailClosedBninetyAttackSecure{} & \ComputingQosFailClosedBfiftyBenignCompletion{} & \ComputingQosFailClosedBfiftyAttackSecure{} \\
+Isolated   & \ComputingQosIsolatedBninetyBenignCompletion{} & \ComputingQosIsolatedBninetyAttackSecure{} & \ComputingQosIsolatedBfiftyBenignCompletion{} & \ComputingQosIsolatedBfiftyAttackSecure{} \\
+Coupled    & \ComputingQosCoupledBninetyBenignCompletion{} & \ComputingQosCoupledBninetyAttackSecure{} & \ComputingQosCoupledBfiftyBenignCompletion{} & \ComputingQosCoupledBfiftyAttackSecure{} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{API-derived trace replay.}
+The original API collection contains 33 parseable sessions: 18 benign
+sessions (78 tool calls) and 15 resource-abuse sessions (176 tool calls).
+The Java replay evaluates the same 254 immutable calls under all four
+architectures, producing \LlmReplayCalls{} architecture evaluations. The
+reserved isolated and coupled paths complete 100\% of both workload classes;
+the shared paths time out under the replay harness's 10\,ms local policy
+deadline. Because the model responses are not regenerated, this is an
+integration check using real tool-call shapes, not a claim of statistical
+coverage of the LLM ecosystem. We additionally replayed the same 33 sessions
+on the Ubuntu/KVM VPS, producing the same 1,016 architecture-level call
+observations without regenerating model responses; this checks that the replay
+path is not Windows-specific.
+
+\paragraph{Answer to RQ5.}
+The coupled architecture preserves benign completion while retaining the
+attack decision in the measured mixed-load and API-trace settings. Residual
+risk lies in deadline and capacity calibration, audit backpressure, and
+failures outside the local JVM/container trust boundary.
+
+\subsection{Threats to Validity}
+
+\paragraph{Internal validity.}
+JIT compilation, garbage collection, VPS co-tenancy, and scheduler noise can
+influence latency. We warm each cell, retain untrimmed observations, report
+environment records, and use independent JVM runs. The rate limiter and
+escalation policy are production classes; workload drivers and timeout
+wrappers are experimental harness code.
+
+\paragraph{Construct validity.}
+A missed 10\,ms harness deadline represents policy-plane unavailability, not
+proof that a deployed service uses that deadline. We therefore compare both
+fallback semantics and report the deadline sweep. Resource rejection count is
+a pressure signal, not a direct measurement of CPU, memory, or lock
+contention. The QoS mixture controls request classes, while background attack
+load is a synthetic stressor.
+
+\paragraph{External validity.}
+The second host is a one-vCPU virtual machine, not a second physical
+microarchitecture. The process-separated service is still a loopback
+deployment on one host; it does not establish WAN latency, multi-node, GPU, or
+production-traffic performance. Capacity sensitivity is local, and the API
+replay uses one previously collected trace set. Audit-queue partitions remain
+outside the measured matrix. AutoGen, LangGraph, and MCP are not
+security-system baselines.

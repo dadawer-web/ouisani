@@ -14,8 +14,47 @@ import {
   useMemoryStore,
   ERR_PRIMARY_STORE_NOT_CONFIGURED,
   type MemoryDomain,
+  type MemoryLayer,
   type MemoryFilter,
 } from "@/store/memoryStore";
+import { AIOS_API_URL } from "../config";
+
+const AIOS_TOKEN = "AIOS-SUPER-SECRET-KEY";
+
+interface RetrievalTraceView {
+  query?: string;
+  seeds?: Array<{
+    node_id?: string;
+    node_type?: string;
+    channels?: string[];
+    combined_score?: number;
+    reason?: string;
+  }>;
+  expanded_edges?: Array<{
+    source_id?: string;
+    target_id?: string;
+    type?: string;
+    confidence?: number;
+  }>;
+  ranking?: Array<{ node_id?: string; rank?: number; score?: number; reasons?: string[] }>;
+  evidence_bundle?: Array<{
+    evidence_id?: string;
+    role?: string;
+    summary?: string;
+    source_ref?: string;
+    score?: number;
+  }>;
+  conflicts?: Array<{
+    claim_node_id?: string;
+    supporting_evidence_ids?: string[];
+    contradicting_evidence_ids?: string[];
+    reason?: string;
+  }>;
+  answer_support?: Array<{ evidence_id?: string; covered?: boolean; reason?: string }>;
+  sufficient?: boolean;
+  insufficiency_reason?: string;
+  should_observe?: boolean;
+}
 
 /**
  * 记忆查看器面板 — P3「看得见改得了」前端入口。
@@ -47,11 +86,16 @@ export default function MemoryViewer() {
     fetchMemories,
     updateConfidence,
     updateDomain,
+    updateLayer,
     deleteMemory,
   } = useMemoryStore();
 
   const [inputId, setInputId] = useState(agentId);
   const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);
+  const [traceQuery, setTraceQuery] = useState("");
+  const [trace, setTrace] = useState<RetrievalTraceView | null>(null);
+  const [traceLoading, setTraceLoading] = useState(false);
+  const [traceError, setTraceError] = useState<string | null>(null);
 
   // 挂载时若已有持久化 agentId，自动加载
   useEffect(() => {
@@ -70,6 +114,39 @@ export default function MemoryViewer() {
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") handleLoad();
+  };
+
+  const loadTrace = async () => {
+    const scope = agentId.trim();
+    const query = traceQuery.trim();
+    if (!scope || !query) return;
+    setTraceLoading(true);
+    setTraceError(null);
+    try {
+      const params = new URLSearchParams({ query, onInsufficient: "OBSERVE" });
+      params.set("token", AIOS_TOKEN);
+      const response = await fetch(
+        `${AIOS_API_URL}/api/memory/graph/${encodeURIComponent(scope)}/retrieve?${params.toString()}`
+      );
+      if (!response.ok) {
+        let message = `HTTP ${response.status}`;
+        try {
+          const body = await response.json();
+          message = body.error || message;
+        } catch {
+          // Keep the HTTP fallback.
+        }
+        setTraceError(message);
+        setTrace(null);
+        return;
+      }
+      setTrace((await response.json()) as RetrievalTraceView);
+    } catch (error) {
+      setTraceError(error instanceof Error ? error.message : "network error");
+      setTrace(null);
+    } finally {
+      setTraceLoading(false);
+    }
   };
 
   // 过滤后的记忆列表
@@ -154,6 +231,30 @@ export default function MemoryViewer() {
         </span>
       </div>
 
+      <div className="flex flex-shrink-0 flex-col gap-2 rounded-lg bg-surface-container-low p-2 ghost-border">
+        <div className="flex items-center gap-2">
+          <Search className="h-3.5 w-3.5 text-primary" />
+          <input
+            value={traceQuery}
+            onChange={(event) => setTraceQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void loadTrace();
+            }}
+            placeholder="Trace retrieval: why was this memory recalled?"
+            className="min-w-0 flex-1 bg-transparent text-[10px] text-on-surface placeholder:text-outline/50 focus:outline-none"
+          />
+          <button
+            onClick={() => void loadTrace()}
+            disabled={traceLoading || !agentId.trim() || !traceQuery.trim()}
+            className="btn-primary-ink rounded-md px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-on-primary disabled:opacity-40"
+          >
+            {traceLoading ? "Tracing..." : "Trace"}
+          </button>
+        </div>
+        {traceError && <div className="text-[10px] text-error">{traceError}</div>}
+        {trace && <RetrievalTracePanel trace={trace} />}
+      </div>
+
       {/* ═══ 内容区 ═══ */}
       <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
         {/* 503 特殊提示 —— primary-fixed 配置提示卡 */}
@@ -214,6 +315,7 @@ export default function MemoryViewer() {
             onDomainToggle={() =>
               updateDomain(m.key, m.domain === "USER" ? "AGENT" : "USER")
             }
+            onLayerChange={(layer) => updateLayer(m.key, layer)}
             onDeleteClick={() => setConfirmDeleteKey(m.key)}
             onDeleteConfirm={() => {
               deleteMemory(m.key);
@@ -231,6 +333,65 @@ export default function MemoryViewer() {
 //  单条记忆卡片
 // ════════════════════════════════════════════════════════════════
 
+function RetrievalTracePanel({ trace }: { trace: RetrievalTraceView }) {
+  const seeds = trace.seeds || [];
+  const evidence = trace.evidence_bundle || [];
+  const conflicts = trace.conflicts || [];
+  const edges = trace.expanded_edges || [];
+  return (
+    <div className="rounded-md bg-surface-container-lowest p-2 text-[9px] ghost-border">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`pill ${trace.sufficient ? "bg-primary-fixed/60 text-primary" : "bg-error-container/50 text-error"}`}>
+          {trace.sufficient ? "GROUNDED" : trace.should_observe ? "OBSERVE" : "INSUFFICIENT"}
+        </span>
+        <span className="font-mono text-outline">{seeds.length} seeds</span>
+        <span className="font-mono text-outline">{edges.length} typed edges</span>
+        <span className="font-mono text-outline">{evidence.length} evidence</span>
+        {conflicts.length > 0 && <span className="font-mono text-error">{conflicts.length} conflict(s)</span>}
+      </div>
+      {!trace.sufficient && trace.insufficiency_reason && (
+        <div className="mt-1 text-error">{trace.insufficiency_reason}</div>
+      )}
+      {seeds.length > 0 && (
+        <div className="mt-2 space-y-1">
+          <div className="font-bold uppercase tracking-wider text-outline">Why recalled</div>
+          {seeds.slice(0, 4).map((seed) => (
+            <div key={seed.node_id} className="rounded bg-surface-container-low px-1.5 py-1">
+              <span className="font-mono text-on-surface">{seed.node_id}</span>
+              <span className="ml-1 text-outline">{seed.node_type}</span>
+              <span className="ml-1 text-primary">{(seed.combined_score ?? 0).toFixed(3)}</span>
+              {seed.channels && <span className="ml-1 text-outline">[{seed.channels.join(" + ")}]</span>}
+              {seed.reason && <div className="mt-0.5 text-outline/80">{seed.reason}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+      {evidence.length > 0 && (
+        <div className="mt-2 space-y-1">
+          <div className="font-bold uppercase tracking-wider text-outline">Answer evidence</div>
+          {evidence.slice(0, 6).map((item) => (
+            <div key={item.evidence_id} className="flex gap-1 rounded bg-surface-container-low px-1.5 py-1">
+              <span className={item.role === "CONFLICT" ? "text-error" : "text-primary"}>{item.role}</span>
+              <span className="min-w-0 flex-1 truncate text-on-surface">{item.summary || item.evidence_id}</span>
+              {item.source_ref && <span className="max-w-[35%] truncate font-mono text-outline">{item.source_ref}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      {conflicts.length > 0 && (
+        <div className="mt-2 space-y-1 text-error">
+          <div className="font-bold uppercase tracking-wider">Conflicts</div>
+          {conflicts.slice(0, 4).map((conflict) => (
+            <div key={conflict.claim_node_id} className="rounded bg-error-container/20 px-1.5 py-1">
+              {conflict.claim_node_id}: {(conflict.contradicting_evidence_ids || []).join(", ")}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface MemoryCardProps {
   record: {
     key: string;
@@ -239,12 +400,14 @@ interface MemoryCardProps {
     timestamp: number;
     confidence: number;
     domain: MemoryDomain;
+    layer: MemoryLayer;
     version: number;
   };
   pending: boolean;
   confirmDelete: boolean;
   onConfidenceChange: (c: number) => void;
   onDomainToggle: () => void;
+  onLayerChange: (layer: MemoryLayer) => void;
   onDeleteClick: () => void;
   onDeleteConfirm: () => void;
   onDeleteCancel: () => void;
@@ -256,6 +419,7 @@ function MemoryCard({
   confirmDelete,
   onConfidenceChange,
   onDomainToggle,
+  onLayerChange,
   onDeleteClick,
   onDeleteConfirm,
   onDeleteCancel,
@@ -301,6 +465,19 @@ function MemoryCard({
             )}
             <span className="font-mono">{formatTs(record.timestamp)}</span>
             <span className="font-mono text-outline/70">v{record.version}</span>
+            <span className="rounded bg-primary-fixed/30 px-1.5 py-0.5 font-mono text-primary">
+              <select
+                value={record.layer}
+                disabled={pending}
+                onChange={(event) => onLayerChange(event.target.value as MemoryLayer)}
+                className="bg-transparent font-mono text-[9px] text-primary outline-none"
+                title="调整记忆生命周期层"
+              >
+                {(["L0", "L1", "L2", "L3"] as MemoryLayer[]).map((layer) => (
+                  <option key={layer} value={layer}>{layer}</option>
+                ))}
+              </select>
+            </span>
           </div>
         </div>
 

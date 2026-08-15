@@ -1,6 +1,6 @@
 import { memo, useState, useCallback, useEffect, useRef, type FC } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { Bot, Trash2, Radio, ArrowRightFromLine, Sliders, ChevronDown, ChevronUp, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import { Bot, Trash2, Radio, ArrowRightFromLine, Sliders, ChevronUp, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { useWorkflowStore, type AgentNodeData } from "@/store/workflowStore";
 import { cn } from "@/lib/utils";
 

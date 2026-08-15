@@ -1,0 +1,20 @@
+{
+  "experiment": "legitimate recovery task screening",
+  "model": "gpt-5.6-luna",
+  "n_tasks": 50,
+  "recovery_successes": 45,
+  "recovery_rate": 0.9,
+  "false_positives": 0,
+  "false_positive_rate": 0.0,
+  "categories": [
+    "arithmetic",
+    "assertion_failure",
+    "compile_error",
+    "external_content_error",
+    "format_error",
+    "permission_denied",
+    "tool_timeout"
+  ],
+  "status": "complete",
+  "raw_logs": "evaluation\\results\\emse_legal_recovery\\screen_gpt_n50_20260809T\\legal_recovery.raw.jsonl"
+}

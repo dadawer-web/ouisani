@@ -1,12 +1,24 @@
 package com.ouisani.aios.core.ipc;
 
+import com.ouisani.aios.core.memory.MemoryLayer;
+import com.ouisani.aios.core.audit.UnifiedAuditLog;
+import com.ouisani.aios.core.network.EventBus;
+import com.ouisani.aios.core.tool.DelegationToken;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
+import java.util.UUID;
 
 /**
  * 共享内存段管理器 (SHM IPC) — AIOS 的进程间共享内存。
@@ -50,6 +62,11 @@ public final class SharedMemoryManager {
     // ── 语义内存块 ──
 
     private final ConcurrentHashMap<String, SemanticMemoryBlock> semanticBlocks = new ConcurrentHashMap<>();
+
+    /** namespace + NUL + memoryId -> current governed record. */
+    private final ConcurrentHashMap<String, MemoryRecord> scopedRecords = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CopyOnWriteArrayList<MemoryRecord>> scopedHistory = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, MemorySubscription> memorySubscriptions = new ConcurrentHashMap<>();
 
     private SharedMemoryManager() {}
 
@@ -214,5 +231,341 @@ public final class SharedMemoryManager {
         log.debug("[SHM] Context pointer: block={}, key={}, ref={}, newVersion={}",
                 blockId, key, contextRef, block.version());
         return block.version();
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // Scoped Shared Memory — namespace/scope/version/provenance
+    // ════════════════════════════════════════════════════════════════
+
+    /** Create or update a governed memory record, retaining the old version. */
+    public MemoryRecord putMemory(MemoryRecord draft, MemoryAccessContext context) {
+        Objects.requireNonNull(draft, "memory record must not be null");
+        MemoryAccessContext caller = context == null ? MemoryAccessContext.current() : context;
+        String key = memoryKey(draft.namespace(), draft.memoryId());
+        final MemoryRecord[] result = new MemoryRecord[1];
+        scopedRecords.compute(key, (ignored, existing) -> {
+            if (existing == null) {
+                requireCreateAllowed(draft, caller);
+                result[0] = normalizeCreated(draft, caller);
+                return result[0];
+            }
+            requireAccess(existing, caller, "write");
+            result[0] = existing.withContent(draft.content(), draft.source(), caller.agentId(), draft.traceId());
+            scopedHistory.computeIfAbsent(key, ignoredKey -> new CopyOnWriteArrayList<>()).add(existing);
+            return result[0];
+        });
+        auditUpdate(result[0], caller, "write");
+        publishUpdate(result[0], caller);
+        return result[0];
+    }
+
+    /** Create-only variant; an existing namespace/key is a conflict. */
+    public MemoryRecord createMemory(MemoryRecord draft, MemoryAccessContext context) {
+        Objects.requireNonNull(draft, "memory record must not be null");
+        MemoryAccessContext caller = context == null ? MemoryAccessContext.current() : context;
+        requireCreateAllowed(draft, caller);
+        MemoryRecord created = normalizeCreated(draft, caller);
+        String key = memoryKey(created.namespace(), created.memoryId());
+        if (scopedRecords.putIfAbsent(key, created) != null) {
+            throw new IllegalStateException("memory record already exists: " + created.memoryId());
+        }
+        auditUpdate(created, caller, "create");
+        publishUpdate(created, caller);
+        return created;
+    }
+
+    /** Convenience create/update method for text records. */
+    public MemoryRecord putMemory(String namespace, String memoryId, String content,
+                                  MemoryScope scope, String source,
+                                  MemoryAccessContext context) {
+        return putMemory(namespace, memoryId, content, scope, source, null,
+                MemoryLayer.L1, context);
+    }
+
+    /** Convenience overload for TEAM records, which require a team identity. */
+    public MemoryRecord putMemory(String namespace, String memoryId, String content,
+                                  MemoryScope scope, String source, String teamId,
+                                  MemoryAccessContext context) {
+        return putMemory(namespace, memoryId, content, scope, source, teamId,
+                MemoryLayer.L1, context);
+    }
+
+    /** Convenience overload for explicit L0-L3 lifecycle placement. */
+    public MemoryRecord putMemory(String namespace, String memoryId, String content,
+                                  MemoryScope scope, String source, String teamId,
+                                  MemoryLayer layer, MemoryAccessContext context) {
+        MemoryAccessContext caller = context == null ? MemoryAccessContext.current() : context;
+        if (caller == null || !caller.hasIdentity()) throw denied(namespace, caller, "missing_agent_identity");
+        MemoryRecord draft = MemoryRecord.draft(namespace, memoryId, scope, caller.agentId(),
+                caller.effectiveWorkflowId(), caller.effectiveTenantId(), layer, content, source)
+                .withTeam(teamId == null ? caller.teamId() : teamId);
+        return putMemory(draft, caller);
+    }
+
+    /** Return a record if the caller can read it; missing records return null. */
+    public MemoryRecord getMemory(String namespace, String memoryId, MemoryAccessContext context) {
+        MemoryRecord record = scopedRecords.get(memoryKey(namespace, memoryId));
+        if (record == null) return null;
+        MemoryAccessContext caller = context == null ? MemoryAccessContext.current() : context;
+        requireAccess(record, caller, "read");
+        return record.expiredAt(System.currentTimeMillis()) ? null : record;
+    }
+
+    public MemoryRecord getMemory(String namespace, String memoryId) {
+        return getMemory(namespace, memoryId, MemoryAccessContext.current());
+    }
+
+    /** List only records visible to this caller in the requested namespace. */
+    public List<MemoryRecord> listMemory(String namespace, MemoryAccessContext context) {
+        String ns = required(namespace, "namespace");
+        MemoryAccessContext caller = context == null ? MemoryAccessContext.current() : context;
+        List<MemoryRecord> visible = new ArrayList<>();
+        String prefix = ns + "\u0000";
+        for (Map.Entry<String, MemoryRecord> entry : scopedRecords.entrySet()) {
+            if (!entry.getKey().startsWith(prefix)) continue;
+            MemoryRecord record = entry.getValue();
+            if (!record.expiredAt(System.currentTimeMillis()) && canAccess(record, caller, "read")) visible.add(record);
+        }
+        visible.sort(Comparator.comparing(MemoryRecord::updatedAt));
+        return Collections.unmodifiableList(visible);
+    }
+
+    public List<MemoryRecord> listMemory(String namespace) {
+        return listMemory(namespace, MemoryAccessContext.current());
+    }
+
+    /**
+     * List every non-expired record visible to the supplied caller.
+     *
+     * <p>This is intentionally an authenticated projection of the in-memory
+     * index, not a second memory store.  Consumers such as the Wiki compiler
+     * use it when they need to build a cross-namespace read model while still
+     * applying the same scope, tenant and delegation checks as normal reads.</p>
+     */
+    public List<MemoryRecord> listVisibleMemory(MemoryAccessContext context) {
+        MemoryAccessContext caller = context == null ? MemoryAccessContext.current() : context;
+        long now = System.currentTimeMillis();
+        List<MemoryRecord> visible = new ArrayList<>();
+        for (MemoryRecord record : scopedRecords.values()) {
+            if (!record.expiredAt(now) && canAccess(record, caller, "read")) {
+                visible.add(record);
+            }
+        }
+        visible.sort(Comparator.comparing(MemoryRecord::updatedAt).reversed());
+        return Collections.unmodifiableList(visible);
+    }
+
+    /** Append text while advancing the optimistic version. */
+    public MemoryRecord appendMemory(String namespace, String memoryId, String suffix,
+                                     String source, MemoryAccessContext context) {
+        Objects.requireNonNull(suffix, "suffix must not be null");
+        MemoryAccessContext caller = context == null ? MemoryAccessContext.current() : context;
+        String key = memoryKey(namespace, memoryId);
+        final MemoryRecord[] result = new MemoryRecord[1];
+        scopedRecords.compute(key, (ignored, existing) -> {
+            if (existing == null) throw new IllegalArgumentException("memory record not found: " + memoryId);
+            requireAccess(existing, caller, "write");
+            String joined = existing.content().isEmpty() ? suffix
+                    : existing.content() + System.lineSeparator() + suffix;
+            result[0] = existing.withContent(joined, source, caller.agentId(), null);
+            scopedHistory.computeIfAbsent(key, ignoredKey -> new CopyOnWriteArrayList<>()).add(existing);
+            return result[0];
+        });
+        auditUpdate(result[0], caller, "append");
+        publishUpdate(result[0], caller);
+        return result[0];
+    }
+
+    /** Compare-and-set; empty means missing record or version conflict. */
+    public Optional<MemoryRecord> compareAndSetMemory(String namespace, String memoryId,
+                                                       long expectedVersion, String content,
+                                                       String source, MemoryAccessContext context) {
+        MemoryAccessContext caller = context == null ? MemoryAccessContext.current() : context;
+        String key = memoryKey(namespace, memoryId);
+        final MemoryRecord[] result = new MemoryRecord[1];
+        scopedRecords.compute(key, (ignored, existing) -> {
+            if (existing == null) return null;
+            requireAccess(existing, caller, "write");
+            if (existing.version() != expectedVersion) return existing;
+            result[0] = existing.withContent(content, source, caller.agentId(), null);
+            scopedHistory.computeIfAbsent(key, ignoredKey -> new CopyOnWriteArrayList<>()).add(existing);
+            return result[0];
+        });
+        if (result[0] == null) return Optional.empty();
+        auditUpdate(result[0], caller, "compare_and_set");
+        publishUpdate(result[0], caller);
+        return Optional.of(result[0]);
+    }
+
+    /** Return previous versions, oldest first. */
+    public List<MemoryRecord> memoryHistory(String namespace, String memoryId,
+                                            MemoryAccessContext context) {
+        String key = memoryKey(namespace, memoryId);
+        MemoryRecord current = scopedRecords.get(key);
+        if (current == null) return List.of();
+        MemoryAccessContext caller = context == null ? MemoryAccessContext.current() : context;
+        requireAccess(current, caller, "read");
+        List<MemoryRecord> history = scopedHistory.get(key);
+        return history == null ? List.of() : Collections.unmodifiableList(new ArrayList<>(history));
+    }
+
+    /** Snapshot current records for hibernation/recovery integrations. */
+    public List<MemoryRecord> snapshotMemory() {
+        return List.copyOf(scopedRecords.values());
+    }
+
+    /** Restore records captured by {@link #snapshotMemory()} without events. */
+    public void restoreMemory(Iterable<MemoryRecord> records) {
+        if (records == null) return;
+        for (MemoryRecord record : records) {
+            if (record == null) continue;
+            scopedRecords.merge(memoryKey(record.namespace(), record.memoryId()), record,
+                    (oldValue, restored) -> restored.version() >= oldValue.version() ? restored : oldValue);
+        }
+    }
+
+    /** Subscribe to records only when the supplied identity is allowed to read them. */
+    public String subscribeMemoryUpdates(String namespace, MemoryAccessContext context,
+                                         Consumer<MemoryRecord> handler) {
+        Objects.requireNonNull(handler, "handler must not be null");
+        String ns = required(namespace, "namespace");
+        MemoryAccessContext caller = context == null ? MemoryAccessContext.current() : context;
+        if (caller == null || !caller.hasIdentity()) throw denied(ns, caller, "missing_agent_identity");
+        String id = "memsub_" + UUID.randomUUID();
+        memorySubscriptions.put(id, new MemorySubscription(ns, caller, handler));
+        return id;
+    }
+
+    public boolean unsubscribeMemoryUpdates(String subscriptionId) {
+        return subscriptionId != null && memorySubscriptions.remove(subscriptionId) != null;
+    }
+
+    private void requireCreateAllowed(MemoryRecord record, MemoryAccessContext caller) {
+        if (caller == null || !caller.hasIdentity() || !record.ownerAgentId().equals(caller.agentId())) {
+            throw denied(record.namespace(), caller, "create_owner_mismatch");
+        }
+        DelegationToken token = caller.delegationToken();
+        if (token != null && (!token.isValid() || !caller.agentId().equals(token.childAgentId()))) {
+            throw denied(record.namespace(), caller, "delegation_identity_mismatch");
+        }
+        if (!caller.allowsNamespace(record.namespace(), "write")) {
+            throw denied(record.namespace(), caller, "delegation_namespace_denied");
+        }
+        if (record.tenantId() != null && !record.tenantId().equals(caller.effectiveTenantId())) {
+            throw denied(record.namespace(), caller, "tenant_mismatch");
+        }
+        if (record.scope() == MemoryScope.TASK && record.workflowId() == null) {
+            throw new IllegalArgumentException("TASK memory requires workflowId");
+        }
+        if (record.scope() == MemoryScope.TEAM && record.teamId() == null) {
+            throw new IllegalArgumentException("TEAM memory requires teamId");
+        }
+    }
+
+    private MemoryRecord normalizeCreated(MemoryRecord draft, MemoryAccessContext caller) {
+        return new MemoryRecord(draft.memoryId(), draft.namespace(), draft.scope(), draft.ownerAgentId(),
+                draft.workflowId() == null ? caller.effectiveWorkflowId() : draft.workflowId(),
+                draft.tenantId() == null ? caller.effectiveTenantId() : draft.tenantId(),
+                draft.teamId(), draft.contentType(), draft.layer(), draft.content(), draft.source(), draft.sourceRef(),
+                draft.sourceAgentId() == null ? caller.agentId() : draft.sourceAgentId(), draft.traceId(),
+                1L, draft.confidence(), draft.tags(), draft.createdAt(), draft.updatedAt(), draft.expiresAt());
+    }
+
+    private void requireAccess(MemoryRecord record, MemoryAccessContext caller, String operation) {
+        if (!canAccess(record, caller, operation)) {
+            throw denied(record.namespace(), caller, accessReason(record, caller, operation));
+        }
+    }
+
+    private boolean canAccess(MemoryRecord record, MemoryAccessContext caller, String operation) {
+        if (caller == null || !caller.hasIdentity()) return false;
+        DelegationToken token = caller.delegationToken();
+        if (token != null && (!token.isValid() || !caller.agentId().equals(token.childAgentId()))) return false;
+        if (record.tenantId() != null && !record.tenantId().equals(caller.effectiveTenantId())) return false;
+        if (!caller.allowsNamespace(record.namespace(), operation)) return false;
+        return switch (record.scope()) {
+            case PRIVATE -> record.ownerAgentId().equals(caller.agentId());
+            case TASK -> record.workflowId() != null && record.workflowId().equals(caller.effectiveWorkflowId());
+            case TEAM -> record.teamId() != null && record.teamId().equals(caller.teamId());
+        };
+    }
+
+    private String accessReason(MemoryRecord record, MemoryAccessContext caller, String operation) {
+        if (caller == null || !caller.hasIdentity()) return "missing_agent_identity";
+        if (record.tenantId() != null && !record.tenantId().equals(caller.effectiveTenantId())) return "tenant_mismatch";
+        if (!caller.allowsNamespace(record.namespace(), operation)) return "delegation_namespace_denied";
+        return switch (record.scope()) {
+            case PRIVATE -> "private_owner_mismatch";
+            case TASK -> "workflow_mismatch";
+            case TEAM -> "team_mismatch";
+        };
+    }
+
+    private MemoryAccessDeniedException denied(String namespace, MemoryAccessContext caller, String reason) {
+        UnifiedAuditLog.append(new UnifiedAuditLog.TimelineEvent(
+                UnifiedAuditLog.LAYER_PERMISSION, "SHARED_MEMORY", "MEMORY_DENY",
+                caller == null ? null : caller.agentId(), namespace, reason, auditContext(caller)));
+        return new MemoryAccessDeniedException("scoped memory access denied: namespace=" + namespace
+                + ", agent=" + (caller == null ? null : caller.agentId()) + ", reason=" + reason);
+    }
+
+    private void auditUpdate(MemoryRecord record, MemoryAccessContext caller, String operation) {
+        if (record == null) return;
+        UnifiedAuditLog.append(new UnifiedAuditLog.TimelineEvent(
+                UnifiedAuditLog.LAYER_PERMISSION, "SHARED_MEMORY", "MEMORY_" + operation.toUpperCase(),
+                caller == null ? null : caller.agentId(), record.namespace(),
+                "memoryId=" + record.memoryId() + ",version=" + record.version(), auditContext(caller)));
+    }
+
+    private UnifiedAuditLog.AuditContext auditContext(MemoryAccessContext caller) {
+        if (caller == null) return UnifiedAuditLog.AuditContext.current();
+        DelegationToken token = caller.delegationToken();
+        return new UnifiedAuditLog.AuditContext(
+                caller.effectiveTenantId(), caller.effectiveWorkflowId(), null,
+                TraceContext.getCurrentTraceId(), caller.agentId(),
+                token == null ? null : token.parentAgentId(),
+                token == null ? null : token.tokenId(), null, -1);
+    }
+
+    private void publishUpdate(MemoryRecord record, MemoryAccessContext caller) {
+        for (MemorySubscription subscription : memorySubscriptions.values()) {
+            if (subscription.namespace().equals(record.namespace())
+                    && canAccess(record, subscription.context(), "read")) {
+                Thread.startVirtualThread(() -> {
+                    try {
+                        subscription.handler().accept(record);
+                    } catch (RuntimeException e) {
+                        log.debug("[SHM] scoped memory subscriber failed: {}", e.getMessage());
+                    }
+                });
+            }
+        }
+        // The legacy EventBus has no authenticated subscriber identity. Do not
+        // expose scoped metadata for private or tenant-bound records through
+        // its global channel; authenticated callers use the scoped API above.
+        if (record.scope() == MemoryScope.PRIVATE || record.tenantId() != null) return;
+        String payload = "{\"memoryId\":\"" + json(record.memoryId())
+                + "\",\"namespace\":\"" + json(record.namespace())
+                + "\",\"scope\":\"" + record.scope() + "\",\"version\":" + record.version()
+                + ",\"agentId\":\"" + json(caller == null ? null : caller.agentId()) + "\"}";
+        EventBus.instance().broadcast("MEMORY_UPDATE", payload);
+    }
+
+    private record MemorySubscription(String namespace, MemoryAccessContext context,
+                                      Consumer<MemoryRecord> handler) {}
+
+    private static String memoryKey(String namespace, String memoryId) {
+        return required(namespace, "namespace") + "\u0000" + required(memoryId, "memoryId");
+    }
+
+    private static String required(String value, String name) {
+        if (value == null || value.isBlank()) throw new IllegalArgumentException(name + " must not be blank");
+        return value.trim();
+    }
+
+    private static String json(String value) {
+        if (value == null) return "";
+        return value.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r");
     }
 }

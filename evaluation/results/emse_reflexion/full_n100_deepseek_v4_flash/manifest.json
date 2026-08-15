@@ -1,0 +1,20 @@
+{
+  "run_id": "full_n100_deepseek_v4_flash",
+  "run_at_utc": "2026-08-09T05:16:03.462795+00:00",
+  "framework": "Reflexion",
+  "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+  "n_per_variant": 100,
+  "temperature": 0.7,
+  "status": "complete",
+  "models": [
+    {
+      "model": "deepseek-v4-flash",
+      "protocol": "chat_completions",
+      "returncode": 0,
+      "ok": true,
+      "output_dir": "evaluation\\results\\emse_reflexion\\full_n100_deepseek_v4_flash\\deepseek-v4-flash",
+      "log": "evaluation\\results\\emse_reflexion\\full_n100_deepseek_v4_flash\\deepseek-v4-flash.log"
+    }
+  ],
+  "completed_at_utc": "2026-08-09T07:23:42.286247+00:00"
+}

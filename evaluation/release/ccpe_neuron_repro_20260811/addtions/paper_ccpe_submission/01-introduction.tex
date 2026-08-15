@@ -1,0 +1,108 @@
+\section{Introduction}
+\label{sec:intro}
+
+Multi-tenant LLM agents share runtimes, tool gateways, caches, and execution
+capacity across tenants~\cite{mei2025aios,wu2023autogen}. This consolidation
+makes permission checking a concurrency problem. A permission decision is
+scheduled on an executor, reads policy state, may append an audit event, and
+must complete while untrusted tenants generate work. Queueing, lock occupancy,
+and executor rejection can therefore change the behavior of a permission
+path even when resource admission and authorization are implemented as
+separate modules. This interaction between concurrency and runtime control is
+the focus of this paper.
+
+We study one conditional but consequential failure mode. Suppose a runtime
+sets a deadline for a permission decision and uses a permissive result when
+that deadline expires. Hostile work that delays a shared policy executor can
+then turn an executor-availability failure into an unsafe admission. The
+condition is not inevitable: fail-closed handling preserves safety, and a
+reserved permission executor can avoid the scheduling bottleneck. The point is
+that deadline semantics, capacity allocation, queue pressure, and resource
+signals must be evaluated together rather than hidden behind separate layer
+interfaces.
+
+\paragraph{Neuron.}
+We present \textbf{Neuron}, a concurrency-aware runtime architecture with two core
+mechanisms. First, permission checks execute on reserved capacity instead of
+the executor used by tenant work. Second, resource admission exports a
+pressure signal to the escalation policy; under sustained pressure, a
+destructive request one level below the normal depth boundary is denied
+instead of entering an interactive approval path. A per-turn trace identifier
+joins the resource event and permission verdict for audit correlation.
+Spawn-time identity propagation and privilege non-increase support the design,
+while quotas and sandboxes are implementation mechanisms rather than
+co-equal research contributions.
+
+\paragraph{Systematic evaluation.}
+An earlier draft used Python multiprocessing to model Java lock contention and
+emphasized one 3\,ms deadline. That model demonstrated a possible mechanism
+but could not establish behavior of the Neuron runtime. We remove it from the
+evidence chain. The present study executes the Java~21 runtime
+\texttt{RateLimitSyscallFilter} and \texttt{EscalationPolicy} classes in
+Java~21, retains immutable JSONL observations, and treats each independently
+started JVM as the replication unit. Five core runs are completed on each of
+two environments, and a separate capacity experiment varies the permission
+pool and queue. The four predeclared architectures are:
+
+\begin{enumerate}
+  \item a shared permission executor with fail-open timeout handling;
+  \item the same shared executor with fail-closed handling;
+  \item a reserved permission executor without cross-layer coupling; and
+  \item reserved capacity plus Neuron's pressure-aware joint decision.
+\end{enumerate}
+
+The comparison separates two effects. If both reserved configurations meet
+their deadlines, reservation explains availability. If only the coupled
+configuration changes a depth-1 destructive request from \textsc{ask} to
+\textsc{deny}, the difference is attributable to the resource signal rather
+than executor isolation. A fixed-trace replay of previously collected API
+sessions then tests the same decision path with application-level tool-call
+sequences; it is a replay, not a new claim of live deployment.
+
+\paragraph{Research questions.}
+The paper follows the causal chain ``failure exists $\rightarrow$ mechanism
+is isolated $\rightarrow$ behavior is checked outside one machine.''
+
+\begin{description}
+  \item[\textbf{RQ1}] Under what combinations of permission deadline,
+  executor load, and lock-hold time does a shared Java policy executor miss
+  its deadline, and how do timeout and capacity configurations differ?
+  \item[\textbf{RQ2}] Does a resource-pressure signal change the escalation
+  policy verdict beyond the effect of reserving executor capacity?
+  \item[\textbf{RQ3}] Do the queueing and availability patterns reproduce on
+  a second containerized environment, and how sensitive are they to
+  permission-pool and queue capacity?
+  \item[\textbf{RQ4}] Does the availability trade-off persist when the
+  permission policy runs in a separate Java process behind an HTTP service
+  with injected delay and pause faults?
+  \item[\textbf{RQ5}] Does the concurrent decision path preserve completion
+  for benign and adversarial API-derived tool-call traces, and what residual
+  risks remain outside the local JVM/container boundary?
+\end{description}
+
+\paragraph{Contributions.}
+This work contributes:
+
+\begin{enumerate}
+  \item a precise concurrency condition for executor-induced permission
+  unavailability that states the required deadline and timeout semantics;
+  \item a runtime architecture coupling permission-executor capacity with a
+  resource-informed permission verdict; and
+  \item a reproducible Java~21 evaluation with four fair baselines, two
+  environments, independent JVM replications, deadline/load/capacity sweeps,
+  automated raw-data aggregation, and a fixed API-trace replay.
+\end{enumerate}
+
+Identity propagation, privilege non-increase, and audit correlation are
+supporting mechanisms. WASM, Docker, quota enforcement, and LLM routing are
+engineering context and are reported in the artifact or appendix rather than
+presented as independent innovations. AutoGen, LangGraph, and MCP are treated
+as orchestration/protocol examples, not as competing multi-tenant security
+systems; observations about their defaults therefore motivate integration
+requirements but do not establish superiority over those projects.
+
+Section~\ref{sec:bg} defines the failure conditions. Section~\ref{sec:threat}
+states assumptions and non-goals. Section~\ref{sec:arch} describes the
+architecture. Section~\ref{sec:eval} reports the cross-environment
+evaluation, Section~\ref{sec:rw} positions the work, and Section~\ref{sec:conc}
+concludes.

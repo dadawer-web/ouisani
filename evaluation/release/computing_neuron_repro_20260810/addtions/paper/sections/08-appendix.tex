@@ -1,0 +1,63 @@
+\appendix
+\section{Artifact and Reproduction Protocol}
+\label{sec:artifact}
+
+The artifact is organized so that paper values are derived from raw runtime
+observations rather than copied into tables by hand.
+
+\begin{enumerate}
+  \item From \texttt{neuron-java}, run
+  \texttt{mvn -Dtest=PermissionStarvationJvmBenchmark test} with Java~21;
+  pass a unique \texttt{-Dneuron.benchmark.runId} and
+  \texttt{-Dneuron.benchmark.output} for every JVM invocation.
+  \item Confirm that
+  \texttt{evaluation/target/jvm\_starvation\_new/} contains the raw JSONL,
+  summary CSV, and environment records for both hosts.
+  \item Run \path{python evaluation/analyze_computing_experiments.py} and
+  \path{python evaluation/analyze_qos_experiments.py}. These aggregate per
+  run, generate the cross-run CSVs, and write the TeX macros used by the
+  paper. Run \path{python evaluation/analyze_llm_replay.py} after
+  \texttt{LlmTraceReplayRunner} to regenerate the trace-replay macros.
+  \item Run \path{python evaluation/run\_permission\_http\_fault\_injection.py}
+  with \texttt{--mode core --decisions 20 --run-id <id>} to launch the
+  process-separated permission service. After the five independent runs,
+  regenerate its values with
+  \path{python evaluation/analyze\_permission\_http.py} and the pattern
+  \texttt{permission\_http\_vps\_http\_prod\_*.raw.jsonl}.
+  \item Run \path{python evaluation/analyze\_threshold\_holdout.py} after
+  the frozen Java holdout JSONL is present. This script does not select a new
+  threshold; it only evaluates the fixed value 50 on the six unseen profiles.
+  \item Build the paper from \texttt{addtions/paper}. The generated TeX file
+  is imported by \texttt{main.tex}; a missing file therefore causes the
+  consistency check to fail rather than silently substituting an old value.
+\end{enumerate}
+
+The benchmark accepts \texttt{-Dneuron.benchmark.decisions=N} for diagnostic
+runs. Paper core results use $N=30$ per cell; the QoS mode uses $N=100$ to
+approximate the requested mixture proportions. Hardware replications should
+preserve the factor grid and add an environment-specific output directory
+rather than overwrite the first run.
+
+\section{Factor Grid and Recorded Fields}
+
+The core deadline sweep uses $\{3,10,50\}$\,ms. The pressure surface uses
+attacker count $\{1,4,16\}$, per-producer request rate
+$\{100,500,2000\}$ requests/s, and hold time $\{0.5,2,5\}$\,ms. Each raw
+record contains the architecture, split, workload class, morphology, trial,
+all factor values, latency, timeout flag, queue-admission flag, verdict,
+secure-decision flag, cumulative resource rejections, executed attack-task
+count, and permission-queue depth. The separate \texttt{qos} mode records
+the 100/90/75/50 benign fractions, benign completion, and error tightening.
+
+\section{Claims Deliberately Excluded from the Main Evaluation}
+
+The repository contains additional tests for sandboxes, quotas, external
+orchestration libraries, LLM-generated attacks, and formal models. They are
+not inputs to the results in Section~\ref{sec:eval}. In particular, the
+retired Python multiprocessing starvation output is retained only for
+historical comparison and must not be cited as evidence for the JVM claim.
+The current paper does not make a multi-node, GPU, or production-traffic
+performance claim. The process-separated permission fault experiment is
+evaluated on loopback; no WAN latency, partition, or remote multi-node service
+claim is made. The API sessions are replayed traces, not newly sampled online
+sessions.

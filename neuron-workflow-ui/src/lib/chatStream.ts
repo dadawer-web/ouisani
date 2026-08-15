@@ -20,6 +20,14 @@ export interface StreamChatOptions {
   signal?: AbortSignal;
 }
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function errorText(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
 /**
  * 发起一次对话 turn：POST /api/chat，逐 token 回调 onDelta。
  * 正常结束或收到 [DONE] → onDone；HTTP/网络错误或 {"error":...} 事件 → onError。
@@ -37,12 +45,12 @@ export async function streamChat(opts: StreamChatOptions): Promise<void> {
       }),
       signal: opts.signal,
     });
-  } catch (e: any) {
-    if (e?.name === "AbortError") {
+  } catch (e) {
+    if (isAbortError(e)) {
       opts.onDone();
       return;
     }
-    opts.onError(e?.message ?? "network error");
+    opts.onError(errorText(e, "network error"));
     return;
   }
 
@@ -97,12 +105,12 @@ export async function streamChat(opts: StreamChatOptions): Promise<void> {
     }
     // 流自然结束兜底
     finishDone();
-  } catch (e: any) {
-    if (e?.name === "AbortError") {
+  } catch (e) {
+    if (isAbortError(e)) {
       finishDone();
       return;
     }
-    opts.onError(e?.message ?? "stream read error");
+    opts.onError(errorText(e, "stream read error"));
   }
 }
 

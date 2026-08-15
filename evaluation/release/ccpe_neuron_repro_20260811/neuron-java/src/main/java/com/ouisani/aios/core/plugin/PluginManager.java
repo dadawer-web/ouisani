@@ -1,0 +1,514 @@
+package com.ouisani.aios.core.plugin;
+
+import com.ouisani.aios.core.llm.LlmProvider;
+import com.ouisani.aios.core.llm.VectorMath;
+import com.ouisani.aios.core.mcp.McpClientRegistry;
+import com.ouisani.aios.core.sandbox.GraalWasmSandbox;
+import com.ouisani.aios.core.syscall.SyscallDispatcher;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * 插件管理器 — AIOS 内核的模块加载器（insmod/rmmod/modprobe）。
+ * <p>
+ * 类比 Linux 的内核模块管理器：管理可加载工具模块的生命周期，
+ * 支持三种来源：
+ * <ul>
+ *   <li><b>WASM 插件</b> — 通过 {@code insmod} 加载的本地字节码</li>
+ *   <li><b>MCP 服务端工具</b> — 通过 JSON-RPC 发现的远程工具</li>
+ *   <li><b>原生工具</b> — 内核内置系统调用（始终可用）</li>
+ * </ul>
+ *
+ * <h3>OS 类比：insmod / rmmod / modprobe</h3>
+ * <ul>
+ *   <li>{@code sys_insmod(query)} → {@code modprobe}：语义搜索工具并加载到 Agent 上下文
+ *       （类比加载内核模块）</li>
+ *   <li>{@code sys_rmmod(toolName)} → {@code rmmod}：从 Agent 上下文卸载工具以释放 Token 预算
+ *       （类比卸载内核模块）</li>
+ *   <li>{@code semanticSearch(query)} → {@code modprobe -l}：跨所有可用工具的模糊语义匹配
+ *       （类比列出可用模块）</li>
+ * </ul>
+ *
+ * <h3>Token 经济学</h3>
+ * 每个已加载的工具消耗 LLM 上下文窗口中的 Token。
+ * {@code insmod/rmmod} 机制使 Agent 能够按需加载工具、用完即弃。
+ *
+ * @see ToolDefinition
+ * @see AgentToolContext
+ * @see McpClientRegistry
+ */
+public final class PluginManager {
+
+    private static final Logger log = LoggerFactory.getLogger(PluginManager.class);
+
+    // ── Singleton ──
+
+    private static final class Holder {
+        static final PluginManager INSTANCE = new PluginManager();
+    }
+
+    public static PluginManager getInstance() {
+        return Holder.INSTANCE;
+    }
+
+    // ── State ──
+
+    /** WASM bytecode registry: toolName → bytecode. */
+    private final ConcurrentHashMap<String, byte[]> pluginRegistry = new ConcurrentHashMap<>();
+
+    /** Global tool catalog: all discoverable tools (WASM + MCP + Native). */
+    private final ConcurrentHashMap<String, ToolDefinition> toolCatalog = new ConcurrentHashMap<>();
+
+    /** Tool embedding index: toolName → embedding vector (for semantic search). */
+    private final ConcurrentHashMap<String, float[]> toolEmbeddings = new ConcurrentHashMap<>();
+
+    /** Per-agent tool contexts: agentId → active tool chain. */
+    private final ConcurrentHashMap<String, AgentToolContext> agentContexts = new ConcurrentHashMap<>();
+
+    private GraalWasmSandbox sandbox;
+    private LlmProvider llmProvider;
+
+    private PluginManager() {}
+
+    // ════════════════════════════════════════════════════════════════
+    //  Configuration
+    // ════════════════════════════════════════════════════════════════
+
+    public void configure(GraalWasmSandbox sandbox) {
+        this.sandbox = sandbox;
+        log.info("[PluginManager] 已配置 GraalWasmSandbox");
+    }
+
+    public void configureLlm(LlmProvider llmProvider) {
+        this.llmProvider = llmProvider;
+        log.info("[PluginManager] 已配置 LlmProvider: {}", llmProvider.name());
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Plugin Scan (WASM auto-discovery)
+    // ════════════════════════════════════════════════════════════════
+
+    public void scanAndLoadPlugins(String pluginDir) {
+        Path dir = Path.of(pluginDir);
+        if (!Files.isDirectory(dir)) {
+            log.warn("[PluginManager] 插件目录不存在: {}", pluginDir);
+            return;
+        }
+
+        int discovered = 0;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir, "*.wasm")) {
+            for (Path wasmFile : stream) {
+                String fileName = wasmFile.getFileName().toString();
+                String toolName = "tool." + fileName.substring(0, fileName.length() - ".wasm".length());
+
+                try {
+                    byte[] bytecode = Files.readAllBytes(wasmFile);
+                    pluginRegistry.put(toolName, bytecode);
+
+                    // Register in the global tool catalog
+                    ToolDefinition def = new ToolDefinition(
+                            toolName,
+                            "WASM plugin: " + toolName,
+                            Map.of("input", Map.of("type", "string", "description", "JSON input for " + toolName)),
+                            ToolDefinition.ToolType.WASM,
+                            0,
+                            "wasm:" + toolName
+                    );
+                    registerToolDefinition(def);
+                    discovered++;
+
+                    log.info("[PluginManager] 自动发现: {} ({} 字节)", toolName, bytecode.length);
+                } catch (IOException e) {
+                    log.error("[PluginManager] 读取插件失败: {} — {}", wasmFile, e.getMessage());
+                }
+            }
+        } catch (IOException e) {
+            log.error("[PluginManager] 扫描插件目录失败: {}", e.getMessage());
+            return;
+        }
+
+        log.info("[PluginManager] 插件扫描完成: 从 '{}' 发现 {} 个插件", pluginDir, discovered);
+        System.out.printf("  \u001B[36m[PluginManager] 扫描完成: %d 个 WASM 插件已注册并索引%n\u001B[0m", discovered);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Tool Catalog: Global Registry of All Available Tools
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Register a tool definition in the global catalog.
+     * <p>
+     * This makes the tool discoverable via semantic search and
+     * loadable via sys_insmod.
+     */
+    public void registerToolDefinition(ToolDefinition def) {
+        toolCatalog.put(def.name(), def);
+
+        // Generate embedding for semantic search
+        if (llmProvider != null) {
+            try {
+                String searchText = def.name() + " " + def.description();
+                float[] embedding = llmProvider.embed(searchText);
+                if (embedding != null) {
+                    toolEmbeddings.put(def.name(), embedding);
+                }
+            } catch (Exception e) {
+                log.debug("[PluginManager] 工具 '{}' 嵌入失败: {}", def.name(), e.getMessage());
+            }
+        }
+
+        log.debug("[PluginManager] 工具目录条目: {} [{}]", def.name(), def.type());
+    }
+
+    /**
+     * Remove a tool definition from the global catalog.
+     */
+    public void unregisterToolDefinition(String toolName) {
+        toolCatalog.remove(toolName);
+        toolEmbeddings.remove(toolName);
+    }
+
+    /**
+     * Get a tool definition from the catalog.
+     */
+    public ToolDefinition getToolDefinition(String toolName) {
+        return toolCatalog.get(toolName);
+    }
+
+    /**
+     * List all available tools in the catalog.
+     */
+    public Set<String> availableTools() {
+        return Collections.unmodifiableSet(toolCatalog.keySet());
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Semantic Search (modprobe -l): Fuzzy tool discovery
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Semantic search for tools matching a natural language query.
+     * <p>
+     * This is the core of the {@code sys_insmod} mechanism: when an
+     * Agent says "I need a tool to search the web", this method
+     * converts the query to a vector and finds the most similar
+     * tool in the catalog.
+     * <p>
+     * If no LLM provider is available, falls back to keyword matching.
+     *
+     * @param query natural language tool requirement
+     * @param topK  maximum number of results
+     * @return list of matching tool definitions, sorted by relevance
+     */
+    public List<ToolDefinition> semanticSearch(String query, int topK) {
+        if (query == null || query.isBlank()) return List.of();
+
+        // ── Vector-based semantic search ──
+        if (llmProvider != null && !toolEmbeddings.isEmpty()) {
+            try {
+                float[] queryVec = llmProvider.embed(query);
+                if (queryVec != null) {
+                    List<Map.Entry<ToolDefinition, Double>> scored = new ArrayList<>();
+
+                    for (Map.Entry<String, float[]> entry : toolEmbeddings.entrySet()) {
+                        String toolName = entry.getKey();
+                        float[] toolVec = entry.getValue();
+                        ToolDefinition def = toolCatalog.get(toolName);
+
+                        if (def != null && toolVec != null) {
+                            double similarity = VectorMath.cosineSimilarity(queryVec, toolVec);
+                            scored.add(Map.entry(def, similarity));
+                        }
+                    }
+
+                    scored.sort(Map.Entry.<ToolDefinition, Double>comparingByValue().reversed());
+
+                    List<ToolDefinition> results = new ArrayList<>();
+                    for (int i = 0; i < Math.min(topK, scored.size()); i++) {
+                        results.add(scored.get(i).getKey());
+                    }
+
+                    log.info("[PluginManager] 语义搜索: query='{}', 结果数={}", query, results.size());
+                    return results;
+                }
+            } catch (Exception e) {
+                log.warn("[PluginManager] 语义搜索失败，回退到关键词搜索: {}", e.getMessage());
+            }
+        }
+
+        // ── Fallback: keyword matching ──
+        return keywordSearch(query, topK);
+    }
+
+    /**
+     * Keyword-based fallback search.
+     */
+    private List<ToolDefinition> keywordSearch(String query, int topK) {
+        String lowerQuery = query.toLowerCase();
+        List<ToolDefinition> results = new ArrayList<>();
+
+        for (ToolDefinition def : toolCatalog.values()) {
+            String searchText = (def.name() + " " + def.description()).toLowerCase();
+            // Simple token overlap scoring
+            String[] queryTokens = lowerQuery.split("[\\s,，.。;；]+");
+            int matches = 0;
+            for (String token : queryTokens) {
+                if (token.length() > 1 && searchText.contains(token)) {
+                    matches++;
+                }
+            }
+            if (matches > 0) {
+                results.add(def);
+            }
+        }
+
+        results.sort((a, b) -> {
+            String aText = (a.name() + " " + a.description()).toLowerCase();
+            String bText = (b.name() + " " + b.description()).toLowerCase();
+            int aMatches = 0, bMatches = 0;
+            for (String token : lowerQuery.split("[\\s,，.。;；]+")) {
+                if (token.length() > 1) {
+                    if (aText.contains(token)) aMatches++;
+                    if (bText.contains(token)) bMatches++;
+                }
+            }
+            return bMatches - aMatches;
+        });
+
+        return results.subList(0, Math.min(topK, results.size()));
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  MCP Bridge: Sync MCP tools into the global catalog
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Sync all tools from a registered MCP server into the global catalog.
+     * <p>
+     * This bridges the MCP protocol into the PluginManager's unified
+     * tool discovery system. After syncing, MCP tools are discoverable
+     * via semantic search and loadable via sys_insmod — just like
+     * local WASM plugins.
+     *
+     * @param serverName the MCP server name
+     */
+    public void syncMcpTools(String serverName) {
+        McpClientRegistry mcp = McpClientRegistry.getInstance();
+        if (!mcp.hasServer(serverName)) {
+            log.warn("[PluginManager] MCP 服务器 '{}' 未注册", serverName);
+            return;
+        }
+
+        try {
+            Object toolsResult = mcp.listTools(serverName);
+            // Parse the tools/list response and register each tool
+            // The response format is: {"tools": [{"name": "...", "description": "...", "inputSchema": {...}}]}
+            if (toolsResult instanceof Map) {
+                Object toolsList = ((Map<?, ?>) toolsResult).get("tools");
+                if (toolsList instanceof List) {
+                    for (Object toolObj : (List<?>) toolsList) {
+                        if (toolObj instanceof Map) {
+                            Map<?, ?> toolMap = (Map<?, ?>) toolObj;
+                            String toolName = "mcp." + serverName + "." + toolMap.get("name");
+                            String description = toolMap.get("description") != null
+                                    ? toolMap.get("description").toString() : "MCP tool: " + toolName;
+
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> inputSchema = toolMap.get("inputSchema") != null
+                                    ? (Map<String, Object>) toolMap.get("inputSchema")
+                                    : Map.of();
+
+                            ToolDefinition def = new ToolDefinition(
+                                    toolName, description, inputSchema,
+                                    ToolDefinition.ToolType.MCP, 0,
+                                    "mcp:" + serverName
+                            );
+                            registerToolDefinition(def);
+                            log.info("[PluginManager] MCP 工具已同步: {} [{}]", toolName, serverName);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[PluginManager] 从 '{}' 同步 MCP 工具失败: {}", serverName, e.getMessage());
+        }
+    }
+
+    /**
+     * Sync tools from all registered MCP servers.
+     */
+    public void syncAllMcpTools() {
+        McpClientRegistry mcp = McpClientRegistry.getInstance();
+        for (String serverName : mcp.serverNames()) {
+            syncMcpTools(serverName);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  insmod / rmmod: Per-Agent Tool Loading
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * sys_insmod: Load a tool into an Agent's active context.
+     * <p>
+     * This is the AIOS equivalent of {@code insmod}:
+     * <ol>
+     *   <li>Search the global catalog for tools matching the query</li>
+     *   <li>Select the best match</li>
+     *   <li>Load it into the Agent's {@link AgentToolContext}</li>
+     *   <li>Return the tool's JSON Schema for injection into the LLM prompt</li>
+     * </ol>
+     *
+     * @param agentId the requesting Agent's ID
+     * @param query   natural language tool requirement (e.g., "我需要一个能搜索网页的工具")
+     * @return the loaded ToolDefinition, or null if no match found
+     */
+    public ToolDefinition insmod(String agentId, String query) {
+        // Get or create the agent's tool context
+        AgentToolContext ctx = agentContexts.computeIfAbsent(agentId,
+                id -> new AgentToolContext(id));
+
+        // Semantic search for matching tools
+        List<ToolDefinition> matches = semanticSearch(query, 3);
+
+        if (matches.isEmpty()) {
+            log.warn("[PluginManager] insmod: 未找到匹配查询 '{}' 的工具 (agent={})", query, agentId);
+            return null;
+        }
+
+        // Try to load the best match
+        ToolDefinition best = matches.get(0);
+
+        if (ctx.insmod(best)) {
+            log.info("[PluginManager] insmod: agent={} 已加载 '{}' [type={}, source={}]",
+                    agentId, best.name(), best.type(), best.source());
+            return best;
+        } else {
+            log.warn("[PluginManager] insmod: agent={} 加载 '{}' 失败 (预算超限?)",
+                    agentId, best.name());
+            return null;
+        }
+    }
+
+    /**
+     * sys_insmod: Load a specific tool by name into an Agent's context.
+     */
+    public ToolDefinition insmodByName(String agentId, String toolName) {
+        AgentToolContext ctx = agentContexts.computeIfAbsent(agentId,
+                id -> new AgentToolContext(id));
+
+        ToolDefinition def = toolCatalog.get(toolName);
+        if (def == null) {
+            log.warn("[PluginManager] insmod: 工具 '{}' 在目录中未找到", toolName);
+            return null;
+        }
+
+        if (ctx.insmod(def)) {
+            return def;
+        }
+        return null;
+    }
+
+    /**
+     * sys_rmmod: Unload a tool from an Agent's active context.
+     *
+     * @param agentId  the requesting Agent's ID
+     * @param toolName the tool to unload
+     * @return true if unloaded successfully
+     */
+    public boolean rmmod(String agentId, String toolName) {
+        AgentToolContext ctx = agentContexts.get(agentId);
+        if (ctx == null) return false;
+
+        boolean removed = ctx.rmmod(toolName);
+        if (removed) {
+            log.info("[PluginManager] rmmod: agent={} 已卸载 '{}'", agentId, toolName);
+        }
+        return removed;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  Agent Context Management
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Get the tool context for an Agent.
+     */
+    public AgentToolContext getAgentContext(String agentId) {
+        return agentContexts.computeIfAbsent(agentId,
+                id -> new AgentToolContext(id));
+    }
+
+    /**
+     * Remove an Agent's tool context (on process exit).
+     */
+    public void removeAgentContext(String agentId) {
+        AgentToolContext ctx = agentContexts.remove(agentId);
+        if (ctx != null) {
+            ctx.unloadAll();
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    //  WASM Plugin Execution (existing API, preserved)
+    // ════════════════════════════════════════════════════════════════
+
+    public String executePlugin(String action, String parameters) throws Exception {
+        byte[] bytecode = pluginRegistry.get(action);
+        if (bytecode == null) {
+            throw new IllegalArgumentException("Plugin not registered: " + action);
+        }
+
+        if (sandbox == null) {
+            throw new IllegalStateException("GraalWasmSandbox not configured in PluginManager");
+        }
+
+        log.info("[PluginManager] 正在执行插件 '{}' ({} 字节)", action, bytecode.length);
+        return sandbox.executeCode(bytesToHex(bytecode), "main");
+    }
+
+    public boolean hasPlugin(String action) {
+        return pluginRegistry.containsKey(action);
+    }
+
+    public java.util.Set<String> registeredPlugins() {
+        return pluginRegistry.keySet();
+    }
+
+    public void registerPlugin(String toolName, byte[] bytecode) {
+        pluginRegistry.put(toolName, bytecode);
+        // Also register in the tool catalog
+        ToolDefinition def = new ToolDefinition(
+                toolName,
+                "WASM plugin: " + toolName,
+                Map.of("input", Map.of("type", "string", "description", "JSON input")),
+                ToolDefinition.ToolType.WASM, 0, "wasm:" + toolName
+        );
+        registerToolDefinition(def);
+        log.info("[PluginManager] 手动注册: {} ({} 字节)", toolName, bytecode.length);
+    }
+
+    /**
+     * Unregister a WASM plugin (rmmod from the global registry).
+     */
+    public void unregisterPlugin(String action) {
+        pluginRegistry.remove(action);
+        unregisterToolDefinition(action);
+        log.info("[PluginManager] 已注销插件: {}", action);
+    }
+
+    private static String bytesToHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b & 0xff));
+        }
+        return sb.toString();
+    }
+}

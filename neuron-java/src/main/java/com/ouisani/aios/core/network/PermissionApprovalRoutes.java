@@ -2,6 +2,7 @@ package com.ouisani.aios.core.network;
 
 import com.ouisani.aios.core.permission.ToolPermissionChannel;
 import com.ouisani.aios.core.permission.ToolPermissionChannel.ApprovalResponse;
+import com.ouisani.aios.core.mission.MissionManager;
 import io.javalin.Javalin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,6 +62,7 @@ final class PermissionApprovalRoutes {
                 Consumer<String> handler = payload -> {
                     if (!ctx.session.isOpen()) return;
                     try {
+                        recordMissionApproval(payload);
                         ctx.send(payload);
                     } catch (Exception e) {
                         log.debug("[PermissionApproval] 推送审批请求失败: {}", e.getMessage());
@@ -88,8 +90,11 @@ final class PermissionApprovalRoutes {
                         String requestId = jsonObj.get("requestId").getAsString();
                         String decision = jsonObj.has("decision")
                                 ? jsonObj.get("decision").getAsString() : "ALLOW_ONCE";
+                        String actionDigest = jsonObj.has("actionDigest") && !jsonObj.get("actionDigest").isJsonNull()
+                                ? jsonObj.get("actionDigest").getAsString() : null;
                         ApprovalResponse resp = ApprovalResponse.safeValueOf(decision);
-                        boolean success = ToolPermissionChannel.respond(requestId, resp);
+                        boolean success = ToolPermissionChannel.respond(requestId, resp, actionDigest);
+                        if (success) MissionManager.instance().resolveApproval(requestId);
                         ctx.send("{\"type\":\"permission_response_ack\",\"success\":" + success
                                 + ",\"requestId\":\"" + requestId + "\"}");
                         log.info("[PermissionApproval] 收到审批回填: requestId={}, decision={}, success={}",
@@ -121,6 +126,31 @@ final class PermissionApprovalRoutes {
 
         log.info("[PermissionApproval] 工具权限审批流 WebSocket 已挂载: /api/permission/stream");
         System.out.println("  ✓ [PermissionApproval] 工具权限审批流 WebSocket: /api/permission/stream");
+    }
+
+    /** Persist a permission request in the linked Mission before it reaches the UI. */
+    private static void recordMissionApproval(String payload) {
+        try {
+            var json = com.google.gson.JsonParser.parseString(payload).getAsJsonObject();
+            String requestId = value(json, "requestId");
+            String workflowId = value(json, "workflowId");
+            if (requestId == null || workflowId == null) return;
+            String traceId = value(json, "traceId");
+            MissionManager.Mission mission = MissionManager.instance()
+                    .ensureForRun(workflowId, workflowId, traceId, workflowId);
+            MissionManager.instance().addApproval(mission.missionId(), requestId,
+                    value(json, "description"), value(json, "toolName"), value(json, "target"),
+                    workflowId, traceId);
+        } catch (Exception ignored) {
+            // Approval delivery must never fail because the optional continuity
+            // read-model cannot parse a request.
+        }
+    }
+
+    private static String value(com.google.gson.JsonObject json, String field) {
+        if (json == null || !json.has(field) || json.get(field).isJsonNull()) return null;
+        String value = json.get(field).getAsString();
+        return value == null || value.isBlank() ? null : value;
     }
 
     /** 注销指定会话的 EventBus handler，防止内存泄漏。 */

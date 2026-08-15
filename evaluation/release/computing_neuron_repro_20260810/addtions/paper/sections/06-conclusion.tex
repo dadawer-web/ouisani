@@ -1,0 +1,40 @@
+\section{Conclusion}
+\label{sec:conc}
+
+Resource and permission governance are not independent when they share a
+runtime. This paper isolates a precise failure condition: hostile work can
+delay a shared policy executor, and a permissive deadline fallback can turn
+that delay into a fail-open window. The condition is neither inevitable nor
+universal. Fail-closed handling preserves safety, and reserved policy-plane
+capacity addresses the scheduling cause.
+
+Neuron combines that reservation with a second mechanism: a resource signal
+can tighten the permission policy during sustained pressure. The four-way
+comparison makes the attribution explicit. Isolation explains policy-plane
+availability; coupling explains the changed depth-1 verdict. Identity
+propagation, privilege non-increase, and correlated auditing support this
+decision path, while quota and sandbox components are engineering context.
+
+The revised evidence runs in the Java~21 Neuron runtime and replaces the
+former Python lock model. It uses independent JVM replications on a Windows
+host and an Ubuntu/KVM container, sweeps 3--50\,ms deadlines and attacker
+pressure, evaluates nine capacity configurations, and measures benign/attack
+QoS mixtures. A fixed replay of 33 API-derived sessions checks that the same
+decision path handles application-shaped tool calls, and the same replay was
+also executed on the Ubuntu/KVM VPS. All reported counts are generated from
+retained JSONL by the analysis scripts. A further five-run,
+3,200-observation experiment on the Ubuntu/KVM VPS starts the permission
+policy in a separate Java~21 process and injects service delay, queue pressure,
+and a deterministic pause. This separates a process-boundary fault from the
+retired in-process Python lock model.
+
+The evidence supports a conditional architecture claim within a
+JVM/container trust boundary. It does not establish that every agent
+framework fails open, that the selected threshold transfers unchanged to
+production, or that a one-vCPU VPS represents all hardware. The process-
+separated result is still a loopback, one-host experiment; WAN partition
+behavior, audit-queue exhaustion, and genuinely live multi-tenant traffic
+remain future work.
+Until then, Neuron is a reproducible runtime mechanism and an argument for
+making resource--policy interactions explicit in dependable agent
+architecture.

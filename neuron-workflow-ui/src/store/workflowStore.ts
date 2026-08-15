@@ -36,9 +36,21 @@ export interface CompiledWorkflowNode {
   userParams: Record<string, string>;
 }
 
+interface WorkflowNodeInput {
+  id?: string;
+  instanceId?: string;
+  blueprintId?: string;
+  role?: string;
+  executor?: string;
+  isIteration?: boolean;
+  userParams?: Record<string, string>;
+  upstreamDependencies?: string[];
+}
+
 /** 编译后的工作流清单 (WorkflowManifest) */
 export interface CompiledWorkflowManifest {
   workflowName: string;
+  missionId?: string;
   agentType?: string;
   nodes: CompiledWorkflowNode[];
   enabledSkills: string[];
@@ -72,6 +84,7 @@ interface WorkflowStore {
   nodes: Node[];
   edges: Edge[];
   workflowName: string;
+  missionId: string | null;
   nodeCounter: number;
   toast: ToastState;
   systemAlert: SystemAlert;
@@ -94,6 +107,7 @@ interface WorkflowStore {
   removeNode: (id: string) => void;
   onConnect: (connection: Connection) => void;
   setWorkflowName: (name: string) => void;
+  setMissionId: (missionId: string | null) => void;
   showToast: (message: string, type?: ToastState["type"]) => void;
   hideToast: () => void;
   triggerSystemAlert: (nodeId: string, dump: string) => void;
@@ -113,6 +127,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   nodes: [],
   edges: [],
   workflowName: "untitled_workflow",
+  missionId: null,
   nodeCounter: 0,
   toast: { visible: false, message: "", type: "info" },
   systemAlert: { visible: false, nodeId: "", dump: "" },
@@ -143,13 +158,13 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     try {
       const token = "AIOS-SUPER-SECRET-KEY";
       const res = await axios.get(`${AIOS_API_URL}/api/registry/catalogs?token=${token}`);
-      const roles = res.data.roles || [];
-      const skills = res.data.skills || [];
+      const roles = (res.data.roles || []) as CatalogItem[];
+      const skills = (res.data.skills || []) as CatalogItem[];
       console.log("[AIOS] 成功获取物理资产:", roles.length, "roles,", skills.length, "skills");
 
       // 动态默认勾选：如果有系统架构师和物理执行官，自动勾上
       const defaultRoles = roles
-          .map((r: any) => r.id)
+          .map((r: CatalogItem) => r.id)
           .filter((id: string) => ["System_Architect", "OperatorAgent"].includes(id));
 
       set({
@@ -218,6 +233,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   },
 
   setWorkflowName: (name) => set({ workflowName: name }),
+  setMissionId: (missionId) => set({ missionId }),
 
   showToast: (message, type = "info") => {
     set({ toast: { visible: true, message, type } });
@@ -339,7 +355,9 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         rawData = JSON.parse(cleaned);
       }
 
-      const { nodes = [], agentType } = rawData;
+      const parsed = rawData as { nodes?: unknown; agentType?: string };
+      const nodes = Array.isArray(parsed.nodes) ? parsed.nodes as WorkflowNodeInput[] : [];
+      const { agentType } = parsed;
 
       if (nodes.length === 0) throw new Error("后端返回了空节点");
 
@@ -349,7 +367,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       }
 
       // 动态分配坐标 — 漏斗型布局：起点居中，中间并发水平排开，终点居中
-      const flowNodes: Node[] = nodes.map((n: any, i: number) => {
+      const flowNodes: Node[] = nodes.map((n, i) => {
         const nodeId = n.instanceId || n.id || `agent_${i + 1}`;
         const isStart = i === 0;
         const isEnd = i === nodes.length - 1 && nodes.length > 1;
@@ -389,7 +407,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
 
       // 从 upstreamDependencies 推导边（后端不返回 edges 数组）
       const flowEdges: Edge[] = [];
-      nodes.forEach((n: any, i: number) => {
+      nodes.forEach((n, i) => {
         const targetId = n.instanceId || n.id || `agent_${i + 1}`;
         const deps: string[] = n.upstreamDependencies || [];
         deps.forEach((dep: string, di: number) => {
@@ -427,7 +445,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
    * 如果一个节点有多条入边，subscribeTopic 用逗号拼接。
    */
   compileToWorkflow: () => {
-    const { nodes, edges, workflowName } = get();
+    const { nodes, edges, workflowName, missionId } = get();
 
     // 构建每个节点的 publish/subscribe topic 映射
     const publishMap = new Map<string, string[]>();
@@ -461,6 +479,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
 
     const manifest: CompiledWorkflowManifest = {
       workflowName,
+      missionId: missionId ?? undefined,
       agentType: get().agentType,
       nodes: compiledNodes,
       enabledSkills: get().enabledSkills,

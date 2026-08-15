@@ -1,0 +1,70 @@
+{
+  "run_id": "pilot_n1_20260809T045528Z",
+  "run_at_utc": "2026-08-09T05:11:05.725838+00:00",
+  "framework": "Reflexion",
+  "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+  "n_per_variant": 1,
+  "temperature": 0.7,
+  "status": "completed_with_qwen_protocol_failure",
+  "models": [
+    {
+      "model": "gpt-5.6-luna",
+      "protocol": "chat_completions",
+      "returncode": 0,
+      "ok": true,
+      "output_dir": "evaluation\\results\\emse_reflexion\\pilot_n1_20260809T045528Z\\gpt-5.6-luna",
+      "log": "evaluation\\results\\emse_reflexion\\pilot_n1_20260809T045528Z\\gpt-5.6-luna.log"
+    },
+    {
+      "model": "glm-5.2",
+      "protocol": "chat_completions",
+      "returncode": 0,
+      "ok": true,
+      "output_dir": "evaluation\\results\\emse_reflexion\\pilot_n1_20260809T045528Z\\glm-5.2",
+      "log": "evaluation\\results\\emse_reflexion\\pilot_n1_20260809T045528Z\\glm-5.2.log"
+    },
+    {
+      "model": "kimi-k2.6",
+      "protocol": "chat_completions",
+      "returncode": 0,
+      "ok": true,
+      "output_dir": "evaluation\\results\\emse_reflexion\\pilot_n1_20260809T045528Z\\kimi-k2.6",
+      "log": "evaluation\\results\\emse_reflexion\\pilot_n1_20260809T045528Z\\kimi-k2.6.log"
+    },
+    {
+      "model": "mimo-v2.5",
+      "protocol": "chat_completions",
+      "returncode": 0,
+      "ok": true,
+      "output_dir": "evaluation\\results\\emse_reflexion\\pilot_n1_20260809T045528Z\\mimo-v2.5",
+      "log": "evaluation\\results\\emse_reflexion\\pilot_n1_20260809T045528Z\\mimo-v2.5.log"
+    },
+    {
+      "model": "minimax-m3",
+      "protocol": "messages",
+      "returncode": 0,
+      "ok": true,
+      "output_dir": "evaluation\\results\\emse_reflexion\\pilot_n1_20260809T045528Z\\minimax-m3",
+      "log": "evaluation\\results\\emse_reflexion\\pilot_n1_20260809T045528Z\\minimax-m3.log"
+    },
+    {
+      "model": "qwen3.7-plus",
+      "protocol": "messages",
+      "returncode": 4294967295,
+      "ok": false,
+      "output_dir": "evaluation\\results\\emse_reflexion\\pilot_n1_20260809T045528Z\\qwen3.7-plus",
+      "log": "evaluation\\results\\emse_reflexion\\pilot_n1_20260809T045528Z\\qwen3.7-plus.log",
+      "error_reason": "messages protocol probe returned HTTP 403 (provider error 1010) for a system-bearing Reflexion-shaped request",
+      "probe": "evaluation/results/emse_smoke/messages_probe_qwen.json"
+    },
+    {
+      "model": "deepseek-v4-flash",
+      "protocol": "chat_completions",
+      "returncode": 0,
+      "ok": true,
+      "output_dir": "evaluation\\results\\emse_reflexion\\pilot_n1_20260809T045528Z\\deepseek-v4-flash",
+      "log": "evaluation\\results\\emse_reflexion\\pilot_n1_20260809T045528Z\\deepseek-v4-flash.log"
+    }
+  ],
+  "completed_at_utc": "2026-08-09T05:12:11.897585+00:00"
+}

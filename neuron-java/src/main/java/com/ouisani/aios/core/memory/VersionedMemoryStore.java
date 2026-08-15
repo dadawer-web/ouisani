@@ -3,6 +3,7 @@ package com.ouisani.aios.core.memory;
 import com.ouisani.aios.core.memory.providers.MemoryDomain;
 import com.ouisani.aios.core.memory.providers.MemoryProvider;
 import com.ouisani.aios.core.memory.providers.MemoryRecord;
+import com.ouisani.aios.core.memory.MemoryLayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -171,6 +172,53 @@ public class VersionedMemoryStore {
         return Collections.unmodifiableList(result);
     }
 
+    /** List current records at one L0-L3 lifecycle layer. */
+    public List<MemoryRecord> listByLayer(String agentId, MemoryLayer layer) {
+        Objects.requireNonNull(layer, "layer must not be null");
+        String prefix = agentId + ":";
+        List<MemoryRecord> result = new ArrayList<>();
+        for (Map.Entry<String, VersionedEntry> e : versionTable.entrySet()) {
+            if (e.getKey().startsWith(prefix) && e.getValue().current.layer() == layer) {
+                result.add(e.getValue().current);
+            }
+        }
+        return Collections.unmodifiableList(result);
+    }
+
+    /**
+     * Best-effort pushdown for retrieval adapters. Callers must still invoke
+     * {@link MemoryIsolation#rowMatchesIsolation(MemoryRecord, String,
+     * MemoryIsolation.Filter)} on the returned rows because providers may
+     * ignore this overload or return stale/vector-index candidates.
+     */
+    public List<MemoryRecord> listByLayer(String agentId, MemoryLayer layer,
+                                          MemoryIsolation.Filter isolationFilter) {
+        return queryByLayer(agentId, layer, isolationFilter).rows();
+    }
+
+    /**
+     * Pushdown-capable query result retaining how many rows the backend
+     * rejected. A vector/retrieval backend may override this method; Recall
+     * still performs a second row check on {@link MemoryIsolation.QueryResult#rows()}.
+     */
+    public MemoryIsolation.QueryResult queryByLayer(String agentId, MemoryLayer layer,
+                                                    MemoryIsolation.Filter isolationFilter) {
+        List<MemoryRecord> candidates = listByLayer(agentId, layer);
+        if (isolationFilter == null || !isolationFilter.hasBoundary()) {
+            return new MemoryIsolation.QueryResult(candidates, 0);
+        }
+        List<MemoryRecord> visible = new ArrayList<>();
+        int filtered = 0;
+        for (MemoryRecord candidate : candidates) {
+            if (MemoryIsolation.rowMatchesIsolation(candidate, agentId, isolationFilter)) {
+                visible.add(candidate);
+            } else {
+                filtered++;
+            }
+        }
+        return new MemoryIsolation.QueryResult(visible, filtered);
+    }
+
     /**
      * 清除指定 Agent 的所有版本化记录（不调用 Provider.clear，仅清版本表）。
      * <p>
@@ -211,6 +259,13 @@ public class VersionedMemoryStore {
      */
     public boolean updateMetadata(String agentId, String key,
                                   Double newConfidence, MemoryDomain newDomain) {
+        return updateMetadata(agentId, key, newConfidence, newDomain, null);
+    }
+
+    /** Update confidence, provenance domain, and/or lifecycle layer atomically. */
+    public boolean updateMetadata(String agentId, String key,
+                                  Double newConfidence, MemoryDomain newDomain,
+                                  MemoryLayer newLayer) {
         Objects.requireNonNull(agentId, "agentId must not be null");
         Objects.requireNonNull(key, "key must not be null");
 
@@ -223,6 +278,7 @@ public class VersionedMemoryStore {
             MemoryRecord old = existing.current;
             double nextConf = newConfidence != null ? newConfidence : old.confidence();
             MemoryDomain nextDom = newDomain != null ? newDomain : old.domain();
+            MemoryLayer nextLayer = newLayer != null ? newLayer : old.layer();
             long nextVersion = old.version() + 1;
             MemoryRecord refreshed = new MemoryRecord(
                     old.key(),
@@ -231,6 +287,7 @@ public class VersionedMemoryStore {
                     System.currentTimeMillis(),
                     nextConf,
                     nextDom,
+                    nextLayer,
                     nextVersion
             );
             List<MemoryRecord> newHistory = new CopyOnWriteArrayList<>(existing.history);
@@ -305,6 +362,10 @@ public class VersionedMemoryStore {
      */
     public static void setPrimaryStore(VersionedMemoryStore store) {
         primaryStore = store;
+        // The Agent-turn lifecycle consumes the same store as the rest of the
+        // application memory wiring, so a primary-store change is a runtime
+        // lifecycle reconfiguration point as well.
+        MemoryLifecycleRuntime.configure(store);
         log.info("[VersionedMemoryStore] primary store 已设置: {}",
                 store == null ? "<null>" : "enabled");
     }

@@ -4,7 +4,10 @@ import com.ouisani.aios.core.VfsManager;
 import com.ouisani.aios.core.llm.LlmProvider;
 import com.ouisani.aios.core.llm.LlmRouter;
 import com.ouisani.aios.core.memory.ContextInjector;
+import com.ouisani.aios.core.memory.MemoryLifecycleRuntime;
+import com.ouisani.aios.core.memory.MemoryRecallHook;
 import com.ouisani.aios.core.memory.MemoryManager;
+import com.ouisani.aios.core.ipc.MemoryAccessContext;
 import com.ouisani.aios.core.mcp.McpClientRegistry;
 import com.ouisani.aios.core.observability.UpstreamMeta;
 import com.ouisani.aios.core.observability.UpstreamMetaHook;
@@ -577,8 +580,17 @@ public final class SyscallDispatcher {
         }
 
         try {
-            // Transparent context injection: augment prompt with Vector Memory
-            String augmentedPrompt = ContextInjector.getInstance().augmentPrompt(prompt);
+            // Recall through the governed bridge. The legacy vector-cache
+            // helper is intentionally not called here: an unscoped /dev
+            // lookup could cross Agent/tenant boundaries and bypass the
+            // experience-plane ACL and delegation checks.
+            MemoryAccessContext access = MemoryAccessContext.current();
+            String tenantId = access == null ? null : access.effectiveTenantId();
+            String workflowId = access == null ? null : access.effectiveWorkflowId();
+            MemoryRecallHook.RecallResult recall = MemoryLifecycleRuntime.recall(
+                    tenantId, workflowId, null, agentId, prompt);
+            String augmentedPrompt = ContextInjector.getInstance()
+                    .injectExternalMemory(prompt, recall);
 
             String result = switch (request.action()) {
                 case "think" -> llmRouter.think(augmentedPrompt, "");

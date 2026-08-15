@@ -1,0 +1,85 @@
+{
+  "run_id": "emse-smoke-20260809T044628Z",
+  "run_at_utc": "2026-08-09T04:46:28.232373+00:00",
+  "temperature": 0,
+  "max_tokens": 8,
+  "results": [
+    {
+      "requested_model": "GPT 5.6 Luna",
+      "protocol": "chat_completions",
+      "http_status": 401,
+      "latency_ms": 1045.9,
+      "ok": false,
+      "response_model": null,
+      "response_id": null,
+      "content_preview": "",
+      "error": "Model GPT 5.6 Luna is not supported"
+    },
+    {
+      "requested_model": "GLM-5.2",
+      "protocol": "chat_completions",
+      "http_status": 401,
+      "latency_ms": 1692.5,
+      "ok": false,
+      "response_model": null,
+      "response_id": null,
+      "content_preview": "",
+      "error": "Model GLM-5.2 is not supported"
+    },
+    {
+      "requested_model": "Kimi K2.6",
+      "protocol": "chat_completions",
+      "http_status": 401,
+      "latency_ms": 897.5,
+      "ok": false,
+      "response_model": null,
+      "response_id": null,
+      "content_preview": "",
+      "error": "Model Kimi K2.6 is not supported"
+    },
+    {
+      "requested_model": "MiMo-V2.5",
+      "protocol": "chat_completions",
+      "http_status": 401,
+      "latency_ms": 1713.8,
+      "ok": false,
+      "response_model": null,
+      "response_id": null,
+      "content_preview": "",
+      "error": "Model MiMo-V2.5 is not supported"
+    },
+    {
+      "requested_model": "MiniMax M3",
+      "protocol": "messages",
+      "http_status": 401,
+      "latency_ms": 1729.9,
+      "ok": false,
+      "response_model": null,
+      "response_id": null,
+      "content_preview": "",
+      "error": "Model MiniMax M3 is not supported"
+    },
+    {
+      "requested_model": "Qwen3.7 Plus",
+      "protocol": "messages",
+      "http_status": 401,
+      "latency_ms": 1015.0,
+      "ok": false,
+      "response_model": null,
+      "response_id": null,
+      "content_preview": "",
+      "error": "Model Qwen3.7 Plus is not supported"
+    },
+    {
+      "requested_model": "DeepSeek V4 Flash",
+      "protocol": "chat_completions",
+      "http_status": 401,
+      "latency_ms": 853.4,
+      "ok": false,
+      "response_model": null,
+      "response_id": null,
+      "content_preview": "",
+      "error": "Model DeepSeek V4 Flash is not supported"
+    }
+  ]
+}

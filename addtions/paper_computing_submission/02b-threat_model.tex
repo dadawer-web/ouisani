@@ -1,0 +1,124 @@
+\section{Threat Model}
+\label{sec:threat}
+\label{sec:lim-failure}
+
+Neuron protects a multi-tenant agent runtime against tenants that use valid
+runtime interfaces adversarially. The model distinguishes the attacker,
+deployment choices required for the studied failure, and the trusted
+computing base. This distinction is necessary because resource pressure is
+not by itself an authorization bypass.
+
+\subsection{Attacker and Assets}
+
+The attacker controls one or more tenant accounts and all prompts, tool
+requests, and sub-agent creation requests issued by those accounts. The
+attacker may coordinate concurrent clients, measure its own response times,
+vary request rate, and choose workloads that occupy shared executors or
+locks. It knows published limits and may use bursts or low-rate, long-hold
+tasks. It cannot directly mutate another tenant's state, the policy code, or
+the runtime's counters.
+
+The protected assets are (i) the integrity of permission verdicts,
+(ii) availability of the policy path for benign tenants, (iii) tenant and
+privilege identity across dynamic spawn, and (iv) an audit record that links
+resource admission to the permission decision. Confidentiality of model
+weights and prompts is important but is not the outcome measured in this
+paper.
+
+\subsection{Failure Preconditions}
+
+The fail-open security failure requires all of the following conditions:
+
+\begin{enumerate}
+  \item tenant work and permission work contend for a finite shared resource,
+  such as a bounded executor;
+  \item the deployment imposes a finite permission-decision deadline;
+  \item a request that misses that deadline receives a permissive result; and
+  \item the attacker can generate enough admitted work to delay the policy
+  task beyond the deadline.
+\end{enumerate}
+
+Removing any one condition changes the outcome. A fail-closed fallback
+preserves the security verdict while potentially denying legitimate work. A
+reserved or remote policy service can remove the relevant shared bottleneck.
+Admission control can prevent hostile work from reaching it. The evaluation
+therefore treats fallback semantics and capacity isolation as factors, not as
+hidden properties of a baseline.
+
+Neuron's joint rule addresses a related but distinct situation. A request
+may complete on time yet arrive during sustained resource rejection. The
+attacker can request a destructive tool at depth~1, where the static policy
+would normally ask for approval. If the resource signal crosses the frozen
+threshold, the coupled rule returns \textsc{deny-depth}. This guarantee
+assumes the pressure counter is authentic and scoped to the same tenant or
+causal episode.
+
+\subsection{Trusted Computing Base}
+
+The JVM, Neuron policy and admission code, host kernel, and container runtime
+are trusted. The attacker does not have host administrator access, cannot
+attach a debugger to the JVM, and cannot rewrite the running bytecode or raw
+audit files. These assumptions are conventional for a runtime reference
+monitor. Compromise below this boundary voids the claim.
+
+Tools capable of arbitrary native execution must be confined by an external
+sandbox or container. The broader Neuron prototype contains sandbox
+providers, but this paper does not evaluate container escape resistance.
+Consequently, the security result is about permission admission before tool
+execution, not containment after a malicious native tool has started.
+
+\subsection{In-Scope Actions}
+
+Within the boundary, the attacker may:
+
+\begin{itemize}
+  \item flood valid runtime operations at configurable concurrency and rate;
+  \item choose work whose service time increases executor occupancy;
+  \item attempt destructive tool requests at different spawn depths;
+  \item spawn sub-agents and try to obtain a more permissive profile; and
+  \item distribute requests across several client threads belonging to the
+  same tenant identity.
+\end{itemize}
+
+The runtime must preserve tenant identity and non-increasing privilege at
+spawn. For the central experiment, it must also apply the declared timeout
+semantics and record whether the policy task was rejected at queue admission
+or expired after admission.
+
+\subsection{Non-Goals}
+
+Neuron does not prevent prompt injection, model jailbreaks, poisoned model
+weights, or malicious content generation. It assumes that a dangerous
+request can reach the policy gate and evaluates enforcement from that point.
+It does not address cache, power, or microarchitectural side channels. It
+does not stop colluding tenants from communicating out of band, and the
+current pressure counter is not proven robust to a Sybil attack that creates
+many separately accounted tenants.
+
+The paper also does not claim Byzantine audit storage, distributed consensus
+for policy state, or availability during host compromise. Multi-node policy
+services, GPU schedulers, and remote partitions require a different failure
+model. Finally, the controlled workload is not a substitute for production
+traffic: it identifies causal boundaries and response surfaces, while a real
+deployment study is needed for prevalence and capacity planning.
+
+\subsection{Security Properties}
+
+Within the stated boundary, the design targets four properties:
+
+\begin{description}
+  \item[Timeout transparency.] Every missing verdict is distinguishable as
+  queue-admission failure or post-admission deadline expiration, and the
+  configured fallback is applied explicitly.
+  \item[Policy-plane reservation.] Tenant work cannot consume the workers
+  reserved for permission decisions.
+  \item[Pressure-conditioned tightening.] For a destructive depth-1 request,
+  an authentic pressure value above the selected threshold changes the
+  verdict from \textsc{ask-with-context} to \textsc{deny-depth}.
+  \item[Privilege non-increase.] A spawned child receives no permission that
+  is absent from its parent's effective profile.
+\end{description}
+
+The first three properties are exercised in Section~\ref{sec:eval}. The
+fourth is an architectural invariant supported by regression tests but is
+not part of the starvation response-surface result.

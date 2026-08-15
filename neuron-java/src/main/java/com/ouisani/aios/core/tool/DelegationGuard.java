@@ -144,6 +144,9 @@ public final class DelegationGuard {
     /** 当前线程的委托链 (从根到当前节点的 agentId 集合,用于防环) */
     private static final ThreadLocal<Set<String>> CHAIN = ThreadLocal.withInitial(() -> new HashSet<>());
 
+    /** 当前线程持有的已签名委托令牌。普通 ThreadLocal 避免未经显式 activate 的权限泄漏。 */
+    private static final ThreadLocal<DelegationToken> TOKEN = new ThreadLocal<>();
+
     private DelegationGuard() {}
 
     // ════════════════════════════════════════════════════════════════
@@ -159,14 +162,20 @@ public final class DelegationGuard {
      * @param agentId 子 Agent 的 ID
      * @param scope   子线程应继承的委托作用域（配置 + 计数器）
      */
-    public record DelegationContext(int depth, Set<String> chain, String agentId, DelegationScope scope) {
+    public record DelegationContext(int depth, Set<String> chain, String agentId,
+                                    DelegationScope scope, DelegationToken token) {
+
+        /** 保持既有四参数调用点兼容，并捕获当前线程令牌。 */
+        public DelegationContext(int depth, Set<String> chain, String agentId, DelegationScope scope) {
+            this(depth, chain, agentId, scope, null);
+        }
 
         /**
          * 3 参便捷构造器 — 捕获当前线程的 {@link #currentScope()}。
          * 保留所有现有调用点（测试、AgentTool 内部）零改动。
          */
         public DelegationContext(int depth, Set<String> chain, String agentId) {
-            this(depth, chain, agentId, currentScope());
+            this(depth, chain, agentId, currentScope(), null);
         }
 
         /** 防御性拷贝 */
@@ -352,6 +361,58 @@ public final class DelegationGuard {
      * @throws DelegationException 如果委托被拒绝
      */
     public static DelegationContext enter(String parentAgentId, String childAgentId) {
+        return enter(parentAgentId, childAgentId, Set.of());
+    }
+
+    public static DelegationContext enter(String parentAgentId, String childAgentId,
+                                          Set<String> requestedCapabilities) {
+        return enter(parentAgentId, childAgentId, requestedCapabilities,
+                DelegationToken.DEFAULT_TTL_MS, DelegationToken.DEFAULT_MAX_CALLS);
+    }
+
+    /** Create a child delegation with an attenuated capability set and explicit budgets. */
+    public static DelegationContext enter(String parentAgentId, String childAgentId,
+                                          Set<String> requestedCapabilities,
+                                          long ttlMs, int maxCalls) {
+        return enter(parentAgentId, childAgentId, requestedCapabilities, null,
+                ttlMs, maxCalls, null);
+    }
+
+    /**
+     * Variant used when a parent has no token yet but its effective PermissionProfile
+     * must become the root capability boundary for the newly-issued child token.
+     * A null parentCapabilities preserves legacy unrestricted-root behavior.
+     */
+    public static DelegationContext enter(String parentAgentId, String childAgentId,
+                                          Set<String> requestedCapabilities,
+                                          long ttlMs, int maxCalls,
+                                          Set<String> parentCapabilities) {
+        return enter(parentAgentId, childAgentId, requestedCapabilities, null,
+                ttlMs, maxCalls, parentCapabilities);
+    }
+
+    /**
+     * Enter a child scope with an explicit memory asset loadout.  The set is
+     * passed to the signed token primitive, so a later child can only further
+     * attenuate it.  A null set preserves the legacy inherited boundary.
+     */
+    public static DelegationContext enter(String parentAgentId, String childAgentId,
+                                          Set<String> requestedCapabilities,
+                                          Set<String> requestedMemoryAssets,
+                                          long ttlMs, int maxCalls,
+                                          Set<String> parentCapabilities) {
+        return enter(parentAgentId, childAgentId, requestedCapabilities,
+                requestedMemoryAssets, ttlMs, maxCalls, parentCapabilities, null);
+    }
+
+    /** Preserve the tenant when an adapter has not installed a parent token yet. */
+    public static DelegationContext enter(String parentAgentId, String childAgentId,
+                                          Set<String> requestedCapabilities,
+                                          Set<String> requestedMemoryAssets,
+                                          long ttlMs, int maxCalls,
+                                          Set<String> parentCapabilities,
+                                          String tenantId) {
+
         int currentDepth = DEPTH.get();
         Set<String> currentChain = CHAIN.get();
         DelegationScope scope = currentScope();
@@ -379,6 +440,30 @@ public final class DelegationGuard {
         }
 
         // 构建子线程上下文:深度+1, 链=当前链+父agentId, 子agentId, 当前 scope
+        DelegationToken parentToken = currentToken();
+        if (parentToken == null) {
+            parentToken = parentCapabilities == null
+                    ? DelegationToken.root(parentAgentId, tenantId, scope.workflowId(), null)
+                    : DelegationToken.rootWithCapabilities(parentAgentId, tenantId, scope.workflowId(), null,
+                    parentCapabilities);
+        }
+        final DelegationToken childToken;
+        try {
+            int effectiveMaxCalls = maxCalls > 0 ? maxCalls
+                    : parentToken.maxCalls() > 0 ? Math.min(parentToken.maxCalls(), DelegationToken.DEFAULT_MAX_CALLS)
+                    : DelegationToken.DEFAULT_MAX_CALLS;
+            childToken = requestedMemoryAssets == null
+                    ? DelegationToken.issueChild(parentToken, childAgentId, requestedCapabilities,
+                    ttlMs > 0 ? ttlMs : DelegationToken.DEFAULT_TTL_MS, effectiveMaxCalls)
+                    : DelegationToken.issueChildWithMemoryAssets(parentToken, childAgentId,
+                    requestedCapabilities, requestedMemoryAssets,
+                    ttlMs > 0 ? ttlMs : DelegationToken.DEFAULT_TTL_MS, effectiveMaxCalls);
+        } catch (IllegalArgumentException e) {
+            log.warn("[DelegationGuard] delegation token rejected: parent={}, child={}, reason={}",
+                    parentAgentId, childAgentId, e.getMessage());
+            throw new DelegationException("delegation token invalid: " + e.getMessage());
+        }
+
         Set<String> childChain = new HashSet<>(currentChain);
         childChain.add(parentAgentId);
 
@@ -390,7 +475,16 @@ public final class DelegationGuard {
                 currentDepth, currentDepth + 1, BREADTH.get(), scope.workflowId(),
                 scope.totalSpawns(), childAgentId);
 
-        return new DelegationContext(currentDepth + 1, childChain, childAgentId, scope);
+        return new DelegationContext(currentDepth + 1, childChain, childAgentId, scope, childToken);
+    }
+
+    /** Convenience overload for an exact memory loadout without profile bounds. */
+    public static DelegationContext enter(String parentAgentId, String childAgentId,
+                                          Set<String> requestedCapabilities,
+                                          Set<String> requestedMemoryAssets,
+                                          long ttlMs, int maxCalls) {
+        return enter(parentAgentId, childAgentId, requestedCapabilities, requestedMemoryAssets,
+                ttlMs, maxCalls, null);
     }
 
     /**
@@ -403,11 +497,25 @@ public final class DelegationGuard {
      * @param ctx 由 {@link #enter} 返回的上下文
      */
     public static void activate(DelegationContext ctx) {
+        if (ctx == null) throw new DelegationException("delegation context must not be null");
+        if (ctx.token() != null) {
+            if (!ctx.token().isValid()) {
+                throw new DelegationException("delegation token expired or signature invalid");
+            }
+            if (!ctx.token().childAgentId().equals(ctx.agentId())) {
+                throw new DelegationException("delegation token identity mismatch");
+            }
+        }
         DEPTH.set(ctx.depth());
         BREADTH.set(0);  // 子 agent 重置广度预算
         Set<String> chain = new HashSet<>(ctx.chain());
         chain.add(ctx.agentId());
         CHAIN.set(chain);
+        if (ctx.token() != null) {
+            TOKEN.set(ctx.token());
+        } else {
+            TOKEN.remove();
+        }
         SCOPE.set(ctx.scope());  // 作用域跨线程传播（子 agent 计入同一工作流预算）
         log.debug("[DelegationGuard] 子线程委托上下文已激活: depth={}, chain={}, scope={}",
                 ctx.depth(), chain, ctx.scope() == null ? "global-default" : ctx.scope().workflowId());
@@ -422,6 +530,7 @@ public final class DelegationGuard {
         BREADTH.remove();
         CHAIN.remove();
         SCOPE.remove();
+        TOKEN.remove();
     }
 
     /**
@@ -436,6 +545,27 @@ public final class DelegationGuard {
      */
     public static Set<String> currentChain() {
         return Set.copyOf(CHAIN.get());
+    }
+
+    /** Current signed delegation token, or null for a top-level legacy Agent. */
+    public static DelegationToken currentToken() {
+        return TOKEN.get();
+    }
+
+    /** Current signed memory asset boundary, or an empty set for a legacy Agent. */
+    public static Set<String> currentDelegableMemoryAssets() {
+        DelegationToken token = currentToken();
+        return token == null ? Set.of() : token.delegableMemoryAssets();
+    }
+
+    /** Check delegation capability and atomically consume one tool-call budget unit. */
+    public static String checkToolAllowed(String toolName) {
+        DelegationToken token = currentToken();
+        if (token == null) return null;
+        if (!token.isValid()) return "delegation_token_expired_or_invalid";
+        if (!token.allowsTool(toolName)) return "delegation_capability_denied:" + toolName;
+        if (!token.consumeCall()) return "delegation_call_budget_exhausted";
+        return null;
     }
 
     // ════════════════════════════════════════════════════════════════

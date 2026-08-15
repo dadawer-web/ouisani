@@ -7,6 +7,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -45,7 +46,17 @@ public final class DefaultCommandRunner implements CommandRunner {
             return new CommandResult(-1, "", "empty command", false);
         }
 
-        ProcessBuilder pb = new ProcessBuilder(command);
+        List<String> resolvedCommand = new ArrayList<>(command);
+        if (resolvedCommand.get(0).equalsIgnoreCase("bash")
+                || resolvedCommand.get(0).equalsIgnoreCase("sh")) {
+            resolvedCommand.set(0,
+                    com.ouisani.aios.core.sandbox.ShellExecutableResolver.resolve(resolvedCommand.get(0)));
+        }
+        ProcessBuilder pb = new ProcessBuilder(resolvedCommand);
+        if (!resolvedCommand.isEmpty()) {
+            com.ouisani.aios.core.sandbox.ShellExecutableResolver.configureEnvironment(
+                    pb, resolvedCommand.get(0));
+        }
         pb.redirectErrorStream(true);
         if (workingDir != null) {
             pb.directory(workingDir);

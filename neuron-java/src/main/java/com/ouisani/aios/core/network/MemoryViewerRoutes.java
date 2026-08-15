@@ -1,13 +1,31 @@
 package com.ouisani.aios.core.network;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.ouisani.aios.core.memory.VersionedMemoryStore;
+import com.ouisani.aios.core.memory.MemoryLayer;
 import com.ouisani.aios.core.memory.providers.MemoryDomain;
 import com.ouisani.aios.core.memory.providers.MemoryRecord;
+import com.ouisani.aios.core.memory.graph.GroundedAnswerer;
+import com.ouisani.aios.core.memory.graph.HybridMemoryRetriever;
+import com.ouisani.aios.core.memory.graph.MemoryEdgeType;
+import com.ouisani.aios.core.memory.graph.MemoryGraphAccess;
+import com.ouisani.aios.core.memory.graph.MemoryNodeType;
+import com.ouisani.aios.core.memory.graph.RetrievalQuery;
+import com.ouisani.aios.core.memory.graph.RetrievalTrace;
+import com.ouisani.aios.core.memory.graph.TypedMemoryGraphStore;
 import io.javalin.Javalin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
 /**
@@ -37,6 +55,9 @@ import java.util.function.Supplier;
 public final class MemoryViewerRoutes {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryViewerRoutes.class);
+    /** Default viewer wiring keeps one hot graph index per primary VMS. */
+    private static final ConcurrentHashMap<VersionedMemoryStore, TypedMemoryGraphStore> GRAPH_STORES
+            = new ConcurrentHashMap<>();
 
     private MemoryViewerRoutes() {}
 
@@ -59,6 +80,17 @@ public final class MemoryViewerRoutes {
      * @param storeSupplier  store 来源；返回 null 时端点返回 503
      */
     public static void attachTo(Javalin app, Supplier<VersionedMemoryStore> storeSupplier) {
+        attachTo(app, storeSupplier, () -> {
+            VersionedMemoryStore store = storeSupplier.get();
+            if (store == null) return null;
+            return GRAPH_STORES.computeIfAbsent(store, TypedMemoryGraphStore::new);
+        });
+    }
+
+    /** Attach CRUD endpoints and typed-graph retrieval/grounded-answer endpoints. */
+    public static void attachTo(Javalin app,
+                                Supplier<VersionedMemoryStore> storeSupplier,
+                                Supplier<TypedMemoryGraphStore> graphSupplier) {
         // ── GET /api/memory/{agentId} — 列出当前记忆 ──
         app.get("/api/memory/{agentId}", ctx -> {
             String agentId = ctx.pathParam("agentId");
@@ -85,6 +117,22 @@ public final class MemoryViewerRoutes {
         // ── OPTIONS 预检（CORS 支持，便于浏览器直接访问） ──
         app.options("/api/memory/{agentId}", ctx -> corsOptions(ctx));
         app.options("/api/memory/{agentId}/{key}", ctx -> corsOptions(ctx));
+
+        app.get("/api/memory/graph/{scope}/retrieve", ctx -> {
+            RouteResult rr = handleGraphRetrieve(graphSupplier, ctx.pathParam("scope"),
+                    queryParamsAsJson(ctx));
+            applyResult(ctx, rr);
+        });
+        app.post("/api/memory/graph/{scope}/retrieve", ctx -> {
+            RouteResult rr = handleGraphRetrieve(graphSupplier, ctx.pathParam("scope"), ctx.body());
+            applyResult(ctx, rr);
+        });
+        app.post("/api/memory/graph/{scope}/answer", ctx -> {
+            RouteResult rr = handleGraphAnswer(graphSupplier, ctx.pathParam("scope"), ctx.body());
+            applyResult(ctx, rr);
+        });
+        app.options("/api/memory/graph/{scope}/retrieve", ctx -> corsOptions(ctx));
+        app.options("/api/memory/graph/{scope}/answer", ctx -> corsOptions(ctx));
 
         log.info("[MemoryViewer] 路由已挂载: GET/PATCH/DELETE /api/memory/{agentId}[/{key}]");
         System.out.println("  ✓ [MemoryViewer] 路由: GET/PATCH/DELETE /api/memory/{agentId}[/{key}]");
@@ -124,7 +172,8 @@ public final class MemoryViewerRoutes {
     /**
      * 处理 PATCH /api/memory/{agentId}/{key} — 更新 confidence/domain。
      * <p>
-     * Body 期望 JSON：{@code {"confidence":0.8,"domain":"USER"}}（两字段都可选）。
+     * Body 期望 JSON：{@code {"confidence":0.8,"domain":"USER","layer":"L2"}}
+     * （字段都可选，但至少提供一个）。
      */
     public static RouteResult handlePatch(Supplier<VersionedMemoryStore> supplier,
                                             String agentId, String key, String body) {
@@ -142,6 +191,7 @@ public final class MemoryViewerRoutes {
         // 解析 body — 提取 confidence 与 domain（容错，缺失视为不更新）
         Double newConfidence = null;
         MemoryDomain newDomain = null;
+        MemoryLayer newLayer = null;
         if (body != null && !body.isBlank()) {
             try {
                 var jsonObj = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
@@ -161,18 +211,26 @@ public final class MemoryViewerRoutes {
                                 "{\"error\":\"domain must be USER or AGENT\"}");
                     }
                 }
+                if (jsonObj.has("layer") && !jsonObj.get("layer").isJsonNull()) {
+                    try {
+                        newLayer = MemoryLayer.parse(jsonObj.get("layer").getAsString());
+                    } catch (IllegalArgumentException e) {
+                        return new RouteResult(400,
+                                "{\"error\":\"layer must be L0, L1, L2, or L3\"}");
+                    }
+                }
             } catch (Exception e) {
                 return new RouteResult(400, "{\"error\":\"invalid JSON: "
                         + escapeJson(e.getMessage()) + "\"}");
             }
         }
 
-        if (newConfidence == null && newDomain == null) {
+        if (newConfidence == null && newDomain == null && newLayer == null) {
             return new RouteResult(400,
-                    "{\"error\":\"at least one of confidence/domain must be provided\"}");
+                    "{\"error\":\"at least one of confidence/domain must be provided (or layer)\"}");
         }
 
-        boolean ok = store.updateMetadata(agentId, key, newConfidence, newDomain);
+        boolean ok = store.updateMetadata(agentId, key, newConfidence, newDomain, newLayer);
         if (!ok) {
             return new RouteResult(404, "{\"error\":\"key not found\",\"key\":\""
                     + escapeJson(key) + "\"}");
@@ -209,13 +267,200 @@ public final class MemoryViewerRoutes {
                 + escapeJson(key) + "\"}");
     }
 
+    /** POST/GET graph retrieval endpoint; returns the complete RetrievalTrace JSON. */
+    public static RouteResult handleGraphRetrieve(Supplier<TypedMemoryGraphStore> supplier,
+                                                  String scopeId,
+                                                  String body) {
+        TypedMemoryGraphStore graph = supplier == null ? null : supplier.get();
+        if (graph == null) {
+            return new RouteResult(503, "{\"error\":\"typed graph store not configured\"}");
+        }
+        if (scopeId == null || scopeId.isBlank()) {
+            return new RouteResult(400, "{\"error\":\"scope required\"}");
+        }
+        try {
+            JsonObject requestJson = parseObject(body);
+            RetrievalQuery query = retrievalQuery(scopeId, requestJson);
+            hydrateIfNeeded(graph, scopeId);
+            RetrievalTrace trace = new HybridMemoryRetriever(graph).retrieve(query);
+            return new RouteResult(200, trace.toJson());
+        } catch (RuntimeException e) {
+            return new RouteResult(400, "{\"error\":\"invalid retrieval request: "
+                    + escapeJson(e.getMessage()) + "\"}");
+        }
+    }
+
+    /** POST grounded-answer endpoint; the response embeds the trace and coverage decisions. */
+    public static RouteResult handleGraphAnswer(Supplier<TypedMemoryGraphStore> supplier,
+                                                String scopeId,
+                                                String body) {
+        TypedMemoryGraphStore graph = supplier == null ? null : supplier.get();
+        if (graph == null) {
+            return new RouteResult(503, "{\"error\":\"typed graph store not configured\"}");
+        }
+        if (scopeId == null || scopeId.isBlank()) {
+            return new RouteResult(400, "{\"error\":\"scope required\"}");
+        }
+        try {
+            JsonObject requestJson = parseObject(body);
+            String proposedAnswer = stringValue(requestJson, "answer", "proposedAnswer");
+            RetrievalQuery query = retrievalQuery(scopeId, requestJson);
+            hydrateIfNeeded(graph, scopeId);
+            RetrievalTrace trace = new HybridMemoryRetriever(graph).retrieve(query);
+            GroundedAnswerer.GroundedAnswer grounded = new GroundedAnswerer()
+                    .ground(proposedAnswer, trace);
+            return new RouteResult(200, grounded.toJson());
+        } catch (RuntimeException e) {
+            return new RouteResult(400, "{\"error\":\"invalid grounded-answer request: "
+                    + escapeJson(e.getMessage()) + "\"}");
+        }
+    }
+
+    private static void hydrateIfNeeded(TypedMemoryGraphStore graph, String scopeId) {
+        if (graph.nodeCount(scopeId) == 0) graph.hydrate(scopeId);
+    }
+
+    private static RetrievalQuery retrievalQuery(String scopeId, JsonObject json) {
+        String tenant = stringValue(json, "tenant", "tenantId");
+        boolean includeShared = booleanValue(json, true, "includeShared", "include_shared");
+        MemoryGraphAccess access = new MemoryGraphAccess(scopeId, tenant, includeShared);
+        Set<MemoryNodeType> nodeTypes = enumSet(json, MemoryNodeType.class,
+                "nodeTypes", "node_types", "types");
+        Set<MemoryEdgeType> allowedEdges = enumSet(json, MemoryEdgeType.class,
+                "allowedEdges", "allowed_edges", "edges");
+        Set<String> identities = stringSet(json, "identityIds", "identity_ids", "identities");
+        Map<String, String> metadata = metadataMap(json);
+        Long validAt = longValue(json, "validAt", "valid_at");
+        int seedLimit = intValue(json, 8, "seedLimit", "seed_limit");
+        int maxDepth = intValue(json, 2, "maxDepth", "max_depth");
+        int evidenceLimit = intValue(json, 20, "evidenceLimit", "evidence_limit");
+        double lexicalWeight = doubleValue(json, 0.45, "lexicalWeight", "lexical_weight");
+        double vectorWeight = doubleValue(json, 0.35, "vectorWeight", "vector_weight");
+        double metadataWeight = doubleValue(json, 0.20, "metadataWeight", "metadata_weight");
+        double minScore = doubleValue(json, 0.0, "minScore", "min_score");
+        String actionValue = stringValue(json, "insufficientEvidenceAction",
+                "insufficient_evidence_action", "onInsufficient", "on_insufficient");
+        RetrievalQuery.InsufficientEvidenceAction action = actionValue == null
+                ? RetrievalQuery.InsufficientEvidenceAction.OBSERVE
+                : RetrievalQuery.InsufficientEvidenceAction.valueOf(actionValue.trim().toUpperCase());
+        return new RetrievalQuery(stringValue(json, "query", "q"), access, nodeTypes,
+                allowedEdges, validAt, identities, metadata, seedLimit, maxDepth,
+                evidenceLimit, lexicalWeight, vectorWeight, metadataWeight, minScore, action);
+    }
+
+    private static JsonObject parseObject(String body) {
+        if (body == null || body.isBlank()) return new JsonObject();
+        JsonElement parsed = JsonParser.parseString(body);
+        if (!parsed.isJsonObject()) throw new IllegalArgumentException("request body must be a JSON object");
+        return parsed.getAsJsonObject();
+    }
+
+    private static String stringValue(JsonObject json, String... keys) {
+        for (String key : keys) {
+            if (json != null && json.has(key) && !json.get(key).isJsonNull()) {
+                return json.get(key).getAsString();
+            }
+        }
+        return null;
+    }
+
+    private static boolean booleanValue(JsonObject json, boolean fallback, String... keys) {
+        String value = stringValue(json, keys);
+        return value == null ? fallback : Boolean.parseBoolean(value);
+    }
+
+    private static int intValue(JsonObject json, int fallback, String... keys) {
+        String value = stringValue(json, keys);
+        return value == null ? fallback : Integer.parseInt(value);
+    }
+
+    private static Long longValue(JsonObject json, String... keys) {
+        String value = stringValue(json, keys);
+        return value == null ? null : Long.parseLong(value);
+    }
+
+    private static double doubleValue(JsonObject json, double fallback, String... keys) {
+        String value = stringValue(json, keys);
+        return value == null ? fallback : Double.parseDouble(value);
+    }
+
+    private static Set<String> stringSet(JsonObject json, String... keys) {
+        JsonElement element = firstElement(json, keys);
+        if (element == null || element.isJsonNull()) return Set.of();
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (element.isJsonArray()) {
+            for (JsonElement item : element.getAsJsonArray()) {
+                if (!item.isJsonNull() && !item.getAsString().isBlank()) values.add(item.getAsString().trim());
+            }
+        } else {
+            Arrays.stream(element.getAsString().split(","))
+                    .map(String::trim).filter(value -> !value.isBlank()).forEach(values::add);
+        }
+        return Set.copyOf(values);
+    }
+
+    private static <E extends Enum<E>> Set<E> enumSet(JsonObject json, Class<E> type,
+                                                       String... keys) {
+        Set<String> raw = stringSet(json, keys);
+        LinkedHashSet<E> values = new LinkedHashSet<>();
+        for (String value : raw) {
+            try {
+                if (type == MemoryNodeType.class) values.add(type.cast(MemoryNodeType.parse(value)));
+                else values.add(type.cast(MemoryEdgeType.parse(value)));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("invalid " + type.getSimpleName() + ": " + value);
+            }
+        }
+        return Set.copyOf(values);
+    }
+
+    private static Map<String, String> metadataMap(JsonObject json) {
+        JsonElement element = firstElement(json, "metadata", "metadataFilters", "metadata_filters");
+        if (element == null || !element.isJsonObject()) return Map.of();
+        LinkedHashMap<String, String> values = new LinkedHashMap<>();
+        for (Map.Entry<String, JsonElement> entry : element.getAsJsonObject().entrySet()) {
+            if (!entry.getValue().isJsonNull()) values.put(entry.getKey(), entry.getValue().getAsString());
+        }
+        return values;
+    }
+
+    private static JsonElement firstElement(JsonObject json, String... keys) {
+        if (json == null) return null;
+        for (String key : keys) if (json.has(key)) return json.get(key);
+        return null;
+    }
+
+    private static String queryParamsAsJson(io.javalin.http.Context ctx) {
+        JsonObject json = new JsonObject();
+        String query = ctx.queryParam("query");
+        if (query == null) query = ctx.queryParam("q");
+        if (query != null) json.addProperty("query", query);
+        String tenant = ctx.queryParam("tenant");
+        if (tenant != null) json.addProperty("tenant", tenant);
+        String edges = ctx.queryParam("edges");
+        if (edges != null) json.addProperty("edges", edges);
+        String types = ctx.queryParam("types");
+        if (types != null) json.addProperty("types", types);
+        String identities = ctx.queryParam("identities");
+        if (identities != null) json.addProperty("identities", identities);
+        String validAt = ctx.queryParam("validAt");
+        if (validAt != null) json.addProperty("validAt", validAt);
+        String depth = ctx.queryParam("maxDepth");
+        if (depth != null) json.addProperty("maxDepth", depth);
+        String limit = ctx.queryParam("seedLimit");
+        if (limit != null) json.addProperty("seedLimit", limit);
+        String action = ctx.queryParam("onInsufficient");
+        if (action != null) json.addProperty("onInsufficient", action);
+        return json.toString();
+    }
+
     // ── 内部工具 ──
 
     /** 应用 RouteResult 到 Javalin ctx */
     private static void applyResult(io.javalin.http.Context ctx, RouteResult rr) {
         ctx.status(rr.status());
         ctx.header("Access-Control-Allow-Origin", "*");
-        ctx.header("Access-Control-Allow-Methods", "GET, PATCH, DELETE, OPTIONS");
+        ctx.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
         ctx.header("Access-Control-Allow-Headers", "Content-Type");
         ctx.contentType("application/json");
         ctx.result(rr.body());
@@ -224,7 +469,7 @@ public final class MemoryViewerRoutes {
     /** CORS 预检响应 */
     private static void corsOptions(io.javalin.http.Context ctx) {
         ctx.header("Access-Control-Allow-Origin", "*");
-        ctx.header("Access-Control-Allow-Methods", "GET, PATCH, DELETE, OPTIONS");
+        ctx.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
         ctx.header("Access-Control-Allow-Headers", "Content-Type");
         ctx.result("");
     }
@@ -249,6 +494,7 @@ public final class MemoryViewerRoutes {
         sb.append("\"timestamp\":").append(r.timestamp()).append(",");
         sb.append("\"confidence\":").append(r.confidence()).append(",");
         sb.append("\"domain\":\"").append(r.domain()).append("\",");
+        sb.append("\"layer\":\"").append(r.layer()).append("\",");
         sb.append("\"version\":").append(r.version());
         sb.append("}");
         return sb.toString();

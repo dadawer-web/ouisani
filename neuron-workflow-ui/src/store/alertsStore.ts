@@ -21,6 +21,8 @@ export interface AlertEntry {
   detail: string;
 }
 
+type AlertPayload = Record<string, unknown>;
+
 interface AlertsState {
   alerts: AlertEntry[];
   connected: boolean;
@@ -59,7 +61,7 @@ const str = (v: unknown, d = ""): string =>
   v == null ? d : typeof v === "string" ? v : String(v);
 
 /** 按频道从 message payload 提取 title / detail */
-function extract(channel: string, m: Record<string, any>): { title: string; detail: string } {
+function extract(channel: string, m: AlertPayload): { title: string; detail: string } {
   switch (channel) {
     case "sys.kernel.panic":
       return {
@@ -116,7 +118,7 @@ function extract(channel: string, m: Record<string, any>): { title: string; deta
         detail: `${str(m.status)} · cpu ${m.cpuUsage ?? "?"}% mem ${m.memoryUsage ?? "?"}`,
       };
     default:
-      return { title: channel, detail: JSON.stringify(m) };
+      return { title: channel, detail: JSON.stringify(m) ?? "" };
   }
 }
 
@@ -156,14 +158,14 @@ export const useAlertsStore = create<AlertsState>((set, get) => ({
         if (typeof m === "string") {
           try { m = JSON.parse(m); } catch { /* 纯字符串，保留 */ }
         }
-        const obj: Record<string, any> = m && typeof m === "object" ? m : { payload: m };
+        const obj: AlertPayload = m && typeof m === "object" ? m as AlertPayload : { payload: m };
 
         const { title, detail } = extract(channel, obj);
         const entry: AlertEntry = {
           id: uid(),
           channel,
           severity: severityOf(channel),
-          timestamp: obj.timestamp ?? Date.now(),
+          timestamp: typeof obj.timestamp === "number" ? obj.timestamp : Date.now(),
           title,
           detail,
         };

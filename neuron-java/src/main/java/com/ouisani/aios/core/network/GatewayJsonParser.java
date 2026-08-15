@@ -104,7 +104,8 @@ public final class GatewayJsonParser {
         String agentType = extractJsonField(json, "agentType");
         if (agentType == null || agentType.isBlank()) agentType = "omni";
 
-        return new WorkflowManifest(workflowName, nodes, enabledSkills, enabledRoles, agentType);
+        String missionId = extractJsonField(json, "missionId");
+        return new WorkflowManifest(workflowName, nodes, enabledSkills, enabledRoles, agentType, List.of(), null, missionId);
     }
 
     /**

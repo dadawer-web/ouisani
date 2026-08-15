@@ -199,6 +199,14 @@ public final class ActionGovernor {
 
         // 更新栈中记录为完成态
         updateRecordOnCompletion(ctx.agentId(), ctx.requestId(), now, state, autoRolledBack, diff);
+        // Publish the same governed action to the IDE diff read model. The manager
+        // deliberately stores only metadata and reuses this governor's snapshot for undo.
+        try {
+            ActionRecord completed = findRecord(ctx.agentId(), ctx.requestId());
+            com.ouisani.aios.core.review.DiffTimelineManager.instance().record(completed);
+        } catch (Throwable ignored) {
+            // Diff indexing is additive and must never change syscall semantics.
+        }
         return new AfterActionResult(diff, autoRolledBack, success);
     }
 
@@ -414,6 +422,33 @@ public final class ActionGovernor {
                 }
             }
         }
+    }
+
+    /**
+     * Mark a reversible action as undone after an equivalent durable restore
+     * (for example, the IDE's target-scoped before-image) has already run.
+     * This keeps the in-memory undo stack consistent without restoring the
+     * entire environment a second time.
+     */
+    public boolean markUndone(String requestId) {
+        ActionRecord record = requestIndex.get(requestId);
+        if (record == null || !record.isUndoable()) return false;
+        updateRecordUndone(record);
+        SemanticEtw.getInstance().logEvent("GOVERNANCE", "UNDO_MARKED",
+                "agent=" + record.agentId() + " action=" + record.request().fullAction()
+                        + " requestId=" + requestId);
+        return true;
+    }
+
+    private ActionRecord findRecord(String agentId, String requestId) {
+        ActionRecord indexed = requestIndex.get(requestId);
+        if (indexed != null) return indexed;
+        Deque<ActionRecord> stack = undoStacks.get(agentId);
+        if (stack == null) return null;
+        synchronized (stack) {
+            for (ActionRecord r : stack) if (requestId.equals(r.requestId())) return r;
+        }
+        return null;
     }
 
     private void updateRecordUndone(ActionRecord record) {

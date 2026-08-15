@@ -6,6 +6,7 @@ import com.ouisani.aios.core.cache.kvstate.KvCacheVfsStore;
 import com.ouisani.aios.core.ipc.SharedMemoryManager;
 import com.ouisani.aios.core.ipc.SemanticMemoryBlock;
 import com.ouisani.aios.core.ipc.VariablePool;
+import com.ouisani.aios.core.recovery.RecoveryAuthorizationManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -121,6 +122,8 @@ public final class HibernationManager {
 
             // ── Step 5: 捕获 SharedMemoryManager 的共享内存段 ──
             Map<String, Map<String, String>> shmSegments = captureShmSegments();
+            List<com.ouisani.aios.core.ipc.MemoryRecord> scopedMemoryRecords =
+                    SharedMemoryManager.instance().snapshotMemory();
 
             // ── Step 6: 组装 AgentSnapshot ──
             AgentSnapshot snapshot = new AgentSnapshot(
@@ -131,6 +134,7 @@ public final class HibernationManager {
                     kvCacheRefs,
                     contextPointers,
                     shmSegments,
+                    scopedMemoryRecords,
                     AgentSnapshot.CURRENT_VERSION
             );
 
@@ -202,6 +206,11 @@ public final class HibernationManager {
 
             // ── Step 6: 恢复共享内存段 ──
             restoreShmSegments(snapshot.shmSegments());
+            SharedMemoryManager.instance().restoreMemory(snapshot.scopedMemoryRecords());
+
+            // Restored state was authorized before suspension. Require a new
+            // authorization decision before any mutating action resumes.
+            RecoveryAuthorizationManager.instance().markRestored(workspaceId);
 
             long elapsed = System.currentTimeMillis() - startTs;
             log.info("[Hibernation] ╔══════════════════════════════════════════════════╗");
@@ -490,6 +499,8 @@ public final class HibernationManager {
             List<KvCacheRef> kvCacheRefs = captureKvCacheRefs();
             Map<String, Map<String, String>> contextPointers = captureContextPointers();
             Map<String, Map<String, String>> shmSegments = captureShmSegments();
+            List<com.ouisani.aios.core.ipc.MemoryRecord> scopedMemoryRecords =
+                    SharedMemoryManager.instance().snapshotMemory();
 
             AgentSnapshot snapshot = new AgentSnapshot(
                     workspaceId,
@@ -499,6 +510,7 @@ public final class HibernationManager {
                     kvCacheRefs,
                     contextPointers,
                     shmSegments,
+                    scopedMemoryRecords,
                     AgentSnapshot.CURRENT_VERSION
             );
 

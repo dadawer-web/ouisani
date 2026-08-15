@@ -1,0 +1,20 @@
+{
+  "run_id": "full_n100_minimax_m3",
+  "run_at_utc": "2026-08-09T05:16:03.441329+00:00",
+  "framework": "Reflexion",
+  "framework_commit": "218cf0ef1df84b05ce379dd4a8e47f17766733a0",
+  "n_per_variant": 100,
+  "temperature": 0.7,
+  "status": "completed_with_failures",
+  "models": [
+    {
+      "model": "minimax-m3",
+      "protocol": "messages",
+      "returncode": 1,
+      "ok": false,
+      "output_dir": "evaluation\\results\\emse_reflexion\\full_n100_minimax_m3\\minimax-m3",
+      "log": "evaluation\\results\\emse_reflexion\\full_n100_minimax_m3\\minimax-m3.log"
+    }
+  ],
+  "completed_at_utc": "2026-08-09T05:20:23.081148+00:00"
+}

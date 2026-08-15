@@ -7,7 +7,8 @@ import com.google.gson.JsonParser;
 import com.ouisani.aios.core.llm.LlmProvider.ChatMessage;
 import com.ouisani.aios.core.llm.LlmRouter;
 import com.ouisani.aios.core.llm.LlmRouterHolder;
-import com.ouisani.aios.core.memory.MemoryManager;
+import com.ouisani.aios.core.memory.MemoryLifecycleRuntime;
+import com.ouisani.aios.core.memory.MemoryRecallHook;
 import io.javalin.Javalin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,8 +53,11 @@ public final class ChatRoutes {
 
             OutputStream out = ctx.outputStream();
 
+            ChatRequest req = null;
+            String captureTurnId = null;
+            String captureUserMessage = "";
             try {
-                ChatRequest req = parseRequest(ctx.body());
+                req = parseRequest(ctx.body());
                 if (req.messages.isEmpty()) {
                     writeEvent(out, Map.of("error", "missing 'messages' field"));
                     out.flush();
@@ -74,17 +78,23 @@ public final class ChatRoutes {
                         .map(ChatMessage::contentAsString)
                         .reduce((first, second) -> second)
                         .orElse("");
-                String recalled = retrieveMemorySafely(req.agentId, lastUserQuery);
-                if (recalled != null && !recalled.isBlank()) {
-                    systemPrompt += "\n\n[Relevant memories for this conversation]\n" + recalled;
-                }
+                captureUserMessage = lastUserQuery;
+                captureTurnId = java.util.UUID.randomUUID().toString();
+                MemoryLifecycleRuntime.turnStarted(
+                        req.tenantId, req.workflowId, req.sessionId,
+                        req.agentId, captureTurnId, lastUserQuery);
+                MemoryRecallHook.RecallResult recallResult = MemoryLifecycleRuntime.recall(
+                        req.tenantId, req.workflowId, req.sessionId,
+                        req.agentId, lastUserQuery, captureTurnId);
+                String recalled = recallResult.context();
 
-                log.info("[ChatRoutes] /api/chat: agentId={}, messages={}, memoryInjected={}",
-                        req.agentId, req.messages.size(), recalled != null && !recalled.isBlank());
+                log.info("[ChatRoutes] /api/chat: agentId={}, messages={}, memoryInjected={}, strategy={}, partial={}",
+                        req.agentId, req.messages.size(), recalled != null && !recalled.isBlank(),
+                        recallResult.effectiveStrategy(), recallResult.partial());
 
                 // ── 阻塞流式调用：onDelta 在同线程同步回调，逐 token 写 SSE ──
                 final OutputStream sink = out;
-                router.thinkWithHistoryStream(req.messages, systemPrompt, delta -> {
+                String response = router.thinkWithHistoryStream(req.messages, systemPrompt, recalled, delta -> {
                     try {
                         sink.write(("data: " + GSON.toJson(Map.of("delta", delta)) + "\n\n")
                                 .getBytes(StandardCharsets.UTF_8));
@@ -93,10 +103,19 @@ public final class ChatRoutes {
                         log.warn("[ChatRoutes] 写 SSE delta 失败: {}", e.getMessage());
                     }
                 });
+                MemoryLifecycleRuntime.turnCompleted(
+                        req.tenantId, req.workflowId, req.sessionId, req.agentId, captureTurnId,
+                        captureUserMessage, response, List.of());
 
                 out.write("data: [DONE]\n\n".getBytes(StandardCharsets.UTF_8));
                 out.flush();
             } catch (Exception e) {
+                if (req != null && captureTurnId != null) {
+                    MemoryLifecycleRuntime.turnFailed(
+                            req.tenantId, req.workflowId, req.sessionId,
+                            req.agentId, captureTurnId,
+                            captureUserMessage, null, e);
+                }
                 log.error("[ChatRoutes] /api/chat 失败: {}", e.getMessage(), e);
                 try {
                     writeEvent(out, Map.of("error", e.getMessage() == null ? "unknown error" : e.getMessage()));
@@ -126,6 +145,12 @@ public final class ChatRoutes {
         JsonObject root = JsonParser.parseString(body).getAsJsonObject();
         String agentId = root.has("agentId") && !root.get("agentId").isJsonNull()
                 ? root.get("agentId").getAsString() : CHAT_AGENT_ID;
+        String tenantId = root.has("tenantId") && !root.get("tenantId").isJsonNull()
+                ? root.get("tenantId").getAsString() : null;
+        String workflowId = root.has("workflowId") && !root.get("workflowId").isJsonNull()
+                ? root.get("workflowId").getAsString() : null;
+        String sessionId = root.has("sessionId") && !root.get("sessionId").isJsonNull()
+                ? root.get("sessionId").getAsString() : null;
 
         List<ChatMessage> messages = new ArrayList<>();
         if (root.has("messages") && root.get("messages").isJsonArray()) {
@@ -143,11 +168,13 @@ public final class ChatRoutes {
                 }
             }
         }
-        return new ChatRequest(agentId, messages);
+        return new ChatRequest(agentId, tenantId, workflowId, sessionId, messages);
     }
 
     /** 安全检索记忆 — 任何异常都跳过（记忆是可选增强，不阻断对话） */
     private static String retrieveMemorySafely(String agentId, String query) {
+        return MemoryLifecycleRuntime.recallContext(null, null, null, agentId, query);
+        /*
         if (agentId == null || query == null || query.isBlank()) return "";
         try {
             var provider = MemoryManager.getInstance().currentProvider();
@@ -157,11 +184,13 @@ public final class ChatRoutes {
             log.warn("[ChatRoutes] 记忆检索失败（已跳过）: {}", e.getMessage());
             return "";
         }
+    */
     }
 
     private static void writeEvent(OutputStream out, Map<String, String> payload) throws Exception {
         out.write(("data: " + GSON.toJson(payload) + "\n\n").getBytes(StandardCharsets.UTF_8));
     }
 
-    private record ChatRequest(String agentId, List<ChatMessage> messages) {}
+    private record ChatRequest(String agentId, String tenantId, String workflowId,
+                               String sessionId, List<ChatMessage> messages) {}
 }

@@ -1,5 +1,4 @@
 import { Monitor, RefreshCw, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 /**
  * 全息视界 —— Agent UI 沙箱 iframe。

@@ -76,6 +76,11 @@ public class WorkflowContext {
         globalMemory.put(nodeId, new ConcurrentHashMap<>(output));
     }
 
+    /** Remove a superseded node output before a continuation reruns that step. */
+    public void removeNodeOutput(String nodeId) {
+        if (nodeId != null) globalMemory.remove(nodeId);
+    }
+
     /** 下游节点读取上游变量 (如: 从 "spider_node" 读取 "url_list")。
      *  作用域链：当前作用域找不到时，沿 parentContext 向上追溯。 */
     public Object getVariable(String sourceNodeId, String variableKey) {

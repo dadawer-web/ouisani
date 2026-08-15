@@ -72,14 +72,6 @@ export function useTurnStream(): TurnStreamApi {
     unsubAlert: null,
   });
 
-  // 重置无活动计时器 —— 每收到一个事件就续命，工作流持续产出时不会误判 timeout
-  const resetIdle = useCallback(() => {
-    const st = stateRef.current;
-    if (st.finalized) return;
-    if (st.idleTimer) clearTimeout(st.idleTimer);
-    st.idleTimer = setTimeout(() => finalize("timeout", "无活动 5 分钟"), IDLE_TIMEOUT_MS);
-  }, []);
-
   const finalize = useCallback((reason: string, detail?: string) => {
     const st = stateRef.current;
     if (st.finalized) return;
@@ -103,6 +95,14 @@ export function useTurnStream(): TurnStreamApi {
     }));
     useSessionStore.getState().setStreamingMessageId(null);
   }, []);
+
+  // 重置无活动计时器 —— 每收到一个事件就续命，工作流持续产出时不会误判 timeout
+  const resetIdle = useCallback(() => {
+    const st = stateRef.current;
+    if (st.finalized) return;
+    if (st.idleTimer) clearTimeout(st.idleTimer);
+    st.idleTimer = setTimeout(() => finalize("timeout", "无活动 5 分钟"), IDLE_TIMEOUT_MS);
+  }, [finalize]);
 
   const startTurn = useCallback(
     (streamingMsgId: string, sessionId: string) => {
@@ -206,8 +206,8 @@ export function useTurnStream(): TurnStreamApi {
 
   // 组件卸载时清理订阅与定时器
   useEffect(() => {
+    const st = stateRef.current;
     return () => {
-      const st = stateRef.current;
       if (st.idleTimer) clearTimeout(st.idleTimer);
       if (st.hardTimer) clearTimeout(st.hardTimer);
       st.unsubSys?.();

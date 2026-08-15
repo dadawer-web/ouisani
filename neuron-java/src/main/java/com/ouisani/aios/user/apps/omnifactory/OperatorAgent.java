@@ -602,6 +602,10 @@ public class OperatorAgent extends AbstractAgent {
         prompt.append("\n请立即开始执行上述任务。记住：你是一个操作员，直接操作系统，不要写代码。\n");
         prompt.append("完成后回复 TASK_COMPLETED 并附上操作摘要。");
 
+        String carryover = context == null ? "" : context.renderCarryoverState();
+        if (!carryover.isBlank()) {
+            prompt.append("\n\n").append(carryover);
+        }
         return prompt.toString();
     }
 }

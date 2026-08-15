@@ -24,9 +24,11 @@ export default function VfsWorkspaceBridge() {
   const [browsePath, setBrowsePath] = useState("/vfs/workspace");
   const [files, setFiles] = useState<VfsFile[]>([]);
   const [browsing, setBrowsing] = useState(false);
-  const [previewContent, setPreviewContent] = useState<string | null>(null);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
+  const [editContent, setEditContent] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveResult, setSaveResult] = useState<string | null>(null);
 
   // 任务 ID — 用于隔离不同任务的文件
   const [taskId, setTaskId] = useState("default");
@@ -46,7 +48,7 @@ export default function VfsWorkspaceBridge() {
     setIsDragging(false);
   }, []);
 
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
@@ -55,16 +57,16 @@ export default function VfsWorkspaceBridge() {
     if (droppedFiles.length === 0) return;
 
     await uploadFiles(droppedFiles);
-  }, [taskId]);
+  };
 
   // ── 文件选择上传 ──
-  const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(e.target.files || []);
     if (selected.length === 0) return;
     await uploadFiles(selected);
     // 清空 input 以便重复上传同一文件
     if (fileInputRef.current) fileInputRef.current.value = "";
-  }, [taskId]);
+  };
 
   // ── 上传文件到后端 ──
   const uploadFiles = async (fileList: File[]) => {
@@ -137,21 +139,41 @@ export default function VfsWorkspaceBridge() {
   const previewFile = async (path: string) => {
     setLoadingPreview(true);
     setPreviewPath(path);
-    setPreviewContent(null);
     try {
       const response = await fetch(
         `${AIOS_API_URL}/api/vfs/read?path=${encodeURIComponent(path)}&token=${AIOS_TOKEN}`
       );
       if (response.ok) {
         const text = await response.text();
-        setPreviewContent(text);
+        setEditContent(text);
+        setSaveResult(null);
       } else {
-        setPreviewContent(`// 无法读取文件: ${response.status}`);
+        setEditContent("");
       }
     } catch {
-      setPreviewContent("// 后端不可达");
+      setEditContent("");
     } finally {
       setLoadingPreview(false);
+    }
+  };
+
+  const saveFile = async () => {
+    if (!previewPath) return;
+    setSaving(true);
+    setSaveResult(null);
+    try {
+      const response = await fetch(`${AIOS_API_URL}/api/vfs/write?token=${AIOS_TOKEN}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: previewPath, content: editContent, agentId: "ui-ide" }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) throw new Error(result.error || `保存失败 (${response.status})`);
+      setSaveResult(`已保存并进入 Diff Review${result.requestId ? ` · ${result.requestId}` : ""}`);
+    } catch (e) {
+      setSaveResult(e instanceof Error ? e.message : "保存失败");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -329,7 +351,6 @@ export default function VfsWorkspaceBridge() {
               <button
                 onClick={() => {
                   setPreviewPath(null);
-                  setPreviewContent(null);
                 }}
                 className="rounded-lg p-1 text-outline hover:bg-surface-container-high hover:text-on-surface"
               >
@@ -344,14 +365,26 @@ export default function VfsWorkspaceBridge() {
                   <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 </div>
               ) : (
-                <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-on-surface-variant">
-                  {previewContent}
-                </pre>
+                <textarea
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  spellCheck={false}
+                  className="h-full min-h-[34vh] w-full resize-none rounded-lg bg-surface-container-low p-3 font-mono text-xs leading-relaxed text-on-surface outline-none ghost-border focus:ring-1 focus:ring-primary/40"
+                />
               )}
             </div>
 
             {/* 底部操作栏 */}
-            <div className="flex items-center justify-end gap-2 border-t border-outline-variant/20 px-4 py-3">
+            <div className="flex items-center gap-2 border-t border-outline-variant/20 px-4 py-3">
+              {saveResult && <span className="mr-auto truncate text-[10px] text-outline">{saveResult}</span>}
+              <button
+                onClick={() => void saveFile()}
+                disabled={saving || loadingPreview}
+                className="btn-primary-ink flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
+              >
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                {saving ? "Saving..." : "Save & Review"}
+              </button>
               <button
                 onClick={() => downloadFile(previewPath)}
                 className="btn-primary-ink flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold text-on-primary transition-opacity hover:opacity-90"

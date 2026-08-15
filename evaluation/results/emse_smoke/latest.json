@@ -1,0 +1,85 @@
+{
+  "run_id": "emse-smoke-20260809T044722Z",
+  "run_at_utc": "2026-08-09T04:47:22.928547+00:00",
+  "temperature": 0,
+  "max_tokens": 8,
+  "results": [
+    {
+      "requested_model": "gpt-5.6-luna",
+      "protocol": "chat_completions",
+      "http_status": 200,
+      "latency_ms": 2260.4,
+      "ok": true,
+      "response_model": "gpt-5.6-luna",
+      "response_id": "gen-1786250824-dTOc4SVEBw6zxrkwOEzF",
+      "content_preview": "OK",
+      "error": null
+    },
+    {
+      "requested_model": "glm-5.2",
+      "protocol": "chat_completions",
+      "http_status": 200,
+      "latency_ms": 1601.8,
+      "ok": true,
+      "response_model": "glm-5.2",
+      "response_id": "chatcmpl-RNitdNZcLZ7BxOG76IzLLviF",
+      "content_preview": "",
+      "error": null
+    },
+    {
+      "requested_model": "kimi-k2.6",
+      "protocol": "chat_completions",
+      "http_status": 200,
+      "latency_ms": 2092.5,
+      "ok": true,
+      "response_model": "kimi-k2.6",
+      "response_id": "chatcmpl-19fb4e9653da4837878d983dc85aad88",
+      "content_preview": "The user wants me to reply with exactly",
+      "error": null
+    },
+    {
+      "requested_model": "mimo-v2.5",
+      "protocol": "chat_completions",
+      "http_status": 200,
+      "latency_ms": 3629.1,
+      "ok": true,
+      "response_model": "mimo-v2.5",
+      "response_id": "91bf2023-dece-4e4b-aa54-de571b2e9c5e_e2d777844a4044929b238add0f55c094",
+      "content_preview": "None",
+      "error": null
+    },
+    {
+      "requested_model": "minimax-m3",
+      "protocol": "messages",
+      "http_status": 200,
+      "latency_ms": 1551.2,
+      "ok": true,
+      "response_model": "minimax-m3",
+      "response_id": "06c73951605172ba158aafed23112d0d",
+      "content_preview": "OK",
+      "error": null
+    },
+    {
+      "requested_model": "qwen3.7-plus",
+      "protocol": "messages",
+      "http_status": 200,
+      "latency_ms": 4279.6,
+      "ok": true,
+      "response_model": "qwen3.7-plus",
+      "response_id": "msg_d7a34323-58d9-4758-8ed0-2de5377a5105",
+      "content_preview": "",
+      "error": null
+    },
+    {
+      "requested_model": "deepseek-v4-flash",
+      "protocol": "chat_completions",
+      "http_status": 200,
+      "latency_ms": 2288.2,
+      "ok": true,
+      "response_model": "deepseek-v4-flash",
+      "response_id": "e8a64426-2628-4642-a236-061fc124a2d3",
+      "content_preview": "",
+      "error": null
+    }
+  ]
+}

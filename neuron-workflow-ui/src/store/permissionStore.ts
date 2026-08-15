@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { AIOS_WS_URL } from "../config";
+import { AIOS_API_URL, AIOS_WS_URL } from "../config";
 
 // ════════════════════════════════════════════════════════════════
 //  permissionStore —— 工具权限审批流（Standing Scoped Approvals）
@@ -21,6 +21,9 @@ export interface PermissionAsk {
   toolName: string;
   target: string | null;
   description: string;
+  actionDigest: string | null;
+  workflowId: string | null;
+  traceId: string | null;
   timestamp: number;
 }
 
@@ -72,6 +75,9 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
           toolName: String(raw.toolName ?? ""),
           target: raw.target ? String(raw.target) : null,
           description: String(raw.description ?? ""),
+          actionDigest: raw.actionDigest ? String(raw.actionDigest) : null,
+          workflowId: raw.workflowId ? String(raw.workflowId) : null,
+          traceId: raw.traceId ? String(raw.traceId) : null,
           timestamp: Number(raw.timestamp ?? Date.now()),
         };
         set((state) => ({
@@ -110,8 +116,21 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
 
   respond: (requestId, decision) => {
     if (_ws && _ws.readyState === WebSocket.OPEN) {
-      _ws.send(JSON.stringify({ type: "permission_response", requestId, decision }));
+      const ask = get().pending.find((p) => p.requestId === requestId);
+      _ws.send(JSON.stringify({
+        type: "permission_response",
+        requestId,
+        decision,
+        actionDigest: ask?.actionDigest ?? undefined,
+      }));
     }
+    // Keep the Mission read-model in sync with the popup's optimistic decision.
+    // This is intentionally best-effort: the permission WebSocket remains the
+    // source of truth for waking the blocked agent loop.
+    void fetch(`${AIOS_API_URL}/api/missions/approvals/${encodeURIComponent(requestId)}/resolve?token=AIOS-SUPER-SECRET-KEY`, {
+      method: "POST",
+      headers: { Authorization: "Bearer AIOS-SUPER-SECRET-KEY" },
+    }).catch(() => undefined);
     // 乐观移除：后端收到后唤醒阻塞的 agent loop；无需等 ack
     set((state) => ({ pending: state.pending.filter((p) => p.requestId !== requestId) }));
   },

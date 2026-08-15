@@ -1,0 +1,17 @@
+Summary
+
+Multi-tenant agent runtimes multiplex tenant work, permission checks, and audit
+activity over finite executors. We show that queueing and lock occupancy can
+delay a permission decision beyond its deadline; when the fallback is
+permissive, executor unavailability becomes an unsafe admission. Neuron
+reserves permission capacity and passes a measured resource-pressure signal to
+the escalation policy. A Java 21 evaluation compares shared fail-open,
+shared fail-closed, isolated, and coupled architectures across two recorded
+environments, deadline and attacker-pressure surfaces, capacity sweeps, mixed
+load QoS, fixed API-trace replay, a process-separated permission service, and
+an additional executor-focused replication. The results separate the two
+mechanisms: capacity reservation protects timely decisions, while coupling
+changes a depth-1 verdict under pressure. The artifact releases raw JSONL,
+environment records, scripts, generated manuscript values, and reproduction
+instructions. The process-separated service is a same-host loopback study and
+does not establish WAN or multi-node behavior.

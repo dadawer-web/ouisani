@@ -45,6 +45,7 @@ final class SystemStreamRoutes {
             "sys.workflow.node_resumed",   // 节点恢复
             "sys.workflow.node_failed",    // 节点失败
             "sys.workflow.suspended",      // 工作流挂起
+            "sys.workflow.verification",   // Verification-aware verdict/evidence
             "sys.dlq.entry_added",         // 死信队列
     };
 

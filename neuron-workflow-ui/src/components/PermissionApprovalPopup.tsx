@@ -59,6 +59,11 @@ export default function PermissionApprovalPopup() {
               {ask.description}
             </p>
           )}
+          {ask.actionDigest && (
+            <p className="mt-2 break-all font-mono text-[9px] text-outline/70">
+              digest: {ask.actionDigest}
+            </p>
+          )}
         </div>
 
         {/* 三按钮 */}

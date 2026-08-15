@@ -1,6 +1,7 @@
 package com.ouisani.aios.core.network;
 
 import com.ouisani.aios.core.memory.VersionedMemoryStore;
+import com.ouisani.aios.core.memory.MemoryLayer;
 import com.ouisani.aios.core.memory.providers.MemoryDomain;
 import com.ouisani.aios.core.memory.providers.MemoryProvider;
 import com.ouisani.aios.core.memory.providers.MemoryRecord;
@@ -61,6 +62,7 @@ class MemoryViewerRoutesTest {
         assertTrue(rr.body().contains("\"key\":\"k2\""));
         assertTrue(rr.body().contains("\"domain\":\"USER\""));
         assertTrue(rr.body().contains("\"domain\":\"AGENT\""));
+        assertTrue(rr.body().contains("\"layer\":\"L1\""));
         assertTrue(rr.body().contains("\"confidence\":0.9"));
         assertTrue(rr.body().contains("\"confidence\":0.5"));
     }
@@ -128,6 +130,17 @@ class MemoryViewerRoutesTest {
         assertEquals(0.8, store.current("a1", "k1").confidence(), 0.001);
         assertEquals(MemoryDomain.AGENT, store.current("a1", "k1").domain(),
                 "domain 不变");
+    }
+
+    @Test
+    @DisplayName("PATCH：更新 lifecycle layer")
+    void handlePatch_layer() {
+        store.store("a1", MemoryRecord.raw("k1", "v1", "src", 1000L, MemoryDomain.AGENT));
+        MemoryViewerRoutes.RouteResult rr = MemoryViewerRoutes.handlePatch(
+                supplier, "a1", "k1", "{\"layer\":\"L2\"}");
+        assertEquals(200, rr.status());
+        assertEquals(MemoryLayer.L2, store.current("a1", "k1").layer());
+        assertTrue(rr.body().contains("\"layer\":\"L2\""));
     }
 
     @Test

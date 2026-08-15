@@ -1,6 +1,7 @@
 package com.ouisani.aios.core.hibernation;
 
 import com.ouisani.aios.core.cache.kvstate.KvCacheRef;
+import com.ouisani.aios.core.ipc.MemoryRecord;
 
 import java.io.Serializable;
 import java.util.List;
@@ -51,6 +52,7 @@ public record AgentSnapshot(
         Map<String, Map<String, String>> contextPointers,
         /** 共享内存段快照（segmentId → key → value） */
         Map<String, Map<String, String>> shmSegments,
+        List<MemoryRecord> scopedMemoryRecords,
         /** 快照版本号（用于兼容性检查） */
         int version
 ) implements Serializable {
@@ -59,6 +61,16 @@ public record AgentSnapshot(
 
     /** 当前快照格式版本 */
     public static final int CURRENT_VERSION = 1;
+
+    /** Backward-compatible constructor for snapshots created before scoped memory. */
+    public AgentSnapshot(String workspaceId, long timestamp,
+                         Map<String, Map<String, Map<String, String>>> variablePoolSnapshot,
+                         List<TaskState> taskQueueSnapshot, List<KvCacheRef> kvCacheRefs,
+                         Map<String, Map<String, String>> contextPointers,
+                         Map<String, Map<String, String>> shmSegments, int version) {
+        this(workspaceId, timestamp, variablePoolSnapshot, taskQueueSnapshot, kvCacheRefs,
+                contextPointers, shmSegments, List.of(), version);
+    }
 
     /**
      * 任务状态 — 正在处理的任务队列中的一项。

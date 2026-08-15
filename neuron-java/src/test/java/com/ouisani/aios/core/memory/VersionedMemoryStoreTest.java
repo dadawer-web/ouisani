@@ -170,6 +170,25 @@ class VersionedMemoryStoreTest {
         assertEquals(2L, agentRecords.get(0).version(), "current 应是 version=2 的 AGENT 记录");
     }
 
+    @Test
+    void listByLayer_filtersLifecycleWithoutChangingDomain() {
+        store.store("agent-A", MemoryRecord.raw("raw", "conversation", "chat", 1L, MemoryDomain.USER));
+        store.store("agent-A", MemoryRecord.scenario("scenario", "project summary", "agent", 2L,
+                0.8, MemoryDomain.AGENT));
+
+        assertEquals(1, store.listByLayer("agent-A", MemoryLayer.L0).size());
+        assertEquals(1, store.listByLayer("agent-A", MemoryLayer.L2).size());
+        assertTrue(store.listByLayer("agent-A", MemoryLayer.L3).isEmpty());
+    }
+
+    @Test
+    void versionBump_preservesLifecycleLayer() {
+        store.store("agent-A", MemoryRecord.scenario("k", "v1", "agent", 1L, 0.8, MemoryDomain.AGENT));
+        store.store("agent-A", MemoryRecord.atomic("k", "v2", "agent", 2L, 0.8, MemoryDomain.AGENT));
+        assertEquals(MemoryLayer.L1, store.current("agent-A", "k").layer());
+        assertEquals(MemoryLayer.L2, store.history("agent-A", "k").get(0).layer());
+    }
+
     // ── 清理 ──
 
     @Test

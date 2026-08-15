@@ -251,6 +251,9 @@ class WorkflowHealer {
                     failedNode.publishTopic(),
                     failedNode.executor()
             );
+            replacementNode.setVerificationContract(failedNode.verificationContract());
+            replacementNode.setInputSchema(failedNode.inputSchema());
+            replacementNode.setOutputSchema(failedNode.outputSchema());
 
             for (String depId : failedNode.getUpstreamDependencies()) {
                 replacementNode.addDependency(depId);
@@ -290,6 +293,7 @@ class WorkflowHealer {
 
             if (replacementNode.getStatus() == WorkflowNode.Status.SUCCESS) {
                 context.commitNodeOutput(failedNode.instanceId(), replacementNode.getOutputData());
+                failedNode.setLastVerificationResult(replacementNode.lastVerificationResult());
                 failedNode.setStatus(WorkflowNode.Status.SUCCESS);
                 log.info("[DAG Engine] 拓扑突变成功！替代节点 '{}' 完成了原节点 '{}' 的任务",
                         replacementId, failedNode.instanceId());
@@ -581,6 +585,9 @@ class WorkflowHealer {
                     failedNode.publishTopic(),
                     failedNode.executor()
             );
+            replacementNode.setVerificationContract(failedNode.verificationContract());
+            replacementNode.setInputSchema(failedNode.inputSchema());
+            replacementNode.setOutputSchema(failedNode.outputSchema());
 
             for (String depId : failedNode.getUpstreamDependencies()) {
                 replacementNode.addDependency(depId);
@@ -615,6 +622,7 @@ class WorkflowHealer {
 
             if (replacementNode.getStatus() == WorkflowNode.Status.SUCCESS) {
                 context.commitNodeOutput(failedNode.instanceId(), replacementNode.getOutputData());
+                failedNode.setLastVerificationResult(replacementNode.lastVerificationResult());
                 failedNode.setStatus(WorkflowNode.Status.SUCCESS);
                 log.info("[DAG Engine] 拓扑突变成功！替代节点 '{}' 完成了原节点 '{}' 的任务",
                         replacementId, failedNode.instanceId());

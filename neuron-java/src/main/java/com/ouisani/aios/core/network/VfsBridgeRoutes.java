@@ -1,11 +1,18 @@
 package com.ouisani.aios.core.network;
 
 import com.ouisani.aios.core.VfsManager;
+import com.ouisani.aios.core.action.ActionGovernor;
+import com.ouisani.aios.core.action.ActionRecord;
+import com.ouisani.aios.core.syscall.SyscallRequest;
+import com.ouisani.aios.core.syscall.SyscallResponse;
+import com.ouisani.aios.core.syscall.schema.StoragePayload;
 import io.javalin.Javalin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * VFS 工作区桥接路由 — 从 AppGateway 抽取的前端与 VFS 双向通道。
@@ -187,9 +194,41 @@ final class VfsBridgeRoutes {
                 ctx.status(400).result("{\"error\":\"Missing 'path' or 'content'\"}");
                 return;
             }
-            boolean ok = VfsManager.instance().writeText(path, content);
+
+            // IDE saves use the governed storage path so every reversible edit gets
+            // an ActionGovernor snapshot and is published to DiffTimelineManager.
+            // Keep the caller-controlled identity explicit for audit filtering.
+            String agentId = jsonObj.has("agentId") && !jsonObj.get("agentId").isJsonNull()
+                    ? jsonObj.get("agentId").getAsString() : "ui-ide";
+            SyscallRequest governedRequest = new SyscallRequest(
+                    "storage", "write", StoragePayload.write(path, content));
+            String before = VfsManager.instance().readText(path);
+            boolean existedBefore = VfsManager.instance().resolve(path).isPresent();
+            var actionContext = ActionGovernor.getInstance().beforeAction(agentId, governedRequest);
+            SyscallResponse response;
+            try {
+                boolean written = VfsManager.instance().writeText(path, content);
+                response = written ? SyscallResponse.ok() : SyscallResponse.fail("VFS write rejected");
+            } catch (Exception e) {
+                response = SyscallResponse.fail(e);
+            }
+            ActionGovernor.getInstance().afterAction(actionContext, response);
+            if (response.success()) {
+                com.ouisani.aios.core.review.DiffTimelineManager.instance()
+                        .attachVfsBackup(actionContext.requestId(), path, before, existedBefore);
+            }
+            boolean ok = response.success();
+            ActionRecord action = ActionGovernor.getInstance().lastAction(agentId);
             ctx.contentType("application/json");
-            ctx.result("{\"success\":" + ok + ",\"path\":\"" + path + "\"}");
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("success", ok);
+            result.put("path", path);
+            if (action != null) {
+                result.put("requestId", action.requestId());
+                result.put("risk", action.riskLevel().name());
+            }
+            if (!ok && response.errorMessage() != null) result.put("error", response.errorMessage());
+            ctx.json(result);
         });
 
         app.options("/api/vfs/write", ctx -> {

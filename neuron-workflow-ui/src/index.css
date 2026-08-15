@@ -85,6 +85,35 @@ body {
   overflow: hidden;
 }
 
+.console-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(var(--outline-variant) / 0.3);
+  padding: 0.45rem 0.65rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: rgb(var(--on-surface-variant));
+  transition: background-color 150ms ease, color 150ms ease, opacity 150ms ease;
+}
+.console-action:hover { background: rgb(var(--surface-container-high)); color: rgb(var(--on-surface)); }
+.console-action:disabled { opacity: 0.5; }
+.console-action-danger { color: rgb(var(--error)); border-color: rgb(var(--error) / 0.25); }
+
+.field {
+  min-width: 0;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(var(--outline-variant) / 0.25);
+  background: rgb(var(--surface-container-low));
+  padding: 0.45rem 0.65rem;
+  font-size: 0.7rem;
+  color: rgb(var(--on-surface));
+  outline: none;
+}
+.field::placeholder { color: rgb(var(--outline) / 0.55); }
+.field:focus { border-color: rgb(var(--primary) / 0.6); }
+
 /* React Flow 配色覆盖 —— 由霓虹青改为古铜/暖灰 */
 .react-flow__edge-path {
   stroke: rgb(var(--primary));

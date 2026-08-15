@@ -1,0 +1,103 @@
+% =============================================================================
+%  Neuron: 多租户大语言模型智能体内核下的资源—安全联合治理
+%  (Coupled Resource-Security Governance for Multi-Tenant Agent Runtimes)
+%
+%  Target journal: Computing (Springer; subscription route)
+%  Draft layout; switch to Springer Computing's current submission template at submission time.
+% =============================================================================
+\RequirePackage{fix-cm}
+\documentclass[smallextended]{svjour3}
+\smartqed
+\journalname{Computing}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\DisableLigatures{encoding = *, family = *}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+\usepackage{graphicx}
+\graphicspath{{figures/}}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{amsmath,amssymb}
+\setlength{\emergencystretch}{3em}
+
+% itemize 项目符号：用 math bullet (CMSY 矢量) 替代默认 textbullet (OT1→tcrm 位图回退)。
+% 不加此行时，\textbullet 在 OT1 编码下回退到 tcrm1000.600pk 位图字体，渲染为巨大黑块。
+\renewcommand{\labelitemi}{$\bullet$}
+
+% I/O 宏：用 Helvetica 字体使大写 I 与数字 1 明确区分。
+% CMR/CMTI/CMSS 的 I 均为竖线形态，在各种字号下都被用户误读为 1（4 轮迭代验证）。
+% Helvetica (NimbusSan) 的 I 带全宽水平横杠（顶+底），与 1（斜旗顶）形态完全不同，彻底消除混淆。
+\newcommand{\IO}{\texorpdfstring{{\fontfamily{phv}\selectfont I/O}}{I/O}}
+\IfFileExists{generated/computing_results.tex}{\input{generated/computing_results}}{}
+\IfFileExists{generated/llm_replay_results.tex}{\input{generated/llm_replay_results}}{}
+\IfFileExists{generated/qos_results.tex}{\input{generated/qos_results}}{}
+\IfFileExists{generated/permission_http_results.tex}{\input{generated/permission_http_results}}{}
+\IfFileExists{generated/threshold_holdout_results.tex}{\input{generated/threshold_holdout_results}}{}
+
+\title{Resource-Aware Permission Governance for Dependable Multi-Tenant LLM Agent Runtimes}
+% 中文原标题：多租户大语言模型智能体内核下的资源—安全联合治理
+\author{Anonymous Authors}
+\date{}
+\titlerunning{Resource-Aware Permission Governance}
+\author{Mingyuan Xie\thanks{Corresponding authors: Mingyuan Xie and Zhengxun Wu} \and
+        Zhengxun Wu}
+\authorrunning{Xie and Wu}
+\institute{Mingyuan Xie \at
+           Qingdao University of Technology, Qingdao, Shandong, China\\
+           \email{jhj208436@gmail.com}
+           \and
+           Zhengxun Wu \at
+           Qingdao University of Technology, Qingdao, Shandong, China\\
+           \email{2276815088@qq.com}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Multi-tenant agent runtimes share executors, admission controls, and
+permission services. We study a conditional dependability failure in which
+resource pressure delays a permission decision and a permissive deadline
+fallback turns that availability loss into unsafe admission. We present
+Neuron, a Java runtime architecture that reserves permission capacity and
+feeds a resource-pressure signal into the escalation policy. Identity
+propagation, privilege non-increase, and correlated auditing support the
+architecture but are not separate contributions. We evaluate production
+Java~21 token-bucket and escalation-policy code against four predeclared
+architectures: shared fail-open, shared fail-closed, isolated without
+coupling, and coupled governance. Five independent JVM runs on each of a
+Windows host and an Ubuntu~22.04 one-vCPU KVM VPS cover 71,880 observations
+across deadline, attacker-pressure, and capacity sweeps. We additionally
+replay 33 API-derived sessions (254 immutable tool calls), exercise a
+process-separated Java permission service over same-host loopback with
+injected delay, queue pressure, and pauses (3,200 observations), and run a
+post-selection holdout of 180 observations from six new workload profiles.
+Reserved capacity and fail-closed handling preserve safety under policy
+starvation, while coupling changes the depth-1 decision when pressure exceeds
+the fixed threshold of 50. The holdout detects 90/90 attack observations with
+0/90 false positives. The loopback service experiment is not evidence about
+WAN or multi-node deployments.
+\end{abstract}
+\keywords{Dependable computing \and Multi-tenant runtimes \and Permission governance \and Resource-aware security \and Large language model agents \and Java runtime}
+
+% ── 章节导入 ──────────────────────────────────────────────────────────────────
+\input{sections/01-introduction}
+\input{sections/02-background_and_motivation}
+\input{sections/02b-threat_model}
+\input{sections/03-system_architecture}
+\input{sections/04-evaluation}
+\input{sections/05-related_work}
+\input{sections/06-conclusion}
+\input{sections/07-ethics}
+
+% ── 附录 ────────────────────────────────────────────────────────────────────
+\input{sections/08-appendix}
+
+% ── 参考文献 ──────────────────────────────────────────────────────────────────
+\bibliographystyle{spphys}
+\bibliography{refs}
+
+\end{document}

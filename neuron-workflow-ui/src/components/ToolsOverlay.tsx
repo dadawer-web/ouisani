@@ -1,10 +1,16 @@
 import { useEffect } from "react";
-import { ArrowLeft, Workflow, Monitor, Radar, Brain, FolderOpen } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import WorkflowSurface from "@/components/WorkflowSurface";
 import KernelMonitor from "@/components/KernelMonitor";
 import TelemetryRadar from "@/components/TelemetryRadar";
 import MemoryViewer from "@/components/MemoryViewer";
 import VfsWorkspaceBridge from "@/components/VfsWorkspaceBridge";
+import RunConsole from "@/components/RunConsole";
+import MissionHome from "@/components/MissionHome";
+import WikiViewer from "@/components/WikiViewer";
+import CapabilityWorkspace from "@/components/CapabilityWorkspace";
+import { TOOL_DEFS, type Surface } from "@/components/toolDefs";
+export type { Surface } from "@/components/toolDefs";
 import { cn } from "@/lib/utils";
 
 // ════════════════════════════════════════════════════════════════
@@ -13,29 +19,16 @@ import { cn } from "@/lib/utils";
 // ════════════════════════════════════════════════════════════════
 
 /** 主画布切换的"面"——侧栏导航项 + overlay 渲染目标 */
-export type Surface = "workflow" | "kernel" | "telemetry" | "memory" | "vfs";
-
-interface ToolDef {
-  id: Surface;
-  label: string;
-  sub: string;
-  icon: typeof Workflow;
-}
-
-export const TOOL_DEFS: ToolDef[] = [
-  { id: "workflow", label: "工作流", sub: "Agent Topology", icon: Workflow },
-  { id: "kernel", label: "内核监控", sub: "God's Eye", icon: Monitor },
-  { id: "telemetry", label: "遥测雷达", sub: "Telemetry", icon: Radar },
-  { id: "memory", label: "记忆", sub: "Memory Viewer", icon: Brain },
-  { id: "vfs", label: "VFS Bridge", sub: "Workspace", icon: FolderOpen },
-];
-
 const TITLES: Record<Surface, string> = {
+  missions: "连续任务",
+  runs: "Run 控制台",
   workflow: "工作流拓扑",
   kernel: "内核监控",
   telemetry: "遥测雷达",
   memory: "记忆",
+  wiki: "Wiki 编译层",
   vfs: "VFS Bridge",
+  capabilities: "IDE & 能力工作区",
 };
 
 interface ToolsOverlayProps {
@@ -109,6 +102,8 @@ export default function ToolsOverlay({
 
       {/* 工具内容 */}
       <div className="min-h-0 flex-1 overflow-hidden">
+        {active === "missions" && <MissionHome onOpenRuns={() => onChange("runs")} />}
+        {active === "runs" && <RunConsole />}
         {active === "workflow" && (
           <WorkflowSurface
             htmlPayload={htmlPayload}
@@ -131,11 +126,17 @@ export default function ToolsOverlay({
             <MemoryViewer />
           </div>
         )}
+        {active === "wiki" && (
+          <div className="h-full p-3">
+            <WikiViewer />
+          </div>
+        )}
         {active === "vfs" && (
           <div className="custom-scrollbar h-full overflow-auto p-6">
             <VfsWorkspaceBridge />
           </div>
         )}
+        {active === "capabilities" && <CapabilityWorkspace onOpenVfs={() => onChange("vfs")} />}
       </div>
       {current && <span className="sr-only">{current.sub}</span>}
     </div>

@@ -1,0 +1,95 @@
+\section{Related Work}
+\label{sec:rw}
+\label{sec:rw-sec}
+
+\paragraph{Agent runtimes and orchestration.}
+AutoGen, LangGraph, and related systems provide abstractions for agent
+coordination, tool invocation, and workflow state~\cite{wu2023autogen,langgraph2024}.
+MCP standardizes communication between model-facing clients and tool/data
+servers~\cite{anthropic2024mcp}. These projects are relevant integration
+contexts, not equivalent security baselines: their primary goals differ
+from multi-tenant resource and permission governance. Neuron can sit below
+an orchestrator or beside a protocol gateway. Our comparison is therefore
+architectural---which identity, pressure, and verdict signals must cross the
+boundary---rather than a performance ranking against those projects.
+
+AIOS-like work moves scheduling, memory, and tool management into an
+agent-oriented systems layer~\cite{mei2025aios}. Neuron shares the premise
+that agents require runtime support, but focuses on the interaction between
+resource admission and permission availability. The key distinction is not
+whether a framework has a rate limiter or an access-control list in
+isolation; it is whether policy-plane capacity and timeout semantics remain
+safe under tenant pressure and whether pressure can be part of a permission
+decision when desired.
+
+Recent agent-security surveys and benchmarks study policy compliance, tool
+misuse, and interaction-level safety~\cite{wang2024policy,ruan2024toolemu,zhang2024agentsafetybench,struppek2024agent}. These works motivate runtime
+enforcement, but do not evaluate whether tenant-induced executor contention
+makes the authorization path unavailable or how timeout semantics convert
+that availability loss into an admission decision.
+
+\paragraph{Resource isolation and admission control.}
+Operating systems and containers provide CPU, memory, process, and I/O
+isolation. Token buckets and cgroups are established mechanisms for limiting
+bursts and allocating capacity. A deployment can place its permission
+service in a separate process or cgroup, which is a strong alternative to
+Neuron's reserved executor. Our isolated baseline reflects the same design
+principle inside one JVM. The paper does not claim that cross-layer coupling
+replaces isolation: the evaluation shows that isolation protects
+availability, whereas coupling supplies a pressure-conditioned verdict.
+
+Work on overload control and circuit breaking similarly distinguishes
+admission, queuing, and fallback behavior. Neuron's failure model applies
+that distinction to a security-sensitive policy path. A fail-open fallback
+trades security for availability; a fail-closed fallback makes the opposite
+trade. Making both baselines explicit is essential because lower timeout
+correctness in a fail-open system is otherwise easily misattributed to a new
+security mechanism.
+
+\paragraph{Access control, delegation, and confused deputies.}
+Privilege attenuation and the confused-deputy problem have long motivated
+capability systems and least-privilege delegation~\cite{hardy1988confused}.
+Neuron's spawn-time privilege non-increase applies that principle to dynamic
+sub-agent creation: a child cannot silently receive a more permissive
+profile than its parent. Depth is an additional, agent-specific risk signal,
+not a substitute for capabilities or target-scoped authorization. The
+pressure-aware rule further treats runtime state as context for a narrow
+class of destructive requests.
+
+\paragraph{Policy availability and fail-safe defaults.}
+Security engineering commonly recommends fail-safe defaults, but real
+systems sometimes introduce permissive fallbacks to meet latency or
+availability targets. Prior work on reference monitors emphasizes complete
+mediation and tamper resistance; distributed authorization work also
+recognizes policy-service latency and partitions. Our contribution is a
+controlled characterization of this tradeoff in a multi-tenant agent
+runtime, including an isolated fail-closed baseline. We do not claim the
+general discovery that overload can delay a service. The contribution lies
+in tracing that delay through agent permission semantics and evaluating a
+resource-informed policy response.
+
+Policy-as-code engines such as Open Policy Agent (OPA)~\cite{opa2024} provide
+an important practical comparator: they separate declarative policy evaluation
+from application code and can be deployed beside an API gateway or admission
+controller. OPA, identity-oriented authorization, and relationship-based
+authorization are complementary policy mechanisms; none by itself specifies
+reserved executor capacity or whether a deadline miss under tenant pressure
+fails open. Neuron evaluates that runtime availability and verdict boundary
+explicitly rather than claiming to replace these policy engines.
+
+\paragraph{Cross-layer observability.}
+Distributed tracing correlates events across services through propagated
+identifiers. Neuron uses the same systems idea across resource admission,
+spawn, and permission paths. Correlation alone does not enforce safety; it
+makes the causal chain inspectable and supplies consistent context to the
+joint decision. The enforcement contribution is the policy input and its
+reserved execution path, not the trace identifier by itself.
+
+\paragraph{Positioning for software systems research.}
+The work is a software-architecture study of a runtime control plane. Its
+unit of comparison is an architecture configuration---shared fail-open,
+shared fail-closed, isolated, or coupled---and its main outcomes are
+policy-plane availability and verdict semantics. Sandboxing, WASM, Docker,
+LLM routing, and formal models are useful components of the broader Neuron
+prototype, but they are outside the causal evaluation and are not presented
+as independent innovations here.

@@ -9,6 +9,9 @@ import com.ouisani.aios.core.syscall.schema.RawPayload;
 import com.ouisani.aios.core.syscall.schema.StoragePayload;
 import com.ouisani.aios.core.syscall.schema.ToolPayload;
 import com.ouisani.aios.core.ipc.SemanticMemoryBlock;
+import com.ouisani.aios.core.ipc.MemoryAccessContext;
+import com.ouisani.aios.core.ipc.MemoryRecord;
+import com.ouisani.aios.core.ipc.MemoryScope;
 import com.ouisani.aios.core.ipc.SharedMemoryManager;
 import com.ouisani.aios.core.ipc.SignalType;
 import com.ouisani.aios.core.AgentTask;
@@ -319,6 +322,52 @@ public final class AiosSdk implements ToolSdk {
         String value = SharedMemoryManager.instance().getSemanticString(blockId, key);
         log.debug("[SDK] shmRead: agent={}, block={}, key={}, found={}", agentId, blockId, key, value != null);
         return value;
+    }
+
+    /**
+     * Governed scoped-memory write. The legacy {@link #shmWrite(String, String, String, String)}
+     * remains intentionally unchanged for existing semantic-block callers.
+     */
+    public MemoryRecord shmWriteScoped(String agentId, String namespace, String memoryId,
+                                       String value, MemoryScope scope, String source,
+                                       MemoryAccessContext context) {
+        MemoryAccessContext effective = context == null ? MemoryAccessContext.current() : context;
+        if (effective == null || effective.agentId() == null) {
+            effective = MemoryAccessContext.of(agentId, null, null, null);
+        }
+        return SharedMemoryManager.instance().putMemory(namespace, memoryId, value, scope, source, effective);
+    }
+
+    /** TEAM-scoped variant with an explicit team identity. */
+    public MemoryRecord shmWriteScoped(String agentId, String namespace, String memoryId,
+                                       String value, MemoryScope scope, String source,
+                                       String teamId, MemoryAccessContext context) {
+        MemoryAccessContext effective = context == null ? MemoryAccessContext.current() : context;
+        if (effective == null || effective.agentId() == null) {
+            effective = MemoryAccessContext.of(agentId, null, null, teamId);
+        }
+        return SharedMemoryManager.instance().putMemory(namespace, memoryId, value, scope, source,
+                teamId, effective);
+    }
+
+    /** Read a scoped record after namespace/tenant/delegation checks. */
+    public MemoryRecord shmReadScoped(String namespace, String memoryId,
+                                      MemoryAccessContext context) {
+        return SharedMemoryManager.instance().getMemory(namespace, memoryId, context);
+    }
+
+    /** Append to a scoped record and retain its previous version. */
+    public MemoryRecord shmAppendScoped(String namespace, String memoryId, String value,
+                                        String source, MemoryAccessContext context) {
+        return SharedMemoryManager.instance().appendMemory(namespace, memoryId, value, source, context);
+    }
+
+    /** Optimistic compare-and-set update for a scoped record. */
+    public java.util.Optional<MemoryRecord> shmCompareAndSetScoped(
+            String namespace, String memoryId, long expectedVersion, String value,
+            String source, MemoryAccessContext context) {
+        return SharedMemoryManager.instance().compareAndSetMemory(
+                namespace, memoryId, expectedVersion, value, source, context);
     }
 
     /**

@@ -25,7 +25,6 @@ import { Radio, Activity, Send, AlertTriangle, FileCode } from "lucide-react";
 //  常量
 // ════════════════════════════════════════════════════════════════
 
-const SHUTTLE_DURATION = 500; // 飞梭动画持续时间 (ms)
 const TYPING_SPEED = 30;      // 打字机效果速度 (ms/字符)
 
 // ════════════════════════════════════════════════════════════════
@@ -43,14 +42,12 @@ function readRgbVar(name: string, fallback: string): string {
 
 // 缓存主题色，避免每帧 getComputedStyle；每 500ms 刷新一次以捕捉主题切换。
 let primaryRgbCache = "143 72 47";
-let outlineVariantRgbCache = "218 193 186";
 let lastVarRefresh = 0;
 function refreshThemeVars(): void {
   const now = performance.now();
   if (now - lastVarRefresh < 500) return;
   lastVarRefresh = now;
   primaryRgbCache = readRgbVar("--primary", "143 72 47");
-  outlineVariantRgbCache = readRgbVar("--outline-variant", "218 193 186");
 }
 
 // ════════════════════════════════════════════════════════════════

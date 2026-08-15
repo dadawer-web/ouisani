@@ -104,12 +104,11 @@ public class SubAgent extends AbstractAgent {
 
         try {
             executeNodeTask();
-            // ── 成功 ──
-            node.setStatus(WorkflowNode.Status.SUCCESS);
-            AiosEventSchema.emit(AiosEventSchema.dagNodeSuccess(
-                    agentId, runId, node.instanceId(), node.role(),
-                    "SubAgent 任务完成" + (singleSkill != null ? " (skill=" + singleSkill + ")" : "")));
-            log.info("[SubAgent:{}] 节点 {} 执行成功", agentId, node.instanceId());
+            // Returning from the skill/LLM only means execution returned.
+            // WorkflowEngine owns the SUCCESS transition after its
+            // verification contract has passed.
+            log.info("[SubAgent:{}] 节点 {} 执行返回，等待 WorkflowEngine 验证",
+                    agentId, node.instanceId());
         } catch (Exception e) {
             // ── 失败 ──
             node.setStatus(WorkflowNode.Status.FAILED);
@@ -147,6 +146,14 @@ public class SubAgent extends AbstractAgent {
         SyscallResponse resp = sdk.callTool(agentId, singleSkill, inputs);
 
         if (!resp.success()) {
+            node.putOutput("_tool_success", false);
+            node.putOutput("_tool_result_state", resp.resultState() == null
+                    ? "UNKNOWN" : resp.resultState().name());
+            if (resp.errorMessage() != null) node.putOutput("_tool_error", resp.errorMessage());
+            // Give a DURING contract a chance to turn a failed tool result
+            // into an explicit OBSERVE/ASK_USER/ABORT decision. The ordinary
+            // tool exception remains the fallback for legacy nodes.
+            WorkflowEngine.instance().observeToolResult(runId, node, context, singleSkill, resp);
             throw new RuntimeException("工具 " + singleSkill + " 调用失败: " + resp.errorMessage());
         }
 
@@ -157,6 +164,7 @@ public class SubAgent extends AbstractAgent {
         output.put("engine", "sub-agent");
         node.putOutput("result", resp.data());
         context.commitNodeOutput(node.instanceId(), output);
+        WorkflowEngine.instance().observeToolResult(runId, node, context, singleSkill, resp);
     }
 
     /**
@@ -186,6 +194,8 @@ public class SubAgent extends AbstractAgent {
         }
         prompt.append("\n请完成任务并给出结果。");
 
+        String carryover = context == null ? "" : context.renderCarryoverState();
+        if (!carryover.isBlank()) prompt.append("\n\n").append(carryover);
         String response = sdk.think(agentId, prompt.toString());
         if (response == null || response.isBlank() || response.startsWith("[SDK Error]")) {
             throw new RuntimeException("LLM 推理失败: " + response);

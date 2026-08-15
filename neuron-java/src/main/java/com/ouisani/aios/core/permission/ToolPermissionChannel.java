@@ -49,6 +49,8 @@ public final class ToolPermissionChannel {
     /** 待审批请求：requestId → CompletableFuture<ApprovalResponse>。 */
     private static final ConcurrentHashMap<String, CompletableFuture<ApprovalResponse>> pending =
             new ConcurrentHashMap<>();
+    /** requestId → action digest；用于前端回填时绑定审批对象。 */
+    private static final ConcurrentHashMap<String, String> pendingDigests = new ConcurrentHashMap<>();
 
     private ToolPermissionChannel() {}
 
@@ -125,12 +127,37 @@ public final class ToolPermissionChannel {
     }
 
     /**
+     * 请求审批并携带 Action Gate 的不可变身份/参数摘要。
+     * <p>旧重载保持兼容；新调用方应优先使用此方法，使前端审批卡片能够展示并
+     * 回传 actionDigest/workflowId/traceId，审计链可以精确绑定到本次行动。</p>
+     */
+    public static ApprovalResponse requestApproval(String agentId, String toolName,
+                                                   String target, String description,
+                                                   int depth, List<String> parentChain,
+                                                   boolean isSubAgent, String actionDigest,
+                                                   String workflowId, String traceId) {
+        return requestApproval(agentId, toolName, target, description,
+                depth, parentChain, isSubAgent, APPROVAL_TIMEOUT_SECONDS,
+                actionDigest, workflowId, traceId);
+    }
+
+    /**
      * 可指定超时的审批请求（带完整 spawn 树上下文）— 供测试用短超时验证 timeout → DENY 路径。
      */
     static ApprovalResponse requestApproval(String agentId, String toolName,
                                             String target, String description,
                                             int depth, List<String> parentChain,
                                             boolean isSubAgent, long timeoutSeconds) {
+        return requestApproval(agentId, toolName, target, description, depth, parentChain,
+                isSubAgent, timeoutSeconds, null, null, null);
+    }
+
+    private static ApprovalResponse requestApproval(String agentId, String toolName,
+                                                   String target, String description,
+                                                   int depth, List<String> parentChain,
+                                                   boolean isSubAgent, long timeoutSeconds,
+                                                   String actionDigest, String workflowId,
+                                                   String traceId) {
         EventBus bus = EventBus.instance();
 
         // 零回归 fallback：无审批订阅者时自动放行（与 QueryEngine 原行为一致）
@@ -143,9 +170,12 @@ public final class ToolPermissionChannel {
         String requestId = "perm_" + UUID.randomUUID();
         CompletableFuture<ApprovalResponse> future = new CompletableFuture<>();
         pending.put(requestId, future);
+        if (actionDigest != null && !actionDigest.isBlank()) {
+            pendingDigests.put(requestId, actionDigest);
+        }
 
         String payload = buildPayload(requestId, agentId, toolName, target, description,
-                depth, parentChain, isSubAgent);
+                depth, parentChain, isSubAgent, actionDigest, workflowId, traceId);
 
         try {
             bus.broadcast(CHANNEL, payload);
@@ -163,6 +193,7 @@ public final class ToolPermissionChannel {
             return ApprovalResponse.DENY;
         } finally {
             pending.remove(requestId);
+            pendingDigests.remove(requestId);
         }
     }
 
@@ -174,7 +205,8 @@ public final class ToolPermissionChannel {
      */
     private static String buildPayload(String requestId, String agentId, String toolName,
                                        String target, String description,
-                                       int depth, List<String> parentChain, boolean isSubAgent) {
+                                       int depth, List<String> parentChain, boolean isSubAgent,
+                                       String actionDigest, String workflowId, String traceId) {
         StringBuilder sb = new StringBuilder(256);
         sb.append("{\"requestId\":\"").append(escapeJson(requestId)).append('"');
         sb.append(",\"agentId\":\"").append(escapeJson(agentId)).append('"');
@@ -191,6 +223,9 @@ public final class ToolPermissionChannel {
         }
         sb.append("]");
         sb.append(",\"isSubAgent\":").append(isSubAgent);
+        sb.append(",\"actionDigest\":\"").append(escapeJson(actionDigest)).append('"');
+        sb.append(",\"workflowId\":\"").append(escapeJson(workflowId)).append('"');
+        sb.append(",\"traceId\":\"").append(escapeJson(traceId)).append('"');
         sb.append(",\"timestamp\":").append(System.currentTimeMillis());
         sb.append('}');
         return sb.toString();
@@ -204,9 +239,22 @@ public final class ToolPermissionChannel {
      * @return true 如果 requestId 存在并已处理；false 如果 ID 不存在或已过期
      */
     public static boolean respond(String requestId, ApprovalResponse response) {
+        return respond(requestId, response, null);
+    }
+
+    /**
+     * 带摘要的审批回填。若请求带有摘要，则回填摘要必须完全一致；旧调用方
+     * 传 null 仍兼容，但新的 UI/客户端应始终回传摘要。
+     */
+    public static boolean respond(String requestId, ApprovalResponse response, String actionDigest) {
         CompletableFuture<ApprovalResponse> future = pending.get(requestId);
         if (future == null) {
             log.warn("[ToolPermission] 审批 ID 不存在或已过期: {}", requestId);
+            return false;
+        }
+        String expectedDigest = pendingDigests.get(requestId);
+        if (expectedDigest != null && actionDigest != null && !expectedDigest.equals(actionDigest)) {
+            log.warn("[ToolPermission] 审批摘要不匹配: requestId={}", requestId);
             return false;
         }
         return future.complete(response);

@@ -3,6 +3,10 @@ package com.ouisani.aios.core.tool;
 import com.ouisani.aios.core.sandbox.BackendBase;
 import com.ouisani.aios.core.sandbox.LocalBackend;
 
+import java.util.LinkedHashSet;
+import java.util.Locale;
+import java.util.Set;
+
 /**
  * 工具执行上下文 — 在工具执行期间提供对 AIOS 内核服务的访问。
  * <p>
@@ -23,8 +27,17 @@ public record ToolContext(
         ToolSdk sdk,
         String workingDir,
         BackendBase backend,
-        String tenantId
+        String tenantId,
+        String teamId,
+        String userId,
+        Set<String> roles
 ) {
+    public ToolContext {
+        teamId = clean(teamId);
+        userId = clean(userId);
+        roles = normalizeRoles(roles);
+    }
+
     /**
      * 向后兼容的 3 参构造器 — 不指定后端，{@link #backend()} 访问时懒加载 {@link LocalBackend#instance()}。
      * <p>
@@ -33,14 +46,26 @@ public record ToolContext(
      * {@code tenantId} 默认 null（legacy，不参与租户所有权校验）。
      */
     public ToolContext(String agentId, ToolSdk sdk, String workingDir) {
-        this(agentId, sdk, workingDir, null, null);
+        this(agentId, sdk, workingDir, null, null, null, null, Set.of());
     }
 
     /**
      * 向后兼容的 4 参构造器 — 承接现有 4 参调用点，{@code tenantId} 默认 null（legacy）。
      */
     public ToolContext(String agentId, ToolSdk sdk, String workingDir, BackendBase backend) {
-        this(agentId, sdk, workingDir, backend, null);
+        this(agentId, sdk, workingDir, backend, null, null, null, Set.of());
+    }
+
+    /** Source-compatible tenant-aware constructor. */
+    public ToolContext(String agentId, ToolSdk sdk, String workingDir,
+                       BackendBase backend, String tenantId) {
+        this(agentId, sdk, workingDir, backend, tenantId, null, null, Set.of());
+    }
+
+    /** Tenant/team-aware constructor for asset ACL resolution. */
+    public ToolContext(String agentId, ToolSdk sdk, String workingDir,
+                       BackendBase backend, String tenantId, String teamId) {
+        this(agentId, sdk, workingDir, backend, tenantId, teamId, null, Set.of());
     }
 
     /**
@@ -53,5 +78,21 @@ public record ToolContext(
     public BackendBase backend() {
         BackendBase b = this.backend;
         return b == null ? LocalBackend.instance() : b;
+    }
+
+    private static String clean(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static Set<String> normalizeRoles(Set<String> values) {
+        LinkedHashSet<String> normalized = new LinkedHashSet<>();
+        if (values != null) {
+            for (String value : values) {
+                if (value != null && !value.isBlank()) {
+                    normalized.add(value.trim().toLowerCase(Locale.ROOT));
+                }
+            }
+        }
+        return Set.copyOf(normalized);
     }
 }

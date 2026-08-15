@@ -5,6 +5,7 @@ import com.ouisani.aios.core.sandbox.DockerSandboxProvider;
 import com.ouisani.aios.core.sandbox.GraalWasmSandbox;
 import com.ouisani.aios.core.sandbox.SandboxProvider;
 import com.ouisani.aios.core.tool.ToolSdk;
+import com.ouisani.aios.core.tool.DelegationGuard;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -113,7 +114,14 @@ public class TaskScheduler {
      * @return 沙箱化的 Agent 任务
      */
     public SandboxAgentTask submitAgentTask(String prompt, String agentId, String workingDir, ToolSdk sdk) {
-        SandboxAgentTask task = new SandboxAgentTask(prompt, agentId, workingDir, sdk, sandboxProvider, fallbackSandbox);
+        return submitAgentTask(prompt, agentId, workingDir, sdk, null);
+    }
+
+    /** Submit an Agent task while carrying the parent-created delegation token. */
+    public SandboxAgentTask submitAgentTask(String prompt, String agentId, String workingDir,
+                                            ToolSdk sdk, DelegationGuard.DelegationContext delegationContext) {
+        SandboxAgentTask task = new SandboxAgentTask(prompt, agentId, workingDir, sdk,
+                sandboxProvider, fallbackSandbox, delegationContext);
         TaskRegistry.instance().register(task);
         task.start();
         log.info("[TaskScheduler] Submitted SANDBOXED agent task: {} (via {})", task.taskId(), sandboxProvider.providerName());
@@ -281,6 +289,7 @@ public class TaskScheduler {
         private final ToolSdk sdk;
         private final SandboxProvider sandbox;
         private final SandboxProvider fallback;
+        private final DelegationGuard.DelegationContext delegationContext;
         private final java.util.concurrent.atomic.AtomicReference<TaskStatus> status =
                 new java.util.concurrent.atomic.AtomicReference<>(TaskStatus.PENDING);
         private final StringBuilder resultBuilder = new StringBuilder();
@@ -288,6 +297,12 @@ public class TaskScheduler {
 
         public SandboxAgentTask(String prompt, String agentId, String workingDir, ToolSdk sdk,
                                 SandboxProvider sandbox, SandboxProvider fallback) {
+            this(prompt, agentId, workingDir, sdk, sandbox, fallback, null);
+        }
+
+        public SandboxAgentTask(String prompt, String agentId, String workingDir, ToolSdk sdk,
+                                SandboxProvider sandbox, SandboxProvider fallback,
+                                DelegationGuard.DelegationContext delegationContext) {
             this.handle = TaskHandle.generate(TaskType.SANDBOX_AGENT);
             this.prompt = prompt;
             this.agentId = agentId;
@@ -295,6 +310,7 @@ public class TaskScheduler {
             this.sdk = sdk;
             this.sandbox = sandbox;
             this.fallback = fallback;
+            this.delegationContext = delegationContext;
         }
 
         public void start() {
@@ -304,6 +320,10 @@ public class TaskScheduler {
                 String eventTopic = "sys.sandbox.agent." + taskId();
                 try {
                     log.info("[SandboxAgentTask] Executing via sandbox: {} ({})", taskId(), sandbox.providerName());
+
+                    if (delegationContext != null) {
+                        DelegationGuard.activate(delegationContext);
+                    }
 
                     // QueryEngine 推理循环在 JVM 内执行（LLM 调用本身是安全的），
                     // 但如果 Agent 生成可执行代码，则通过沙箱执行
@@ -327,6 +347,9 @@ public class TaskScheduler {
                     EventBus.instance().broadcast(eventTopic + ".error", errorMsg);
                     log.error("[SandboxAgentTask] Task {} failed: {}", taskId(), e.getMessage());
                 } finally {
+                    if (delegationContext != null) {
+                        DelegationGuard.clear();
+                    }
                     handle.cleanUp();
                 }
             }, "sandbox-agent-" + taskId());
